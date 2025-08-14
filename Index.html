@@ -1,1 +1,281 @@
-paste my html here
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Barista Flashcards & Quizzes</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Barista Flashcards & Quizzes — SPA (Tests, Decks, Subcategories) -->
+  <div id="app" class="container">
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">☕</span>
+        <h1>Barista Flashcards & Quizzes</h1>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button class="tab" data-route="create" role="tab" aria-controls="view-create">Create</button>
+        <button class="tab" data-route="build" role="tab" aria-controls="view-build">Build Test</button>
+        <button class="tab" data-route="practice" role="tab" aria-controls="view-practice">Practice</button>
+        <button class="tab" data-route="quiz" role="tab" aria-controls="view-quiz">Quiz</button>
+        <button class="tab" data-route="reports" role="tab" aria-controls="view-reports">Reports</button>
+        <button class="tab" data-route="myresults" role="tab" aria-controls="view-myresults">My Results</button>
+      </nav>
+    </header>
+
+    <main>
+
+      <!-- ===================== CREATE (decks & cards) ===================== -->
+      <section id="view-create" class="view">
+        <div class="card panel">
+          <div class="row space">
+            <h2>Decks</h2>
+            <div class="wrap">
+              <button class="btn" data-route="build">Build Test</button>
+              <button class="btn ghost" data-route="reports">Reports</button>
+            </div>
+          </div>
+
+          <details class="fold">
+            <summary class="summary">Add a deck (or pick an existing name)</summary>
+            <div class="grid g-4">
+              <input id="newDeckName" class="input" list="deckNames" placeholder="Deck name (type or pick)">
+              <datalist id="deckNames"></datalist>
+              <input id="newDeckCat" class="input" placeholder="Category (e.g., Espresso)">
+              <div class="stack">
+                <button class="btn ghost" id="toggleSubcatBtn" type="button">+ Subcategory (optional)</button>
+                <input id="newDeckSub" class="input hidden" placeholder="Deck subcategory (e.g., Extraction)">
+              </div>
+              <button class="btn" id="addDeckBtn">Add/Select Deck</button>
+            </div>
+          </details>
+
+          <div class="toolbar">
+            <label class="stack">
+              <span>Pick deck</span>
+              <select id="deckSelect" class="input"></select>
+            </label>
+
+            <div class="wrap">
+              <button class="btn" id="renameDeckBtn">Rename</button>
+              <button class="btn" id="editDeckMetaBtn" title="Edit category/subcategory">Edit Meta</button>
+              <button class="btn danger" id="deleteDeckBtn">Delete</button>
+              <button class="btn" id="exportDeckBtn">Export</button>
+
+              <button class="btn" id="importDeckBtn" title="Import JSON or TXT">Import…</button>
+              <input type="file" id="importDeckInput" accept=".json,.txt" hidden>
+            </div>
+          </div>
+
+          <details class="importer">
+            <summary id="bulkSummaryBtn">Bulk Add (tap for format)</summary>
+            <textarea id="bulkTextarea" class="input" rows="6" placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Subcat (optional)"></textarea>
+            <div class="right">
+              <button class="btn" id="bulkAddBtn" type="button">Add to Deck</button>
+            </div>
+          </details>
+        </div>
+
+        <div class="card panel">
+          <h3>Add / Edit Card</h3>
+          <div class="grid g-2">
+            <input id="qInput" class="input" placeholder="Question">
+            <input id="aCorrectInput" class="input" placeholder="Correct answer">
+            <input id="aWrong1Input" class="input" placeholder="Wrong answer 1 (required)">
+            <input id="aWrong2Input" class="input" placeholder="Wrong answer 2 (optional)">
+            <input id="aWrong3Input" class="input" placeholder="Wrong answer 3 (optional)">
+            <input id="cardSubInput" class="input" placeholder="Card subcategory (optional)">
+            <button class="btn" id="addCardBtn">Save Card</button>
+          </div>
+          <div id="cardsList" class="list-cards"></div>
+        </div>
+      </section>
+
+      <!-- ===================== BUILD TEST ===================== -->
+      <section id="view-build" class="view">
+        <div class="card panel">
+          <div class="row space">
+            <h2>Build Test & Share</h2>
+            <label class="switch-row">
+              <input type="checkbox" id="previewToggle">
+              <span>Preview as Barista</span>
+            </label>
+          </div>
+
+          <div class="grid g-3">
+            <label class="stack">
+              <span>Create or select a test</span>
+              <input id="testNameInput" class="input" list="testsList" placeholder="Type a new test name or pick">
+              <datalist id="testsList"></datalist>
+            </label>
+            <button class="btn" id="saveTestBtn">Save/Select Test</button>
+            <button class="btn danger" id="deleteTestBtn">Delete Test</button>
+          </div>
+
+          <div class="grid g-3 mt">
+            <label class="stack">
+              <span>Title shown to barista</span>
+              <input id="builderTitle" class="input" placeholder="e.g., Barista Basics">
+            </label>
+            <label class="stack">
+              <span>Total Questions</span>
+              <input id="builderCount" class="input" type="number" min="1" max="500" value="30">
+            </label>
+            <div class="stack">
+              <span>Share</span>
+              <div class="wrap">
+                <button class="btn success" id="copyShareBtn">Copy Share Link</button>
+                <button class="btn ghost" id="openShareBtn">Open Preview</button>
+              </div>
+            </div>
+          </div>
+
+          <details class="fold mt" id="deckChooser">
+            <summary class="summary">Choose decks (✓ whole deck or expand to pick subcategories)</summary>
+            <div id="deckPickList" class="deck-picklist"></div>
+          </details>
+
+          <div id="previewPanel" class="panel soft hidden">
+            <h3 id="previewTitle">Preview</h3>
+            <p id="previewMeta" class="hint"></p>
+            <div class="wrap">
+              <button class="btn success" id="previewPracticeBtn">Practice (preview)</button>
+              <button class="btn" id="previewQuizBtn">Take Quiz (preview)</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== PRACTICE ===================== -->
+      <section id="view-practice" class="view">
+        <div class="card panel">
+          <h2>Practice</h2>
+          <p class="hint">Pick any decks from this test and flip cards. (Not graded.)</p>
+          <div id="practiceDeckChecks" class="chips"></div>
+          <div class="right mt">
+            <button class="btn" id="startPracticeBtn">Start</button>
+          </div>
+        </div>
+
+        <div class="card panel" id="practiceArea" hidden>
+          <div class="row space">
+            <strong id="practiceLabel"></strong>
+            <span id="practiceProgress">0 / 0</span>
+          </div>
+          <div id="practiceCard" class="flip-card" tabindex="0" aria-label="Flashcard">
+            <div class="flip-card-inner">
+              <div class="flip-card-front"><span id="practiceQuestion"></span></div>
+              <div class="flip-card-back"><span id="practiceAnswer"></span></div>
+            </div>
+          </div>
+          <div class="wrap">
+            <button class="btn ghost" id="practicePrev">◀ Prev</button>
+            <button class="btn ghost" id="practiceNext">Next ▶</button>
+            <button class="btn" id="practiceShuffle">Shuffle</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== QUIZ ===================== -->
+      <section id="view-quiz" class="view">
+        <div class="card panel">
+          <h2 id="quizHeading">Quiz</h2>
+          <div class="grid g-3">
+            <label class="stack"><span>Name</span><input id="studentName" class="input" required></label>
+            <label class="stack"><span>Date</span><input id="studentDate" class="input" type="date" required></label>
+            <label class="stack"><span>Location</span><input id="studentLocation" class="input" required></label>
+          </div>
+        </div>
+
+        <div class="card panel" id="quizArea" hidden>
+          <div class="row space">
+            <div class="hint" id="quizSubLabel"></div>
+            <div class="wrap">
+              <button class="btn ghost" id="restartQuizBtn" title="Shuffle a fresh set">Restart</button>
+              <span id="quizProgress">1 / 1</span>
+            </div>
+          </div>
+          <div class="q-card">
+            <div class="q-text" id="quizQuestion"></div>
+            <div id="quizOptions" class="options"></div>
+            <div class="wrap mt">
+              <button class="btn ghost" id="quizPrev">◀ Prev</button>
+              <button class="btn ghost" id="quizNext">Next ▶</button>
+              <button class="btn success" id="submitQuizBtn">Submit</button>
+            </div>
+          </div>
+
+          <div id="quizFinished" class="finished hidden">
+            <h3>You're finished! 🎉</h3>
+            <p id="finishedMsg"></p>
+            <div class="wrap">
+              <button class="btn" data-route="myresults">View My Results</button>
+              <button class="btn ghost" id="finishedPracticeBtn">Practice Again</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== MY RESULTS ===================== -->
+      <section id="view-myresults" class="view">
+        <div class="card panel">
+          <h2>My Results</h2>
+          <div class="row wrap">
+            <input id="myResultsSearch" class="input" placeholder="Filter by title or location">
+            <button class="btn ghost" id="clearMyResultsBtn">Clear My Results</button>
+          </div>
+          <div class="table-wrap">
+            <table id="myResultsTable">
+              <thead><tr><th>Date</th><th>Title</th><th>Location</th><th>Score</th><th>Correct/Total</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== REPORTS ===================== -->
+      <section id="view-reports" class="view">
+        <div class="card panel">
+          <h2>Reports</h2>
+          <div class="grid g-3">
+            <label class="stack">
+              <span>Filter by location</span>
+              <select id="repLocation" class="input"><option value="">All locations</option></select>
+            </label>
+            <label class="stack">
+              <span>Attempt view</span>
+              <select id="repAttemptView" class="input">
+                <option value="all">All attempts</option>
+                <option value="first">First attempt per student/test</option>
+                <option value="last">Last attempt per student/test</option>
+              </select>
+            </label>
+            <label class="stack">
+              <span>Sort</span>
+              <select id="repSort" class="input">
+                <option value="date_desc">Date ↓</option>
+                <option value="date_asc">Date ↑</option>
+                <option value="test_asc">Test A→Z</option>
+                <option value="test_desc">Test Z→A</option>
+              </select>
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table id="repTable">
+              <thead>
+                <tr><th>Date</th><th>Student</th><th>Location</th><th>Test</th><th>Score</th><th>Correct/Total</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
