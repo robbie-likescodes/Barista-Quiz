@@ -1,19 +1,28 @@
-/* Barista Flashcards & Quizzes — full SPA (Tests + Deck/Subcategory selection) */
-/* All data is localStorage-based so it works on GitHub Pages with no backend. */
+/* Barista Flashcards & Quizzes — full SPA
+   - Create decks & cards (MCQ only)
+   - Bulk add + import/export
+   - Build Test from decks or subcategories
+   - Shareable URLs (?view=practice|quiz&test=<id>)
+   - Practice (flashcards)
+   - Quiz (graded, finished slide)
+   - My Results (local device)
+   - Reports (all attempts, filter/sort/first|last)
+   Data is stored in localStorage (no backend).
+*/
 
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 
-/* ---------- Storage / State ---------- */
+/* ---------------- Storage / State ---------------- */
 const store = {
   get(k, fb){ try{ return JSON.parse(localStorage.getItem(k)) ?? fb; }catch{ return fb; } },
   set(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
 };
 const KEYS = {
-  decks:'fc_decks',         // { [id]: {id,name,category,subcategory,cards:[{id,q,a,distractors,sub?}]} }
-  tests:'fc_tests',         // { [id]: {id,name,title,n,selections:[{deckId,whole:boolean,subs:string[]}]} }
-  results:'fc_results',
-  myResults:'fc_my_results'
+  decks:'fc_decks',
+  tests:'fc_tests',
+  results:'fc_results',      // all attempts (admin visible)
+  myResults:'fc_my_results'  // attempts on THIS device (barista)
 };
 const uid = (p='id') => p + '_' + Math.random().toString(36).slice(2,10);
 const todayISO = () => new Date().toISOString().slice(0,10);
@@ -23,12 +32,11 @@ let state = {
   tests: store.get(KEYS.tests, {}),
   results: store.get(KEYS.results, []),
   myResults: store.get(KEYS.myResults, []),
-
   practice: { cards:[], idx:0 },
   quiz: { items:[], idx:0, title:'', deckPool:[], locked:false, n:30 }
 };
 
-/* ---------- Router ---------- */
+/* ---------------- Router ---------------- */
 function getParams(){ return new URLSearchParams(location.search); }
 function baseUrl(){ return location.href.split('?')[0]; }
 function routeTo(view, extras={}){
@@ -41,12 +49,12 @@ function routeTo(view, extras={}){
 function activateView(view){
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-'+view));
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.route===view));
-  if(view==='create')   renderCreate();
-  if(view==='build')    renderBuild();
-  if(view==='practice') renderPracticeDeckChecks();
-  if(view==='quiz')     startQuizFromParams();
-  if(view==='reports')  renderReports();
-  if(view==='myresults')renderMyResults();
+  if(view==='create')     renderCreate();
+  if(view==='build')      renderBuild();
+  if(view==='practice')   renderPracticeDeckChecks();
+  if(view==='quiz')       startQuizFromParams();
+  if(view==='reports')    renderReports();
+  if(view==='myresults')  renderMyResults();
 }
 window.addEventListener('popstate', ()=>{
   const v = getParams().get('view') || 'create';
@@ -54,15 +62,15 @@ window.addEventListener('popstate', ()=>{
 });
 $$('.tab').forEach(btn=> btn.addEventListener('click', ()=> routeTo(btn.dataset.route)));
 
-/* ---------- Helpers ---------- */
+/* ---------------- Utils ---------------- */
 const esc = s => (s??'').toString().replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
 const shuffle = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [x[i],x[j]]=[x[j],x[i]]; } return x; };
 const sample  = (a,n)=> shuffle(a).slice(0,n);
 const unique  = xs => Array.from(new Set(xs));
 
-/* ======================================================================
-   CREATE (decks & cards)
-====================================================================== */
+/* =====================================================================
+   CREATE — decks & cards
+===================================================================== */
 const deckSelect = $('#deckSelect');
 const deckNames  = $('#deckNames');
 const cardsList  = $('#cardsList');
@@ -94,9 +102,7 @@ $('#addDeckBtn').addEventListener('click', ()=>{
     subcategory: $('#newDeckSub').classList.contains('hidden') ? '' : $('#newDeckSub').value.trim(),
     cards: [], createdAt: Date.now()
   };
-  $('#newDeckName').value = '';
-  $('#newDeckCat').value = '';
-  $('#newDeckSub').value = '';
+  $('#newDeckName').value = $('#newDeckCat').value = $('#newDeckSub').value = '';
   $('#newDeckSub').classList.add('hidden');
   store.set(KEYS.decks, state.decks);
   renderDeckLists(); deckSelect.value = id; renderCardsList();
@@ -126,7 +132,7 @@ $('#exportDeckBtn').addEventListener('click', ()=>{
   a.download = `${state.decks[id].name.replace(/\W+/g,'_')}.json`; a.click(); URL.revokeObjectURL(a.href);
 });
 
-/* Import (with notice) */
+/* Import (with format notice) */
 $('#importDeckBtn').addEventListener('click', ()=>{
   alert(`Import formats:
 1) App deck JSON: {"name","category?","subcategory?","cards":[{"q","a","distractors":[],"sub?":""}]}
@@ -135,7 +141,8 @@ $('#importDeckBtn').addEventListener('click', ()=>{
   $('#importDeckInput').click();
 });
 $('#importDeckInput').addEventListener('change', async (e)=>{
-  const file = e.target.files?.[0]; if(!file) return;
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
   const text = await file.text();
   try{
     let data=null; try{ data = JSON.parse(text); }catch{}
@@ -157,11 +164,12 @@ $('#importDeckInput').addEventListener('change', async (e)=>{
       store.set(KEYS.decks, state.decks);
       renderDeckLists(); alert('Deck imported.');
     };
+
     if(data && data.name && Array.isArray(data.cards)){
       createDeck(data.name, data.cards, data.category||'', data.subcategory||'');
-    }else if(Array.isArray(data) && data[0] && (data[0].Question || data[0]['Correct Answer'])){
+    } else if(Array.isArray(data) && data[0] && (data[0].Question || data[0]['Correct Answer'])){
       createDeck(file.name.replace(/\.json$/i,'').replace(/_/g,' '), data);
-    }else{
+    } else {
       const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
       const cards = lines.map(line=>{
         const parts = line.split('|').map(s=>s.trim());
@@ -201,7 +209,7 @@ $('#bulkAddBtn').addEventListener('click', ()=>{
   alert(`Added ${added} card(s).`);
 });
 
-/* Add card */
+/* Add single card */
 $('#addCardBtn').addEventListener('click', ()=>{
   const id = getSelectedDeckId(); if(!id) return alert('Select a deck first.');
   const q = $('#qInput').value.trim();
@@ -258,9 +266,9 @@ function renderCardsList(){
   });
 }
 
-/* ======================================================================
-   BUILD TEST (select decks / subs, preview, share)
-====================================================================== */
+/* =====================================================================
+   BUILD TEST — select decks / subcategories, share
+===================================================================== */
 const testsList     = $('#testsList');
 const testNameInput = $('#testNameInput');
 const deckPickList  = $('#deckPickList');
@@ -388,6 +396,8 @@ function syncPreviewPanel(){
   const poolSize = calcPoolForTest(t).length;
   previewMeta.textContent = `${t.n} questions • ${decksCount} deck(s) • pool ${poolSize}`;
 }
+
+/* Share */
 $('#previewPracticeBtn').addEventListener('click', ()=>{
   const t = getCurrentTest(); if(!t || !t.selections.length) return alert('Save a test and select at least one deck.');
   routeTo('practice', { test:t.id });
@@ -410,9 +420,9 @@ function getCurrentTest(){
   return Object.values(state.tests).find(x=>x.name.toLowerCase()===nm.toLowerCase());
 }
 
-/* ======================================================================
-   PRACTICE (barista)
-====================================================================== */
+/* =====================================================================
+   PRACTICE — choose decks (subset) and flip cards
+===================================================================== */
 const practiceDeckChecks = $('#practiceDeckChecks');
 const practiceArea = $('#practiceArea');
 const practiceQuestion = $('#practiceQuestion');
@@ -474,9 +484,9 @@ $('#practicePrev').addEventListener('click', ()=>{ state.practice.idx = (state.p
 $('#practiceNext').addEventListener('click', ()=>{ state.practice.idx = (state.practice.idx+1)%state.practice.cards.length; renderPracticeCard(); });
 $('#practiceShuffle').addEventListener('click', ()=>{ state.practice.cards = shuffle(state.practice.cards); state.practice.idx = 0; renderPracticeCard(); });
 
-/* ======================================================================
-   QUIZ (barista)
-====================================================================== */
+/* =====================================================================
+   QUIZ — graded, one submission per attempt (local lock)
+===================================================================== */
 const quizArea = $('#quizArea');
 const quizHeading = $('#quizHeading');
 const quizSubLabel = $('#quizSubLabel');
@@ -587,9 +597,9 @@ function markPostSubmit(){
   });
 }
 
-/* ======================================================================
-   My Results (barista)
-====================================================================== */
+/* =====================================================================
+   My Results — barista device history
+===================================================================== */
 const myResultsTableBody = $('#myResultsTable tbody');
 const myResultsSearch = $('#myResultsSearch');
 $('#clearMyResultsBtn').addEventListener('click', ()=>{
@@ -614,9 +624,9 @@ function renderMyResults(){
   myResultsTableBody.innerHTML = rows || `<tr><td colspan="5" class="hint">No attempts yet.</td></tr>`;
 }
 
-/* ======================================================================
-   Reports (admin)
-====================================================================== */
+/* =====================================================================
+   Reports — admin overview
+===================================================================== */
 const repLocation = $('#repLocation');
 const repAttemptView = $('#repAttemptView');
 const repSort = $('#repSort');
@@ -626,36 +636,39 @@ const repTableBody = $('#repTable tbody');
 function renderReports(){
   const locSet = new Set(state.results.map(r=>r.location).filter(Boolean));
   const keep = repLocation.value;
-  repLocation.innerHTML = `<option value="">All locations</option>` + [...locSet].sort().map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join('');
-  if([...locSet].includes(keep)) repLocation.value = keep;
+  repLocation.innerHTML =
+    `<option value="">All locations</option>` +
+    [...locSet].sort().map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  if ([...locSet].includes(keep)) repLocation.value = keep;
 
   let rows = state.results.slice();
-  if(repLocation.value) rows = rows.filter(r=>r.location===repLocation.value);
+  if (repLocation.value) rows = rows.filter(r => r.location === repLocation.value);
 
-  const mode = repAttemptView.value;
-  if(mode!=='all'){
-    const map = new Map(); // key student|test
+  const mode = repAttemptView.value; // 'all' | 'first' | 'last'
+  if (mode !== 'all') {
+    const map = new Map(); // student|test -> [attempts]
     rows.forEach(r=>{
-      const key = (r.studentName||'')+'|'+(r.quizTitle||'');
-      const arr = map.get(key)||[]; arr.push(r); map.set(key,arr);
+      const key = (r.studentName||'') + '|' + (r.quizTitle||'');
+      const arr = map.get(key) || [];
+      arr.push(r); map.set(key, arr);
     });
     rows = [];
     map.forEach(arr=>{
-      arr.sort((a,b)=> new Date(a.dateISO)-new Date(b.dateISO));
-      rows.push(mode==='first'? arr[0] : arr[arr.length-1]);
+      arr.sort((a,b)=> new Date(a.dateISO) - new Date(b.dateISO));
+      rows.push(mode === 'first' ? arr[0] : arr[arr.length-1]);
     });
   }
 
   const s = repSort.value;
   rows.sort((a,b)=>{
-    if(s==='date_desc') return new Date(b.dateISO)-new Date(a.dateISO);
-    if(s==='date_asc')  return new Date(a.dateISO)-new Date(b.dateISO);
-    if(s==='test_asc')  return a.quizTitle.localeCompare(b.quizTitle);
-    if(s==='test_desc') return b.quizTitle.localeCompare(a.quizTitle);
+    if (s==='date_desc') return new Date(b.dateISO) - new Date(a.dateISO);
+    if (s==='date_asc')  return new Date(a.dateISO) - new Date(b.dateISO);
+    if (s==='test_asc')  return (a.quizTitle||'').localeCompare(b.quizTitle||'');
+    if (s==='test_desc') return (b.quizTitle||'').localeCompare(a.quizTitle||'');
     return 0;
   });
 
-  repTableBody.innerHTML = rows.map(r=>`
+  repTableBody.innerHTML = rows.map(r => `
     <tr>
       <td>${new Date(r.dateISO).toLocaleString()}</td>
       <td>${esc(r.studentName||'—')}</td>
@@ -663,12 +676,13 @@ function renderReports(){
       <td>${esc(r.quizTitle||'')}</td>
       <td><strong>${r.scorePct}%</strong></td>
       <td>${r.correct}/${r.total}</td>
-    </tr>`).join('') || `<tr><td colspan="6" class="hint">No attempts yet.</td></tr>`;
+    </tr>
+  `).join('') || `<tr><td colspan="6" class="hint">No attempts yet.</td></tr>`;
 }
 
-/* ======================================================================
-   Seed & boot
-====================================================================== */
+/* =====================================================================
+   Seed data (if empty) & boot
+===================================================================== */
 function ensureSeed(){
   if(Object.keys(state.decks).length>0) return;
   const d1 = uid('deck'), d2 = uid('deck');
@@ -689,16 +703,18 @@ function ensureSeed(){
     createdAt:Date.now()
   };
   const t1 = uid('test');
-  state.tests[t1] = { id:t1, name:'Barista 101', title:'Barista 101', n:30, selections:[{deckId:d1,whole:true,subs:[]},{deckId:d2,whole:true,subs:[]}] };
+  state.tests[t1] = { id:t1, name:'Barista 101', title:'Barista 101', n:30,
+    selections:[{deckId:d1,whole:true,subs:[]},{deckId:d2,whole:true,subs:[]}] };
   store.set(KEYS.decks, state.decks);
   store.set(KEYS.tests, state.tests);
 }
+
 function boot(){
   ensureSeed();
   const v = getParams().get('view') || 'create';
   activateView(v);
   const d = $('#studentDate'); if(d) d.value = todayISO();
-  // Make all in-header buttons act as router links
+  // safety: rebind header tabs
   $$('.tab[data-route]').forEach(btn => btn.addEventListener('click', ()=> routeTo(btn.dataset.route)));
 }
 boot();
