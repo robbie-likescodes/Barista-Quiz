@@ -1,19 +1,11 @@
-/* Barista Flashcards & Quizzes — full SPA
-   - Create decks & cards (MCQ only)
-   - Bulk add + import/export
-   - Build Test from decks or subcategories
-   - Shareable URLs (?view=practice|quiz&test=<id>)
-   - Practice (flashcards)
-   - Quiz (graded, finished slide)
-   - My Results (local device)
-   - Reports (all attempts, filter/sort/first|last)
-   Data is stored in localStorage (no backend).
+/* Barista Flashcards & Quizzes — full SPA (localStorage only)
+   Views: Create, Build Test, Practice, Quiz, Reports, My Results
 */
 
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 
-/* ---------------- Storage / State ---------------- */
+/* ------- Storage / State ------- */
 const store = {
   get(k, fb){ try{ return JSON.parse(localStorage.getItem(k)) ?? fb; }catch{ return fb; } },
   set(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
@@ -21,11 +13,15 @@ const store = {
 const KEYS = {
   decks:'fc_decks',
   tests:'fc_tests',
-  results:'fc_results',      // all attempts (admin visible)
-  myResults:'fc_my_results'  // attempts on THIS device (barista)
+  results:'fc_results',
+  myResults:'fc_my_results'
 };
 const uid = (p='id') => p + '_' + Math.random().toString(36).slice(2,10);
 const todayISO = () => new Date().toISOString().slice(0,10);
+const esc = s => (s??'').toString().replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+const shuffle = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [x[i],x[j]]=[x[j],x[i]]; } return x; };
+const sample  = (a,n)=> shuffle(a).slice(0,n);
+const unique  = xs => Array.from(new Set(xs));
 
 let state = {
   decks: store.get(KEYS.decks, {}),
@@ -36,14 +32,15 @@ let state = {
   quiz: { items:[], idx:0, title:'', deckPool:[], locked:false, n:30 }
 };
 
-/* ---------------- Router ---------------- */
+/* ------- Router ------- */
 function getParams(){ return new URLSearchParams(location.search); }
-function baseUrl(){ return location.href.split('?')[0]; }
+function baseUrl(){ const u=new URL(location.href); u.search=''; u.hash=''; return u.toString(); }
 function routeTo(view, extras={}){
   const p = getParams();
   p.set('view', view);
   for(const [k,v] of Object.entries(extras)){ if(v==null) p.delete(k); else p.set(k, v); }
-  history.pushState(null, '', baseUrl() + '?' + p.toString());
+  const url = baseUrl() + '?' + p.toString();
+  try{ history.pushState(null,'',url); }catch{ location.href=url; }
   activateView(view);
 }
 function activateView(view){
@@ -56,17 +53,8 @@ function activateView(view){
   if(view==='reports')    renderReports();
   if(view==='myresults')  renderMyResults();
 }
-window.addEventListener('popstate', ()=>{
-  const v = getParams().get('view') || 'create';
-  activateView(v);
-});
+window.addEventListener('popstate', ()=> activateView(getParams().get('view')||'create'));
 $$('.tab').forEach(btn=> btn.addEventListener('click', ()=> routeTo(btn.dataset.route)));
-
-/* ---------------- Utils ---------------- */
-const esc = s => (s??'').toString().replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
-const shuffle = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [x[i],x[j]]=[x[j],x[i]]; } return x; };
-const sample  = (a,n)=> shuffle(a).slice(0,n);
-const unique  = xs => Array.from(new Set(xs));
 
 /* =====================================================================
    CREATE — decks & cards
@@ -141,8 +129,7 @@ $('#importDeckBtn').addEventListener('click', ()=>{
   $('#importDeckInput').click();
 });
 $('#importDeckInput').addEventListener('change', async (e)=>{
-  const file = e.target.files && e.target.files[0];
-  if(!file) return;
+  const file = e.target.files?.[0]; if(!file) return;
   const text = await file.text();
   try{
     let data=null; try{ data = JSON.parse(text); }catch{}
@@ -164,12 +151,11 @@ $('#importDeckInput').addEventListener('change', async (e)=>{
       store.set(KEYS.decks, state.decks);
       renderDeckLists(); alert('Deck imported.');
     };
-
     if(data && data.name && Array.isArray(data.cards)){
       createDeck(data.name, data.cards, data.category||'', data.subcategory||'');
-    } else if(Array.isArray(data) && data[0] && (data[0].Question || data[0]['Correct Answer'])){
+    }else if(Array.isArray(data) && data[0] && (data[0].Question || data[0]['Correct Answer'])){
       createDeck(file.name.replace(/\.json$/i,'').replace(/_/g,' '), data);
-    } else {
+    }else{
       const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
       const cards = lines.map(line=>{
         const parts = line.split('|').map(s=>s.trim());
@@ -375,6 +361,7 @@ function readSelectionsFromUI(){
   }).filter(s => s.whole || s.subs.length>0);
 }
 
+/* Preview & share */
 previewToggle.addEventListener('change', syncPreviewPanel);
 function syncPreviewPanel(){
   const on = previewToggle.checked;
@@ -396,8 +383,6 @@ function syncPreviewPanel(){
   const poolSize = calcPoolForTest(t).length;
   previewMeta.textContent = `${t.n} questions • ${decksCount} deck(s) • pool ${poolSize}`;
 }
-
-/* Share */
 $('#previewPracticeBtn').addEventListener('click', ()=>{
   const t = getCurrentTest(); if(!t || !t.selections.length) return alert('Save a test and select at least one deck.');
   routeTo('practice', { test:t.id });
@@ -409,7 +394,7 @@ $('#previewQuizBtn').addEventListener('click', ()=>{
 $('#copyShareBtn').addEventListener('click', ()=>{
   const t = getCurrentTest(); if(!t || !t.selections.length) return alert('Save a test and select at least one deck.');
   const url = baseUrl() + `?view=practice&test=${t.id}`;
-  navigator.clipboard.writeText(url).then(()=> alert('Share link copied! Send this URL by text/email.'));
+  navigator.clipboard.writeText(url).then(()=> alert('Share link copied! Send this URL by text/email.'), ()=>alert(url));
 });
 $('#openShareBtn').addEventListener('click', ()=>{
   const t = getCurrentTest(); if(!t || !t.selections.length) return alert('Save a test and select at least one deck.');
@@ -439,9 +424,9 @@ function loadTestFromURL(){
 }
 function calcPoolForTest(t){
   const pool = [];
-  t.selections.forEach(sel=>{
+  (t.selections||[]).forEach(sel=>{
     const d = state.decks[sel.deckId]; if(!d) return;
-    if(sel.whole || sel.subs.length===0){
+    if(sel.whole || (sel.subs||[]).length===0){
       pool.push(...d.cards);
     }else{
       pool.push(...d.cards.filter(c => sel.subs.includes(c.sub||'')));
@@ -451,7 +436,7 @@ function calcPoolForTest(t){
 }
 function renderPracticeDeckChecks(){
   const t = loadTestFromURL(); if(!t){ practiceDeckChecks.innerHTML = `<span class="hint">Ask your admin for a valid test link.</span>`; return; }
-  const chips = t.selections.map(sel=>{
+  const chips = (t.selections||[]).map(sel=>{
     const d = state.decks[sel.deckId];
     const label = d ? d.name : '(missing deck)';
     return `<label class="chip"><input type="checkbox" value="${sel.deckId}" checked> ${esc(label)}</label>`;
@@ -461,7 +446,7 @@ function renderPracticeDeckChecks(){
 $('#startPracticeBtn').addEventListener('click', ()=>{
   const t = loadTestFromURL(); if(!t) return;
   const pickIds = [...practiceDeckChecks.querySelectorAll('input:checked')].map(i=>i.value);
-  const subsetTest = { ...t, selections: t.selections.filter(s=> pickIds.includes(s.deckId)) };
+  const subsetTest = { ...t, selections: (t.selections||[]).filter(s=> pickIds.includes(s.deckId)) };
   const cards = calcPoolForTest(subsetTest);
   if(!cards.length) return alert('No cards in the selected decks.');
   state.practice.cards = cards.map(c=>({ q:c.q, a:c.a }));
@@ -473,8 +458,8 @@ $('#startPracticeBtn').addEventListener('click', ()=>{
 function renderPracticeCard(){
   const { cards, idx } = state.practice;
   const c = cards[idx];
-  practiceQuestion.textContent = c.q;
-  practiceAnswer.textContent = c.a;
+  practiceQuestion.textContent = c?.q ?? '';
+  practiceAnswer.textContent = c?.a ?? '';
   practiceProgress.textContent = `${idx+1} / ${cards.length}`;
   practiceCard.classList.remove('flipped');
 }
@@ -485,7 +470,7 @@ $('#practiceNext').addEventListener('click', ()=>{ state.practice.idx = (state.p
 $('#practiceShuffle').addEventListener('click', ()=>{ state.practice.cards = shuffle(state.practice.cards); state.practice.idx = 0; renderPracticeCard(); });
 
 /* =====================================================================
-   QUIZ — graded, one submission per attempt (local lock)
+   QUIZ — graded, finished slide, local attempt history
 ===================================================================== */
 const quizArea = $('#quizArea');
 const quizHeading = $('#quizHeading');
@@ -539,9 +524,9 @@ function buildQuizItems(isRestart){
 function renderQuizItem(){
   const { items, idx } = state.quiz;
   const it = items[idx];
-  quizQuestion.textContent = it.q;
+  quizQuestion.textContent = it?.q ?? '';
   quizProgress.textContent = `${idx+1} / ${items.length}`;
-  quizOptions.innerHTML = it.options.map(opt=>`
+  quizOptions.innerHTML = (it?.options||[]).map(opt=>`
     <label class="option ${state.quiz.locked?'disabled':''}">
       <input type="radio" name="opt" value="${esc(opt)}" ${it.chosen===opt?'checked':''} ${state.quiz.locked?'disabled':''}>
       <span>${esc(opt)}</span>
@@ -598,7 +583,7 @@ function markPostSubmit(){
 }
 
 /* =====================================================================
-   My Results — barista device history
+   My Results — local device history
 ===================================================================== */
 const myResultsTableBody = $('#myResultsTable tbody');
 const myResultsSearch = $('#myResultsSearch');
@@ -681,7 +666,7 @@ function renderReports(){
 }
 
 /* =====================================================================
-   Seed data (if empty) & boot
+   Seed & Boot
 ===================================================================== */
 function ensureSeed(){
   if(Object.keys(state.decks).length>0) return;
@@ -714,7 +699,6 @@ function boot(){
   const v = getParams().get('view') || 'create';
   activateView(v);
   const d = $('#studentDate'); if(d) d.value = todayISO();
-  // safety: rebind header tabs
   $$('.tab[data-route]').forEach(btn => btn.addEventListener('click', ()=> routeTo(btn.dataset.route)));
 }
-boot();
+document.addEventListener('DOMContentLoaded', boot);
