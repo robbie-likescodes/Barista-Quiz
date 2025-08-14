@@ -626,7 +626,74 @@ const repTableBody = $('#repTable tbody');
 function renderReports(){
   const locSet = new Set(state.results.map(r=>r.location).filter(Boolean));
   const keep = repLocation.value;
-  repLocation.innerHTML = `<option value="">All locations</option>` + [... function boot(){
+  repLocation.innerHTML = `<option value="">All locations</option>` + [...locSet].sort().map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  if([...locSet].includes(keep)) repLocation.value = keep;
+
+  let rows = state.results.slice();
+  if(repLocation.value) rows = rows.filter(r=>r.location===repLocation.value);
+
+  const mode = repAttemptView.value;
+  if(mode!=='all'){
+    const map = new Map(); // key student|test
+    rows.forEach(r=>{
+      const key = (r.studentName||'')+'|'+(r.quizTitle||'');
+      const arr = map.get(key)||[]; arr.push(r); map.set(key,arr);
+    });
+    rows = [];
+    map.forEach(arr=>{
+      arr.sort((a,b)=> new Date(a.dateISO)-new Date(b.dateISO));
+      rows.push(mode==='first'? arr[0] : arr[arr.length-1]);
+    });
+  }
+
+  const s = repSort.value;
+  rows.sort((a,b)=>{
+    if(s==='date_desc') return new Date(b.dateISO)-new Date(a.dateISO);
+    if(s==='date_asc')  return new Date(a.dateISO)-new Date(b.dateISO);
+    if(s==='test_asc')  return a.quizTitle.localeCompare(b.quizTitle);
+    if(s==='test_desc') return b.quizTitle.localeCompare(a.quizTitle);
+    return 0;
+  });
+
+  repTableBody.innerHTML = rows.map(r=>`
+    <tr>
+      <td>${new Date(r.dateISO).toLocaleString()}</td>
+      <td>${esc(r.studentName||'—')}</td>
+      <td>${esc(r.location||'—')}</td>
+      <td>${esc(r.quizTitle||'')}</td>
+      <td><strong>${r.scorePct}%</strong></td>
+      <td>${r.correct}/${r.total}</td>
+    </tr>`).join('') || `<tr><td colspan="6" class="hint">No attempts yet.</td></tr>`;
+}
+
+/* ======================================================================
+   Seed & boot
+====================================================================== */
+function ensureSeed(){
+  if(Object.keys(state.decks).length>0) return;
+  const d1 = uid('deck'), d2 = uid('deck');
+  state.decks[d1] = {
+    id:d1, name:'Espresso Basics', category:'Espresso', subcategory:'Extraction',
+    cards:[
+      {id:uid('card'), q:'Ideal extraction time for a double espresso?', a:'25–30 seconds', distractors:['10–15 seconds','40–50 seconds','60–90 seconds'], sub:'Timing', createdAt:Date.now()},
+      {id:uid('card'), q:'Espresso yield for a classic double?', a:'~36g', distractors:['~18g','~25g','~54g'], sub:'Ratios', createdAt:Date.now()},
+      {id:uid('card'), q:'What is tamping?', a:'Compressing coffee grounds in the portafilter', distractors:['Rinsing the group head','Purging the steam wand','Pre-infusing the puck'], sub:'Prep', createdAt:Date.now()}
+    ],
+    createdAt:Date.now()
+  };
+  state.decks[d2] = {
+    id:d2, name:'Milk Science', category:'Milk', subcategory:'Steaming',
+    cards:[
+      {id:uid('card'), q:'Best milk temp for latte art (°F)?', a:'140–150', distractors:['110–120','160–170','180–190'], sub:'Temp', createdAt:Date.now()}
+    ],
+    createdAt:Date.now()
+  };
+  const t1 = uid('test');
+  state.tests[t1] = { id:t1, name:'Barista 101', title:'Barista 101', n:30, selections:[{deckId:d1,whole:true,subs:[]},{deckId:d2,whole:true,subs:[]}] };
+  store.set(KEYS.decks, state.decks);
+  store.set(KEYS.tests, state.tests);
+}
+function boot(){
   ensureSeed();
   const v = getParams().get('view') || 'create';
   activateView(v);
@@ -635,4 +702,3 @@ function renderReports(){
   $$('.tab[data-route]').forEach(btn => btn.addEventListener('click', ()=> routeTo(btn.dataset.route)));
 }
 boot();
-                                                                      
