@@ -28,6 +28,9 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
 /* Cards / Layout */
 .card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin:16px 0;box-shadow:0 10px 30px rgba(0,0,0,.25)}
 .card-head{display:flex;align-items:center;gap:10px}
+.card-summary{display:flex;align-items:center;gap:10px;list-style:none}
+.card-summary::-webkit-details-marker{display:none}
+.buttonish{cursor:pointer;border:1px solid var(--line);background:#1a2140;border-radius:12px;padding:10px 12px}
 .grow{flex:1}
 .mt{margin-top:14px}.mt-sm{margin-top:8px}
 .lead{font-size:18px}
@@ -102,7 +105,7 @@ body.student .tab[data-route="create"],
 body.student .tab[data-route="build"],
 body.student .tab[data-route="reports"]{display:none}
 
-/* Tree (Class → Deck → Sub‑deck) */
+/* Tree */
 .tree{display:flex;flex-direction:column;gap:10px}
 .node{border:1px dashed var(--line);border-radius:12px;background:#141a2e}
 .node>.row{display:flex;align-items:center;gap:10px;padding:10px 12px}
