@@ -65,7 +65,7 @@
       </div>
 
       <details class="card">
-        <summary class="card-head">Bulk Add (tap for format)</summary>
+        <summary class="card-summary buttonish">Bulk Add (tap for format)</summary>
         <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
         <textarea id="bulkTextarea" class="textarea mt" rows="5"
           placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub‑deck(optional)"></textarea>
@@ -120,14 +120,16 @@
 
         <div class="mt">
           <h4>Share</h4>
-          <button id="copyShareBtn" class="btn success">Copy Student Link</button>
-          <button id="openShareBtn" class="btn">Open Student Preview</button>
+          <div class="grid g2">
+            <button id="copyShareBtn" class="btn success">Copy Student Link</button>
+            <button id="openShareBtn" class="btn">Open Student Preview</button>
+          </div>
           <p class="hint mt-sm">Student link is restricted: no Create/Build/Reports; only the shared Test is visible.</p>
         </div>
       </div>
 
       <details id="deckChooser" class="card" open>
-        <summary class="card-head">Choose content (Class → Deck → Sub‑deck)</summary>
+        <summary class="card-summary buttonish">Choose content (Class → Deck → Sub‑deck)</summary>
         <div id="treeBuild" class="tree"></div>
       </details>
 
@@ -155,11 +157,11 @@
         </div>
       </div>
 
-      <div class="card">
-        <h3>Choose (Class → Deck → Sub‑deck)</h3>
+      <details class="card" open>
+        <summary class="card-summary buttonish">Choose (Class → Deck → Sub‑deck)</summary>
         <div id="treePractice" class="tree"></div>
         <button id="startPracticeBtn" class="btn primary mt">Start Practice</button>
-      </div>
+      </details>
 
       <div id="practiceArea" class="card" hidden>
         <div class="bar"><span id="practiceLabel">Studying…</span><div class="grow"></div><span id="practiceProgress" class="hint"></span></div>
@@ -194,7 +196,7 @@
         <h3>Finished!</h3>
         <p id="finishedMsg" class="lead"></p>
         <details open class="answer-key">
-          <summary class="card-head">Your Answers &amp; Key</summary>
+          <summary class="card-summary buttonish">Your Answers &amp; Key</summary>
           <div id="finishedAnswers" class="answers mt"></div>
         </details>
         <div class="mt grid g2">
@@ -244,7 +246,7 @@
         </table>
       </div>
       <details class="card hidden" id="myDetail">
-        <summary class="card-head">Submission Details</summary>
+        <summary class="card-summary buttonish">Submission Details</summary>
         <div id="myDetailBody" class="answers mt"></div>
       </details>
     </section>
