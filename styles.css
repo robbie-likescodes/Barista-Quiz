@@ -11,7 +11,7 @@ body{
   font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
   -webkit-tap-highlight-color: transparent;
 }
-.container{max-width:1050px;margin:16px auto;padding:0 16px 80px}
+.container{max-width:1100px;margin:16px auto;padding:0 16px 80px}
 
 /* Header / Tabs */
 .app-header{position:sticky;top:0;z-index:10;background:linear-gradient(90deg,#12182b,#111527);border-bottom:1px solid var(--line)}
@@ -34,22 +34,22 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
 .hint{color:var(--muted);font-size:13px}
 .hidden{display:none!important}
 
+/* Grids */
 .grid{display:grid;gap:12px}
 .grid.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .grid.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
-@media (max-width:800px){.grid.g2,.grid.g3{grid-template-columns:1fr}}
+@media (max-width:900px){.grid.g2,.grid.g3{grid-template-columns:1fr}}
 
-/* Inputs & selects */
+/* Inputs */
 .input,select{
   width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
   background:var(--panel2);color:var(--text);
-  line-height:1.2;pointer-events:auto;position:relative;z-index:2;
 }
 select.input{-webkit-appearance: menulist;appearance: menulist}
 .input.small{max-width:120px}
 .textarea{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--panel2);color:var(--text)}
 .label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
-.select-wrap{position:relative;z-index:2}
+.select-wrap{position:relative}
 
 /* Buttons */
 .btn{border:1px solid transparent;border-radius:12px;padding:10px 14px;background:#26335b;color:var(--text);cursor:pointer;font-weight:600}
@@ -65,21 +65,6 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .list .actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
 @media (max-width:800px){.list .cardline{grid-template-columns:1fr}}
 
-/* Deck chooser */
-.deck-pick .deck-row{border:1px dashed var(--line);border-radius:12px;padding:12px;margin:10px 0;background:#141a2e}
-.deck-pick .top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.wrap{display:flex;align-items:center;gap:10px}
-.subs{margin-top:10px;display:flex;flex-wrap:wrap;gap:10px}
-.subchip{display:flex;align-items:center;gap:6px;background:var(--chip);border:1px solid var(--line);padding:6px 10px;border-radius:12px}
-
-/* Chips */
-.chips{display:flex;flex-wrap:wrap;gap:10px}
-.chip{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--panel2);padding:8px 12px;border-radius:999px}
-
-/* Switch */
-.switch{display:flex;align-items:center;gap:8px}
-.switch input{transform:scale(1.2)}
-
 /* Flashcard */
 .flip{position:relative;perspective:1200px;min-height:180px}
 .flip .front,.flip .back{border-radius:12px;border:1px solid var(--line);background:var(--panel2);padding:18px;position:absolute;inset:0;backface-visibility:hidden;transition:transform .5s ease;display:flex;flex-direction:column;justify-content:center}
@@ -93,7 +78,6 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .option{display:flex;align-items:center;gap:10px;padding:12px;border-radius:12px;border:1px solid var(--line);background:#1a2140}
 .option.correct{border-color:#2bd4a9;background:rgba(43,212,169,.08)}
 .option.incorrect{border-color:#e87070;background:rgba(232,112,112,.08)}
-.option.disabled{opacity:.7;pointer-events:none}
 .bar{display:flex;align-items:center;gap:14px}
 
 /* Answers (review) */
@@ -109,7 +93,6 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .table{width:100%;border-collapse:collapse}
 .table th,.table td{border-bottom:1px solid var(--line);padding:10px 8px;text-align:left}
 .table th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.08em}
-.table .view-btn{white-space:nowrap}
 
 /* Footer */
 .footer{text-align:center;padding:30px 0;color:var(--muted)}
@@ -119,8 +102,17 @@ body.student .tab[data-route="create"],
 body.student .tab[data-route="build"],
 body.student .tab[data-route="reports"]{display:none}
 
-/* Missed summary chips */
-.missed{display:flex;flex-direction:column;gap:10px}
-.missed .missrow{display:flex;gap:10px;align-items:flex-start}
-.missed .missq{flex:1}
-.missed .misscount{min-width:60px;text-align:center;border:1px solid var(--line);background:#1a2140;border-radius:10px;padding:6px}
+/* Tree (Class → Deck → Sub‑deck) */
+.tree{display:flex;flex-direction:column;gap:10px}
+.node{border:1px dashed var(--line);border-radius:12px;background:#141a2e}
+.node>.row{display:flex;align-items:center;gap:10px;padding:10px 12px}
+.node .label-main{font-weight:600}
+.node .hint{margin-left:6px}
+.node .children{padding:10px 12px 12px 18px;border-top:1px dashed var(--line)}
+.row .spacer{flex:1}
+.row .expand{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:10px;padding:4px 8px;font-size:12px;cursor:pointer}
+.row .expand[aria-expanded="true"]{background:#22305d}
+
+.child-group{display:flex;flex-direction:column;gap:8px}
+.subchips{display:flex;flex-wrap:wrap;gap:8px}
+.subchips .chip{display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--chip);padding:6px 10px;border-radius:12px}
