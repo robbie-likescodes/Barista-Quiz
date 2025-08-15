@@ -13,7 +13,6 @@ body{
 }
 .container{max-width:1100px;margin:16px auto;padding:0 16px 80px}
 
-/* Header / Tabs */
 .app-header{position:sticky;top:0;z-index:10;background:linear-gradient(90deg,#12182b,#111527);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:12px;padding:14px 16px 8px}
 .logo{font-size:22px}
@@ -22,10 +21,8 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
 .tab{border:1px solid var(--line);background:#18203a;color:var(--text);padding:8px 14px;border-radius:999px;cursor:pointer}
 .tab.active{background:var(--brand);color:#061125;border-color:transparent;font-weight:600}
 
-/* Views */
 .view{display:none}.view.active{display:block}
 
-/* Cards / Layout */
 .card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin:16px 0;box-shadow:0 10px 30px rgba(0,0,0,.25)}
 .card-head{display:flex;align-items:center;gap:10px}
 .card-summary{display:flex;align-items:center;gap:10px;list-style:none}
@@ -37,13 +34,11 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
 .hint{color:var(--muted);font-size:13px}
 .hidden{display:none!important}
 
-/* Grids */
 .grid{display:grid;gap:12px}
 .grid.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .grid.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
 @media (max-width:900px){.grid.g2,.grid.g3{grid-template-columns:1fr}}
 
-/* Inputs */
 .input,select{
   width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
   background:var(--panel2);color:var(--text);
@@ -54,7 +49,6 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
 .select-wrap{position:relative}
 
-/* Buttons */
 .btn{border:1px solid transparent;border-radius:12px;padding:10px 14px;background:#26335b;color:var(--text);cursor:pointer;font-weight:600}
 .btn:hover{filter:brightness(1.05)}
 .btn.primary{background:var(--primary);color:#041221}
@@ -63,12 +57,10 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .btn.ghost{background:transparent;border-color:var(--line)}
 .btn.small{padding:7px 10px;font-size:13px}
 
-/* Lists */
 .list .cardline{display:grid;grid-template-columns:1.3fr 1fr auto;gap:12px;padding:12px;border-radius:10px;background:var(--panel2);margin:10px 0}
 .list .actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
 @media (max-width:800px){.list .cardline{grid-template-columns:1fr}}
 
-/* Flashcard */
 .flip{position:relative;perspective:1200px;min-height:180px}
 .flip .front,.flip .back{border-radius:12px;border:1px solid var(--line);background:var(--panel2);padding:18px;position:absolute;inset:0;backface-visibility:hidden;transition:transform .5s ease;display:flex;flex-direction:column;justify-content:center}
 .flip .front{transform:rotateY(0)} .flip .back{transform:rotateY(180deg)}
@@ -76,14 +68,12 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .fc-title{color:var(--muted);text-transform:uppercase;letter-spacing:.12em;font-size:12px;margin-bottom:6px}
 .fc-text{font-size:18px}
 
-/* Quiz */
 .options{display:grid;gap:10px}
 .option{display:flex;align-items:center;gap:10px;padding:12px;border-radius:12px;border:1px solid var(--line);background:#1a2140}
 .option.correct{border-color:#2bd4a9;background:rgba(43,212,169,.08)}
 .option.incorrect{border-color:#e87070;background:rgba(232,112,112,.08)}
 .bar{display:flex;align-items:center;gap:14px}
 
-/* Answers (review) */
 .answers .row{border:1px solid var(--line);border-radius:12px;padding:10px;margin:8px 0;background:#151b34}
 .answers .q{font-weight:600;margin-bottom:4px}
 .answers .a{display:flex;flex-wrap:wrap;gap:8px}
@@ -91,16 +81,13 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .tag.good{background:rgba(43,212,169,.1);border-color:#2bd4a9;color:#bdf6e7}
 .tag.bad{background:rgba(232,112,112,.1);border-color:#e87070;color:#ffd4d4}
 
-/* Table */
 .table-wrap{overflow:auto}
 .table{width:100%;border-collapse:collapse}
 .table th,.table td{border-bottom:1px solid var(--line);padding:10px 8px;text-align:left}
 .table th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.08em}
 
-/* Footer */
 .footer{text-align:center;padding:30px 0;color:var(--muted)}
 
-/* Student restricted view — hide admin tabs entirely */
 body.student .tab[data-route="create"],
 body.student .tab[data-route="build"],
 body.student .tab[data-route="reports"]{display:none}
@@ -110,7 +97,6 @@ body.student .tab[data-route="reports"]{display:none}
 .node{border:1px dashed var(--line);border-radius:12px;background:#141a2e}
 .node>.row{display:flex;align-items:center;gap:10px;padding:10px 12px}
 .node .label-main{font-weight:600}
-.node .hint{margin-left:6px}
 .node .children{padding:10px 12px 12px 18px;border-top:1px dashed var(--line)}
 .row .spacer{flex:1}
 .row .expand{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:10px;padding:4px 8px;font-size:12px;cursor:pointer}
