@@ -1,18 +1,15 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
   <title>Barista Flashcards & Quizzes</title>
-  <link rel="stylesheet" href="styles.css"/>
+  <link rel="stylesheet" href="styles.css" />
   <script defer src="app.js"></script>
 </head>
 <body>
   <header class="app-header">
-    <div class="brand">
-      <span class="logo">☕</span>
-      <h1>Barista Flashcards &amp; Quizzes</h1>
-    </div>
+    <div class="brand"><span class="logo">☕</span><h1>Barista Flashcards &amp; Quizzes</h1></div>
     <nav class="tabs">
       <button class="tab active" data-route="create">Create</button>
       <button class="tab" data-route="build">Build Test</button>
@@ -31,8 +28,7 @@
 
       <div class="card">
         <div class="card-head">
-          <strong>Add a deck (Class + Deck)</strong>
-          <div class="grow"></div>
+          <strong>Add a deck (Class + Deck)</strong><div class="grow"></div>
           <button id="renameDeckBtn" class="btn ghost">Rename</button>
           <button id="editDeckMetaBtn" class="btn ghost">Edit Meta</button>
           <button id="deleteDeckBtn" class="btn danger">Delete</button>
@@ -44,12 +40,12 @@
         <div class="grid g2 mt">
           <div>
             <label class="label">Class</label>
-            <input id="newClassName" class="input" list="classNames" placeholder="e.g., Barista Training">
+            <input id="newClassName" class="input" list="classNames" placeholder="e.g., Barista Training" autocomplete="off">
             <datalist id="classNames"></datalist>
           </div>
           <div>
             <label class="label">Deck</label>
-            <input id="newDeckName" class="input" list="deckNames" placeholder="e.g., Hot Drinks">
+            <input id="newDeckName" class="input" list="deckNames" placeholder="e.g., Hot Drinks" autocomplete="off">
             <datalist id="deckNames"></datalist>
           </div>
         </div>
@@ -59,27 +55,21 @@
             <button id="toggleSubdeckBtn" class="btn ghost small">+ Sub‑deck (optional)</button>
             <input id="newSubdeck" class="input hidden" placeholder="e.g., Latte Art">
           </div>
-          <div class="mt-sm">
-            <button id="addDeckBtn" class="btn primary">Add / Select Deck</button>
-          </div>
+          <div class="mt-sm"><button id="addDeckBtn" class="btn primary">Add / Select Deck</button></div>
         </div>
 
-        <div class="mt">
-          <label class="label">Pick deck (by Deck)</label>
-          <select id="deckSelect" class="input"></select>
+        <div class="mt select-wrap">
+          <label class="label">Pick Deck (by Deck Name)</label>
+          <select id="deckSelect" class="input" aria-label="Pick Deck"></select>
         </div>
       </div>
 
       <details class="card">
         <summary class="card-head">Bulk Add (tap for format)</summary>
-        <div class="mt-sm">
-          <button id="bulkSummaryBtn" class="btn ghost small">Show format</button>
-        </div>
+        <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
         <textarea id="bulkTextarea" class="textarea mt" rows="5"
           placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub‑deck(optional)"></textarea>
-        <div class="mt">
-          <button id="bulkAddBtn" class="btn primary">Add to Deck</button>
-        </div>
+        <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
       </details>
 
       <div class="card">
@@ -92,9 +82,7 @@
           <input id="aWrong3Input" class="input" placeholder="Wrong answer 3 (optional)">
           <input id="cardSubInput" class="input" placeholder="Card sub‑deck (optional)">
         </div>
-        <div class="mt">
-          <button id="addCardBtn" class="btn primary">Save Card</button>
-        </div>
+        <div class="mt"><button id="addCardBtn" class="btn primary">Save Card</button></div>
       </div>
 
       <div class="card">
@@ -108,15 +96,12 @@
       <h2>Build Test &amp; Share</h2>
 
       <div class="card">
-        <label class="switch">
-          <input type="checkbox" id="previewToggle">
-          <span>Preview as Barista</span>
-        </label>
+        <label class="switch"><input type="checkbox" id="previewToggle"><span>Preview as Barista</span></label>
 
         <div class="grid g3 mt">
           <div>
             <label class="label">Create or select a Test</label>
-            <input id="testNameInput" class="input" list="testsList" placeholder="Type a new Test name or select">
+            <input id="testNameInput" class="input" list="testsList" placeholder="Type a new Test name or select" autocomplete="off">
             <datalist id="testsList"></datalist>
             <div class="mt-sm">
               <button id="saveTestBtn" class="btn primary">Save/Select Test</button>
@@ -137,6 +122,7 @@
           <h4>Share</h4>
           <button id="copyShareBtn" class="btn success">Copy Student Link</button>
           <button id="openShareBtn" class="btn">Open Student Preview</button>
+          <p class="hint mt-sm">Student link is restricted: no Create/Build/Reports; only selected Test is available.</p>
         </div>
       </div>
 
@@ -161,9 +147,9 @@
 
       <div class="card">
         <div class="grid g2">
-          <div>
+          <div class="select-wrap">
             <label class="label">Select Test</label>
-            <select id="practiceTestSelect" class="input"></select>
+            <select id="practiceTestSelect" class="input" aria-label="Select Test for Practice"></select>
           </div>
           <div class="hint mt-sm">Pick which decks (from the Test) you want to study</div>
         </div>
@@ -172,27 +158,12 @@
       </div>
 
       <div id="practiceArea" class="card" hidden>
-        <div class="bar">
-          <span id="practiceLabel">Studying…</span>
-          <div class="grow"></div>
-          <span id="practiceProgress" class="hint"></span>
-        </div>
+        <div class="bar"><span id="practiceLabel">Studying…</span><div class="grow"></div><span id="practiceProgress" class="hint"></span></div>
         <div id="practiceCard" class="flip mt" tabindex="0" aria-label="Flashcard">
-          <div class="front">
-            <div class="fc-title">Question</div>
-            <div id="practiceQuestion" class="fc-text"></div>
-            <div class="hint mt-sm">Tap to flip</div>
-          </div>
-          <div class="back">
-            <div class="fc-title">Answer</div>
-            <div id="practiceAnswer" class="fc-text"></div>
-          </div>
+          <div class="front"><div class="fc-title">Question</div><div id="practiceQuestion" class="fc-text"></div><div class="hint mt-sm">Tap to flip</div></div>
+          <div class="back"><div class="fc-title">Answer</div><div id="practiceAnswer" class="fc-text"></div></div>
         </div>
-        <div class="mt grid g3">
-          <button id="practicePrev" class="btn">Prev</button>
-          <button id="practiceShuffle" class="btn ghost">Shuffle</button>
-          <button id="practiceNext" class="btn">Next</button>
-        </div>
+        <div class="mt grid g3"><button id="practicePrev" class="btn">Prev</button><button id="practiceShuffle" class="btn ghost">Shuffle</button><button id="practiceNext" class="btn">Next</button></div>
       </div>
     </section>
 
@@ -202,36 +173,26 @@
 
       <div class="card">
         <div class="grid g3">
-          <div>
-            <label class="label">Select Test</label>
-            <select id="quizTestSelect" class="input"></select>
-          </div>
+          <div class="select-wrap"><label class="label">Select Test</label><select id="quizTestSelect" class="input"></select></div>
           <input id="studentName" class="input" placeholder="Your name (required)">
           <input id="studentLocation" class="input" placeholder="Location (required)">
         </div>
-        <div class="mt">
-          <label class="label">Date</label>
-          <input id="studentDate" class="input" type="date">
-        </div>
+        <div class="mt"><label class="label">Date</label><input id="studentDate" class="input" type="date"></div>
       </div>
 
       <div id="quizArea" class="card">
-        <div class="bar">
-          <span id="quizQuestion" class="qtxt"></span>
-          <div class="grow"></div>
-          <span id="quizProgress" class="hint"></span>
-        </div>
+        <div class="bar"><span id="quizQuestion" class="qtxt"></span><div class="grow"></div><span id="quizProgress" class="hint"></span></div>
         <div id="quizOptions" class="options mt"></div>
-        <div class="mt grid g3">
-          <button id="quizPrev" class="btn">Prev</button>
-          <button id="submitQuizBtn" class="btn primary">Submit</button>
-          <button id="quizNext" class="btn">Next</button>
-        </div>
+        <div class="mt grid g3"><button id="quizPrev" class="btn">Prev</button><button id="submitQuizBtn" class="btn primary">Submit</button><button id="quizNext" class="btn">Next</button></div>
       </div>
 
       <div id="quizFinished" class="card hidden">
         <h3>Finished!</h3>
         <p id="finishedMsg" class="lead"></p>
+        <details open class="answer-key">
+          <summary class="card-head">Your Answers &amp; Key</summary>
+          <div id="finishedAnswers" class="answers mt"></div>
+        </details>
         <div class="mt grid g2">
           <button id="restartQuizBtn" class="btn">Restart with fresh questions</button>
           <button id="finishedPracticeBtn" class="btn ghost">Go to Practice</button>
@@ -244,37 +205,22 @@
       <h2>Reports</h2>
       <div class="card">
         <div class="grid g3">
-          <div>
-            <label class="label">Location</label>
-            <select id="repLocation" class="input">
-              <option value="">All locations</option>
-            </select>
-          </div>
-          <div>
-            <label class="label">Attempts</label>
-            <select id="repAttemptView" class="input">
-              <option value="all">All attempts</option>
-              <option value="first">First attempt only</option>
-              <option value="last">Last attempt only</option>
-            </select>
-          </div>
-          <div>
-            <label class="label">Sort</label>
-            <select id="repSort" class="input">
-              <option value="date_desc">Newest first</option>
-              <option value="date_asc">Oldest first</option>
-              <option value="test_asc">Test A→Z</option>
-              <option value="test_desc">Test Z→A</option>
-            </select>
-          </div>
+          <div class="select-wrap"><label class="label">Location</label><select id="repLocation" class="input"><option value="">All locations</option></select></div>
+          <div class="select-wrap"><label class="label">Attempts</label><select id="repAttemptView" class="input"><option value="all">All attempts</option><option value="first">First attempt only</option><option value="last">Last attempt only</option></select></div>
+          <div class="select-wrap"><label class="label">Sort</label><select id="repSort" class="input"><option value="date_desc">Newest first</option><option value="date_asc">Oldest first</option><option value="test_asc">Test A→Z</option><option value="test_desc">Test Z→A</option></select></div>
         </div>
       </div>
 
       <div class="card table-wrap">
         <table id="repTable" class="table">
-          <thead><tr><th>Date/Time</th><th>Name</th><th>Location</th><th>Test</th><th>Score</th><th>Correct</th></tr></thead>
+          <thead><tr><th>Date/Time</th><th>Name</th><th>Location</th><th>Test</th><th>Score</th><th>Correct</th><th>View</th></tr></thead>
           <tbody></tbody>
         </table>
+      </div>
+
+      <div class="card">
+        <h3>Most Missed Questions</h3>
+        <div id="missedSummary" class="missed"></div>
       </div>
     </section>
 
@@ -289,10 +235,14 @@
       </div>
       <div class="card table-wrap">
         <table id="myResultsTable" class="table">
-          <thead><tr><th>Date/Time</th><th>Test</th><th>Location</th><th>Score</th><th>Correct</th></tr></thead>
+          <thead><tr><th>Date/Time</th><th>Test</th><th>Location</th><th>Score</th><th>Correct</th><th>View</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
+      <details class="card hidden" id="myDetail">
+        <summary class="card-head">Submission Details</summary>
+        <div id="myDetailBody" class="answers mt"></div>
+      </details>
     </section>
 
   </main>
