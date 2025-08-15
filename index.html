@@ -1,86 +1,332 @@
-<!-- CREATE (decks merged by name) -->
-<section id="view-create" class="view active" aria-labelledby="create-title">
-  <h2 id="create-title">Create &amp; Manage Decks</h2>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <meta name="theme-color" content="#111827" />
+  <title>Barista Flashcards & Quizzes</title>
+  <link rel="stylesheet" href="styles.css?v=4" />
+  <script defer src="app.js?v=4"></script>
+</head>
+<body>
+  <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
 
-  <div class="card">
-    <div class="card-head">
-      <strong>Add / Select a Deck (merged by Deck Name)</strong><div class="grow"></div>
-      <button id="renameDeckBtn" class="btn ghost">Rename</button>
-      <button id="editDeckMetaBtn" class="btn ghost">Edit Meta</button>
-      <button id="deleteDeckBtn" class="btn danger">Delete</button>
-      <button id="exportDeckBtn" class="btn">Export</button>
-      <button id="importDeckBtn" class="btn">Import…</button>
-      <input id="importDeckInput" type="file" accept=".json,.txt" hidden>
+  <header class="app-header" role="banner">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">☕</span>
+      <h1>Barista Flashcards &amp; Quizzes</h1>
     </div>
+    <nav class="tabs" role="navigation" aria-label="Primary">
+      <button class="tab active" data-route="create">Create</button>
+      <button class="tab" data-route="build">Build Test</button>
+      <button class="tab" data-route="practice">Practice</button>
+      <button class="tab" data-route="quiz">Quiz</button>
+      <button class="tab" data-route="reports">Reports</button>
+      <button class="tab" data-route="myresults">My Results</button>
+    </nav>
+  </header>
 
-    <!-- Create or select a deck by Class + Deck Name.
-         Decks with the same Class + Deck Name are ONE deck (sub‑decks are just tags). -->
-    <div class="grid g2 mt">
-      <div>
-        <label class="label" for="newClassName">Class</label>
-        <input id="newClassName" class="input" list="classNames" placeholder="e.g., Barista Training" autocomplete="off" />
-        <datalist id="classNames"></datalist>
+  <main class="container" role="main">
+    <div id="liveRegion" class="sr-only" aria-live="polite"></div>
+
+    <!-- CREATE (decks merged by name) -->
+    <section id="view-create" class="view active" aria-labelledby="create-title">
+      <h2 id="create-title">Create &amp; Manage Decks</h2>
+
+      <div class="card">
+        <div class="card-head">
+          <strong>Add / Select a Deck (merged by Deck Name)</strong><div class="grow"></div>
+          <button id="renameDeckBtn" class="btn ghost">Rename</button>
+          <button id="editDeckMetaBtn" class="btn ghost">Edit Meta</button>
+          <button id="deleteDeckBtn" class="btn danger">Delete</button>
+          <button id="exportDeckBtn" class="btn">Export</button>
+          <button id="importDeckBtn" class="btn">Import…</button>
+          <input id="importDeckInput" type="file" accept=".json,.txt" hidden>
+        </div>
+
+        <div class="grid g2 mt">
+          <div>
+            <label class="label" for="newClassName">Class</label>
+            <input id="newClassName" class="input" list="classNames" placeholder="e.g., Barista Training" autocomplete="off" />
+            <datalist id="classNames"></datalist>
+          </div>
+          <div>
+            <label class="label" for="newDeckName">Deck (merged by name)</label>
+            <input id="newDeckName" class="input" list="deckNames" placeholder="e.g., Hot Drinks" autocomplete="off" />
+            <datalist id="deckNames"></datalist>
+          </div>
+        </div>
+
+        <div class="grid g2 mt">
+          <div class="subcat-wrap">
+            <button id="toggleSubdeckBtn" class="btn ghost small" aria-controls="newSubdeck" aria-expanded="false">+ Sub‑deck (optional)</button>
+            <input id="newSubdeck" class="input hidden" placeholder="e.g., Latte Art">
+          </div>
+          <div class="mt-sm"><button id="addDeckBtn" class="btn primary">Create / Select Deck</button></div>
+        </div>
+
+        <div class="mt select-wrap">
+          <label class="label" for="deckSelect">Pick Existing Deck (by Name)</label>
+          <select id="deckSelect" class="input" aria-label="Pick Deck (by Name)"></select>
+          <div id="deckMeta" class="hint mt-sm">
+            <span id="deckMetaTitle"></span>
+            <div id="deckMetaSubs" class="micro"></div>
+          </div>
+        </div>
       </div>
-      <div>
-        <label class="label" for="newDeckName">Deck (merged by name)</label>
-        <input id="newDeckName" class="input" list="deckNames" placeholder="e.g., Hot Drinks" autocomplete="off" />
-        <datalist id="deckNames"></datalist>
+
+      <details class="card">
+        <summary class="card-head">Bulk Add (tap for format)</summary>
+        <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
+        <textarea id="bulkTextarea" class="textarea mt" rows="5"
+          placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub‑deck(optional)"></textarea>
+        <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
+      </details>
+
+      <div class="card">
+        <h3>Add / Edit Card</h3>
+        <div class="grid g2 mt">
+          <input id="qInput" class="input" placeholder="Question" aria-label="Question">
+          <input id="aCorrectInput" class="input" placeholder="Correct answer" aria-label="Correct answer">
+          <input id="aWrong1Input" class="input" placeholder="Wrong answer 1 (required)" aria-label="Wrong answer 1">
+          <input id="aWrong2Input" class="input" placeholder="Wrong answer 2 (optional)" aria-label="Wrong answer 2">
+          <input id="aWrong3Input" class="input" placeholder="Wrong answer 3 (optional)" aria-label="Wrong answer 3">
+          <input id="cardSubInput" class="input" placeholder="Card sub‑deck (optional)" aria-label="Card sub-deck">
+        </div>
+        <div class="mt"><button id="addCardBtn" class="btn primary">Save Card</button></div>
+
+        <details class="mt card" id="subdeckManager" open>
+          <summary class="card-head">Sub‑decks in this Deck</summary>
+          <div id="subdeckManagerList" class="chips mt"></div>
+          <div class="grid g2 mt">
+            <input id="subdeckNewName" class="input" placeholder="Add new sub‑deck (tag)">
+            <button id="createSubdeckBtn" class="btn">Add Sub‑deck</button>
+          </div>
+        </details>
       </div>
-    </div>
 
-    <!-- Add/select sub‑deck as a tag within the selected Deck (does NOT create a new Deck). -->
-    <div class="grid g2 mt">
-      <div class="subcat-wrap">
-        <button id="toggleSubdeckBtn" class="btn ghost small" aria-controls="newSubdeck" aria-expanded="false">+ Sub‑deck (optional)</button>
-        <input id="newSubdeck" class="input hidden" placeholder="e.g., Latte Art">
+      <div class="card">
+        <h3>Cards in Deck</h3>
+        <div id="cardsList" class="list" aria-live="polite"></div>
       </div>
-      <div class="mt-sm"><button id="addDeckBtn" class="btn primary">Create / Select Deck</button></div>
-    </div>
+    </section>
 
-    <!-- Select existing deck by name (deduped). Adding cards here appends to that single deck. -->
-    <div class="mt select-wrap">
-      <label class="label" for="deckSelect">Pick Existing Deck (by Name)</label>
-      <select id="deckSelect" class="input" aria-label="Pick Deck (by Name)"></select>
-      <div id="deckMeta" class="hint mt-sm">
-        <span id="deckMetaTitle"></span>
-        <div id="deckMetaSubs" class="micro"></div>
+    <!-- BUILD -->
+    <section id="view-build" class="view" aria-labelledby="build-title">
+      <h2 id="build-title">Build Test &amp; Share</h2>
+
+      <div class="card">
+        <label class="switch">
+          <input type="checkbox" id="previewToggle">
+          <span>Preview as Barista</span>
+        </label>
+
+        <div class="grid g3 mt">
+          <div>
+            <label class="label" for="testNameInput">Create or select a Test</label>
+            <input id="testNameInput" class="input" list="testsList" placeholder="Type a new Test name or select" autocomplete="off">
+            <datalist id="testsList"></datalist>
+            <div class="mt-sm">
+              <button id="saveTestBtn" class="btn primary">Save/Select Test</button>
+              <button id="deleteTestBtn" class="btn danger">Delete Test</button>
+            </div>
+          </div>
+          <div>
+            <label class="label" for="builderTitle">Title shown to barista</label>
+            <input id="builderTitle" class="input" placeholder="e.g., Barista Basics">
+          </div>
+          <div>
+            <label class="label" for="builderCount">Total Questions</label>
+            <input id="builderCount" type="number" min="1" class="input small" value="30">
+          </div>
+        </div>
+
+        <div class="mt">
+          <h4>Share</h4>
+          <button id="copyShareBtn" class="btn success">Copy Student Link</button>
+          <button id="openShareBtn" class="btn">Open Student Preview</button>
+          <p class="hint mt-sm">Student link is restricted: no Create/Build/Reports; only the shared Test is visible.</p>
+        </div>
       </div>
-    </div>
-  </div>
 
-  <details class="card">
-    <summary class="card-head">Bulk Add (tap for format)</summary>
-    <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
-    <textarea id="bulkTextarea" class="textarea mt" rows="5"
-      placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub‑deck(optional)"></textarea>
-    <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
-  </details>
+      <details id="deckChooser" class="card" open>
+        <summary class="card-head">Choose decks (✓ whole deck or expand to pick sub‑decks)</summary>
+        <div id="deckPickList" class="deck-pick"></div>
+      </details>
 
-  <div class="card">
-    <h3>Add / Edit Card</h3>
-    <div class="grid g2 mt">
-      <input id="qInput" class="input" placeholder="Question" aria-label="Question">
-      <input id="aCorrectInput" class="input" placeholder="Correct answer" aria-label="Correct answer">
-      <input id="aWrong1Input" class="input" placeholder="Wrong answer 1 (required)" aria-label="Wrong answer 1">
-      <input id="aWrong2Input" class="input" placeholder="Wrong answer 2 (optional)" aria-label="Wrong answer 2">
-      <input id="aWrong3Input" class="input" placeholder="Wrong answer 3 (optional)" aria-label="Wrong answer 3">
-      <input id="cardSubInput" class="input" placeholder="Card sub‑deck (optional)" aria-label="Card sub-deck">
-    </div>
-    <div class="mt"><button id="addCardBtn" class="btn primary">Save Card</button></div>
-
-    <!-- Optional: quick view/manage sub‑decks for the selected deck (deduped) -->
-    <details class="mt card" id="subdeckManager" open>
-      <summary class="card-head">Sub‑decks in this Deck</summary>
-      <div id="subdeckManagerList" class="chips mt"></div>
-      <div class="grid g2 mt">
-        <input id="subdeckNewName" class="input" placeholder="Add new sub‑deck (tag)">
-        <button id="createSubdeckBtn" class="btn">Add Sub‑deck</button>
+      <div id="previewPanel" class="card hidden">
+        <h3 id="previewTitle">Preview</h3>
+        <div class="hint" id="previewMeta" aria-live="polite"></div>
+        <div class="mt">
+          <button id="previewPracticeBtn" class="btn">Preview Practice</button>
+          <button id="previewQuizBtn" class="btn primary">Preview Quiz</button>
+        </div>
       </div>
-    </details>
-  </div>
+    </section>
 
-  <div class="card">
-    <h3>Cards in Deck</h3>
-    <div id="cardsList" class="list" aria-live="polite"></div>
-  </div>
-</section>
+    <!-- PRACTICE -->
+    <section id="view-practice" class="view" aria-labelledby="practice-title">
+      <h2 id="practice-title">Practice</h2>
+
+      <div class="card">
+        <div class="grid g2">
+          <div class="select-wrap">
+            <label class="label" for="practiceTestSelect">Select Test</label>
+            <select id="practiceTestSelect" class="input" aria-label="Select Test for Practice"></select>
+          </div>
+          <div class="hint mt-sm">
+            Pick which decks (from the Test) you want to study
+            <div class="micro mt-xs">Hotkeys: <kbd>Space</kbd> flip • <kbd>←</kbd>/<kbd>→</kbd> prev/next</div>
+          </div>
+        </div>
+        <div id="practiceDeckChecks" class="chips mt"></div>
+        <button id="startPracticeBtn" class="btn primary mt">Start Practice</button>
+      </div>
+
+      <div id="practiceArea" class="card" hidden>
+        <div class="bar">
+          <span id="practiceLabel">Studying…</span>
+          <div class="grow"></div>
+          <span id="practiceProgress" class="hint" aria-live="polite"></span>
+        </div>
+        <div id="practiceCard" class="flip mt" tabindex="0" aria-label="Flashcard">
+          <div class="front">
+            <div class="fc-title">Question</div>
+            <div id="practiceQuestion" class="fc-text"></div>
+            <div class="hint mt-sm">Tap or press <kbd>Space</kbd> to flip</div>
+          </div>
+          <div class="back">
+            <div class="fc-title">Answer</div>
+            <div id="practiceAnswer" class="fc-text"></div>
+          </div>
+        </div>
+        <div class="mt grid g3">
+          <button id="practicePrev" class="btn">Prev</button>
+          <button id="practiceShuffle" class="btn ghost">Shuffle</button>
+          <button id="practiceNext" class="btn">Next</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- QUIZ -->
+    <section id="view-quiz" class="view" aria-labelledby="quiz-title">
+      <h2 id="quiz-title">Quiz</h2>
+
+      <div class="card">
+        <div class="grid g3">
+          <div class="select-wrap">
+            <label class="label" for="quizTestSelect">Select Test</label>
+            <select id="quizTestSelect" class="input"></select>
+          </div>
+          <input id="studentName" class="input" placeholder="Your name (required)" aria-label="Your name">
+          <input id="studentLocation" class="input" placeholder="Location (required)" aria-label="Location">
+        </div>
+        <div class="mt">
+          <label class="label" for="studentDate">Date</label>
+          <input id="studentDate" class="input" type="date">
+        </div>
+        <div class="micro hint mt-sm">Hotkeys: <kbd>1</kbd>–<kbd>4</kbd> pick • <kbd>←</kbd>/<kbd>→</kbd> prev/next</div>
+      </div>
+
+      <div id="quizArea" class="card">
+        <div class="bar">
+          <span id="quizQuestion" class="qtxt"></span>
+          <div class="grow"></div>
+          <span id="quizProgress" class="hint" aria-live="polite"></span>
+        </div>
+        <div id="quizOptions" class="options mt" role="group" aria-label="Answer choices"></div>
+        <div class="mt grid g3">
+          <button id="quizPrev" class="btn">Prev</button>
+          <button id="submitQuizBtn" class="btn primary">Submit</button>
+          <button id="quizNext" class="btn">Next</button>
+        </div>
+      </div>
+
+      <div id="quizFinished" class="card hidden">
+        <h3>Finished!</h3>
+        <p id="finishedMsg" class="lead"></p>
+        <details open class="answer-key">
+          <summary class="card-head">Your Answers &amp; Key</summary>
+          <div id="finishedAnswers" class="answers mt"></div>
+        </details>
+        <div class="mt grid g2">
+          <button id="restartQuizBtn" class="btn">Restart with fresh questions</button>
+          <button id="finishedPracticeBtn" class="btn ghost">Go to Practice</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- REPORTS -->
+    <section id="view-reports" class="view" aria-labelledby="reports-title">
+      <h2 id="reports-title">Reports</h2>
+
+      <div class="card">
+        <div class="grid g3">
+          <div class="select-wrap">
+            <label class="label" for="repLocation">Location</label>
+            <select id="repLocation" class="input">
+              <option value="">All locations</option>
+            </select>
+          </div>
+          <div class="select-wrap">
+            <label class="label" for="repAttemptView">Attempts</label>
+            <select id="repAttemptView" class="input">
+              <option value="all">All attempts</option>
+              <option value="first">First attempt only</option>
+              <option value="last">Last attempt only</option>
+            </select>
+          </div>
+          <div class="select-wrap">
+            <label class="label" for="repSort">Sort</label>
+            <select id="repSort" class="input">
+              <option value="date_desc">Newest first</option>
+              <option value="date_asc">Oldest first</option>
+              <option value="test_asc">Test A→Z</option>
+              <option value="test_desc">Test Z→A</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card table-wrap">
+        <table id="repTable" class="table">
+          <thead>
+            <tr><th>Date/Time</th><th>Name</th><th>Location</th><th>Test</th><th>Score</th><th>Correct</th><th>View</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Most Missed Questions</h3>
+        <div id="missedSummary" class="missed"></div>
+      </div>
+    </section>
+
+    <!-- MY RESULTS -->
+    <section id="view-myresults" class="view" aria-labelledby="myresults-title">
+      <h2 id="myresults-title">My Results</h2>
+      <div class="card">
+        <div class="grid g2">
+          <input id="myResultsSearch" class="input" placeholder="Search by test or location…" aria-label="Search my results">
+          <button id="clearMyResultsBtn" class="btn danger">Clear my local results</button>
+        </div>
+      </div>
+      <div class="card table-wrap">
+        <table id="myResultsTable" class="table">
+          <thead><tr><th>Date/Time</th><th>Test</th><th>Location</th><th>Score</th><th>Correct</th><th>View</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <details class="card hidden" id="myDetail">
+        <summary class="card-head">Submission Details</summary>
+        <div id="myDetailBody" class="answers mt"></div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="footer" role="contentinfo">
+    <span class="hint">Admin data stays in this browser (localStorage). Share student link to restrict access.</span>
+  </footer>
+</body>
+</html>
