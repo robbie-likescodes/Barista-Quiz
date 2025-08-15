@@ -1,9 +1,8 @@
-/* Barista Flashcards & Quizzes — local-first SPA with restricted student link
-   Terms:
-   - Class (e.g., "Barista Training")
-   - Deck  (e.g., "Hot Drinks")
-   - Sub‑deck (optional tag per card)
-   - Test  (saved selection of decks/sub‑decks + question count + display title)
+/* Barista Flashcards & Quizzes — local-first SPA with student-restricted link
+   Data model notes (merged-by-name):
+   - A Deck is uniquely identified by (className + deckName) regardless of sub-deck.
+   - Sub‑decks are TAGS on cards (card.sub) and optional declared tags (deck.tags).
+   - Old decks that differed only by "subdeck" at deck level are merged on boot.
 */
 const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
 const store={get(k,f){try{return JSON.parse(localStorage.getItem(k))??f}catch{return f}},set(k,v){localStorage.setItem(k,JSON.stringify(v))}};
@@ -19,8 +18,8 @@ const ADMIN_VIEWS=new Set(['create','build','reports']);
 let state={
   decks:store.get(KEYS.decks,{}),
   tests:store.get(KEYS.tests,{}),
-  results:store.get(KEYS.results,[]), // Admin-only (this device)
-  my:store.get(KEYS.my,[]),           // Student history (this device)
+  results:store.get(KEYS.results,[]),
+  my:store.get(KEYS.my,[]),
   practice:{cards:[],idx:0},
   quiz:{items:[],idx:0,n:30,locked:false,testId:''}
 };
@@ -32,6 +31,10 @@ function isStudent(){ return qs().get('mode')==='student'; }
 
 function activate(view){
   if(isStudent() && ADMIN_VIEWS.has(view)){ view='practice'; setParams({view}); }
+  // Clean up view-specific key handlers when switching views
+  window.removeEventListener('keydown', window.__bqPracticeKeys__);
+  window.removeEventListener('keydown', window.__bqQuizKeys__);
+
   $$('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+view));
   $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.route===view));
   if(view==='create') renderCreate();
@@ -60,6 +63,77 @@ function applyStudentMode(){
 }
 
 /* ===================================================================
+   MERGE HELPERS (treat same-name decks as one)
+=================================================================== */
+const deckKey = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName||'').trim().toLowerCase()}`;
+
+// Return array of decks grouped by (class + deck name), each deck appears once
+function listUniqueDecks(){
+  const seen=new Set(), arr=[];
+  for(const d of Object.values(state.decks)){
+    const k=deckKey(d);
+    if(!seen.has(k)){ seen.add(k); arr.push(d); }
+  }
+  // Sort by class then deck
+  arr.sort((a,b)=> (a.className||'').localeCompare(b.className||'') || (a.deckName||'').localeCompare(b.deckName||''));
+  return arr;
+}
+
+// Compute unique sub-tags for a deck from cards + declared tags + legacy deck.subdeck
+function deckSubTags(d){
+  const fromCards = (d.cards||[]).map(c=>c.sub||'').filter(Boolean);
+  const declared = (d.tags||[]);
+  const legacy   = d.subdeck ? [d.subdeck] : [];
+  return unique([...fromCards, ...declared, ...legacy]).sort((a,b)=>a.localeCompare(b));
+}
+
+// Merge duplicate decks (same class+deckName), update tests to point to merged IDs
+function mergeDecksByName(){
+  const mapByKey=new Map();
+  const idRemap=new Map(); // oldId -> newId
+
+  for(const [id,d] of Object.entries(state.decks)){
+    // Ensure basic fields exist
+    d.cards = Array.isArray(d.cards)? d.cards : [];
+    d.tags  = Array.isArray(d.tags)?  d.tags  : [];
+
+    const k=deckKey(d);
+    if(!mapByKey.has(k)){
+      mapByKey.set(k,id);
+      // absorb legacy deck-level subdeck into tags (for visibility)
+      if(d.subdeck) d.tags = unique([...(d.tags||[]), d.subdeck]);
+      continue;
+    }
+    // Merge into primary
+    const primaryId = mapByKey.get(k);
+    const P = state.decks[primaryId];
+    // move cards
+    P.cards = [...(P.cards||[]), ...(d.cards||[])];
+    // merge tags & legacy subdeck
+    const tags = unique([...(P.tags||[]), ...(d.tags||[]), ...(d.subdeck?[d.subdeck]:[])]);
+    P.tags = tags;
+
+    idRemap.set(id, primaryId);
+    delete state.decks[id];
+  }
+
+  // Update tests selections to point to remapped IDs
+  let changed=false;
+  for(const t of Object.values(state.tests)){
+    if(!t.selections) continue;
+    for(const sel of t.selections){
+      if(idRemap.has(sel.deckId)){
+        sel.deckId = idRemap.get(sel.deckId);
+        changed = true;
+      }
+    }
+    t.selections = dedupeSelections(t.selections||[]);
+  }
+  if(changed) store.set(KEYS.tests,state.tests);
+  store.set(KEYS.decks,state.decks);
+}
+
+/* ===================================================================
    CREATE
 =================================================================== */
 const classListEl=$('#classNames'), deckListEl=$('#deckNames'), deckSelect=$('#deckSelect'), cardsList=$('#cardsList');
@@ -67,89 +141,177 @@ const classListEl=$('#classNames'), deckListEl=$('#deckNames'), deckSelect=$('#d
 function renderCreate(){
   renderClassDeckDatalists();
   renderDeckSelect();
+  renderDeckMeta();
+  renderSubdeckManager();
   renderCardsList();
 }
 function renderClassDeckDatalists(){
-  const arr=Object.values(state.decks);
+  const arr=listUniqueDecks();
   const classes=unique(arr.map(d=>d.className).filter(Boolean)).sort();
   const decks=unique(arr.map(d=>d.deckName).filter(Boolean)).sort();
   classListEl.innerHTML=classes.map(v=>`<option value="${esc(v)}"></option>`).join('');
   deckListEl.innerHTML=decks.map(v=>`<option value="${esc(v)}"></option>`).join('');
 }
 function renderDeckSelect(){
-  const arr=Object.values(state.decks).sort((a,b)=>a.deckName.localeCompare(b.deckName)||a.className.localeCompare(b.className));
+  const arr=listUniqueDecks();
   if(arr.length===0){ deckSelect.innerHTML=`<option value="">No decks yet</option>`; return; }
-  const html=arr.map(d=>`<option value="${d.id}">${esc(d.deckName)} (${d.cards.length}) [${esc(d.className)}${d.subdeck? ' / '+esc(d.subdeck):''}]</option>`).join('');
+  const html=arr.map(d=>{
+    const subs=deckSubTags(d);
+    const subTxt = subs.length? ` • ${subs.length} sub‑deck${subs.length>1?'s':''}` : '';
+    return `<option value="${d.id}">${esc(d.deckName)} (${d.cards.length}) [${esc(d.className)}${subTxt}]</option>`;
+  }).join('');
   deckSelect.innerHTML=html; deckSelect.style.pointerEvents='auto';
 }
 function selectedDeckId(){const id=deckSelect.value;return state.decks[id]?id:null}
 
-$('#toggleSubdeckBtn').addEventListener('click',()=>$('#newSubdeck').classList.toggle('hidden'));
+function renderDeckMeta(){
+  const id=selectedDeckId(); const titleEl=$('#deckMetaTitle'), subsEl=$('#deckMetaSubs');
+  if(!id){ titleEl.textContent='No deck selected'; subsEl.innerHTML=''; return; }
+  const d=state.decks[id]; const subs=deckSubTags(d);
+  titleEl.textContent = `${d.deckName} — ${d.className} • ${d.cards.length} card${d.cards.length!==1?'s':''}`;
+  subsEl.innerHTML = subs.length? subs.map(s=>`
+    <span class="chip">${esc(s)} <button class="remove" title="Remove tag" aria-label="Remove tag" data-sub="${esc(s)}">&times;</button></span>
+  `).join('') : `<span class="hint">No sub‑decks yet</span>`;
+  subsEl.querySelectorAll('.remove').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const tag=btn.dataset.sub;
+      const alsoClear = confirm(`Remove sub‑deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards in this deck.\nCancel = just remove declared tag (cards keep their tag).`);
+      // Remove from declared tags
+      d.tags = (d.tags||[]).filter(t=>t!==tag);
+      if(alsoClear){
+        (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; });
+      }
+      store.set(KEYS.decks,state.decks);
+      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    });
+  });
+}
+function renderSubdeckManager(){
+  const id=selectedDeckId(); const list=$('#subdeckManagerList');
+  if(!id){ list.innerHTML='<span class="hint">Select a deck first.</span>'; return; }
+  const d=state.decks[id]; const subs=deckSubTags(d);
+  list.innerHTML = subs.length? subs.map(s=>`
+    <span class="chip">${esc(s)} <button class="remove" title="Remove tag" aria-label="Remove tag" data-sub="${esc(s)}">&times;</button></span>
+  `).join('') : `<span class="hint">No sub‑decks yet</span>`;
+  list.querySelectorAll('.remove').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const tag=btn.dataset.sub;
+      const alsoClear = confirm(`Remove sub‑deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards in this deck.\nCancel = just remove declared tag (cards keep their tag).`);
+      d.tags = (d.tags||[]).filter(t=>t!==tag);
+      if(alsoClear){
+        (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; });
+      }
+      store.set(KEYS.decks,state.decks);
+      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    });
+  });
+}
+$('#createSubdeckBtn')?.addEventListener('click',()=>{
+  const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
+  const name=($('#subdeckNewName').value||'').trim(); if(!name) return;
+  const d=state.decks[id]; d.tags = unique([...(d.tags||[]), name]);
+  store.set(KEYS.decks,state.decks); $('#subdeckNewName').value='';
+  renderDeckMeta(); renderSubdeckManager();
+});
+
+$('#toggleSubdeckBtn').addEventListener('click',()=>{
+  const el=$('#newSubdeck'); const isHidden=el.classList.toggle('hidden');
+  $('#toggleSubdeckBtn').setAttribute('aria-expanded', String(!isHidden));
+});
+
 $('#addDeckBtn').addEventListener('click',()=>{
   const cls=$('#newClassName').value.trim();
   const dnm=$('#newDeckName').value.trim();
   const sdn=$('#newSubdeck').classList.contains('hidden')?'':$('#newSubdeck').value.trim();
   if(!cls||!dnm) return alert('Class and Deck are required.');
-  const existing=Object.values(state.decks).find(d=>d.className.toLowerCase()===cls.toLowerCase()&&d.deckName.toLowerCase()===dnm.toLowerCase()&&(d.subdeck||'').toLowerCase()===(sdn||'').toLowerCase());
-  if(existing){ deckSelect.value=existing.id; renderCardsList(); alert('Selected existing deck.'); return; }
+
+  // find existing by class+deckName only (ignore subdeck)
+  let existing = Object.values(state.decks).find(d=> (d.className||'').toLowerCase()===cls.toLowerCase() && (d.deckName||'').toLowerCase()===dnm.toLowerCase());
+  if(existing){
+    deckSelect.value = existing.id;
+    if(sdn){ existing.tags = unique([...(existing.tags||[]), sdn]); store.set(KEYS.decks,state.decks); }
+    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    alert('Selected existing deck.');
+    return;
+  }
   const id=uid('deck');
-  state.decks[id]={id,className:cls,deckName:dnm,subdeck:sdn,cards:[],createdAt:Date.now()};
+  state.decks[id]={id,className:cls,deckName:dnm,cards:[],tags:sdn?[sdn]:[],createdAt:Date.now()};
   store.set(KEYS.decks,state.decks);
   $('#newClassName').value=$('#newDeckName').value=$('#newSubdeck').value=''; $('#newSubdeck').classList.add('hidden');
-  renderClassDeckDatalists(); renderDeckSelect(); deckSelect.value=id; renderCardsList();
+  renderClassDeckDatalists(); renderDeckSelect(); deckSelect.value=id; renderDeckMeta(); renderSubdeckManager(); renderCardsList();
 });
+
 $('#renameDeckBtn').addEventListener('click',()=>{
   const id=selectedDeckId(); if(!id) return;
   const d=state.decks[id];
   const cls=prompt('Class:',d.className||''); if(cls===null) return;
-  const dnk=prompt('Deck:',d.deckName||''); if(dnk===null) return;
-  const sdn=prompt('Sub‑deck (optional):',d.subdeck||''); if(sdn===null) return;
-  d.className=cls.trim(); d.deckName=dnk.trim(); d.subdeck=sdn.trim();
-  store.set(KEYS.decks,state.decks); renderClassDeckDatalists(); renderDeckSelect(); renderCardsList();
+  const dnk=prompt('Deck (by name):',d.deckName||''); if(dnk===null) return;
+  d.className=cls.trim(); d.deckName=dnk.trim();
+  // after rename, ensure uniqueness (merge again just in case)
+  store.set(KEYS.decks,state.decks); mergeDecksByName();
+  renderClassDeckDatalists(); renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
 });
+
 $('#editDeckMetaBtn').addEventListener('click',()=>{
   const id=selectedDeckId(); if(!id) return;
   const d=state.decks[id];
   const cls=prompt('Edit Class:',d.className||''); if(cls===null) return;
-  const sdn=prompt('Edit Sub‑deck (optional):',d.subdeck||''); if(sdn===null) return;
-  d.className=cls.trim(); d.subdeck=sdn.trim();
-  store.set(KEYS.decks,state.decks); renderClassDeckDatalists(); renderDeckSelect();
+  d.className=cls.trim();
+  store.set(KEYS.decks,state.decks); mergeDecksByName();
+  renderClassDeckDatalists(); renderDeckSelect(); renderDeckMeta();
 });
+
 $('#deleteDeckBtn').addEventListener('click',()=>{
   const id=selectedDeckId(); if(!id) return;
-  if(confirm('Delete this deck and its cards?')){ delete state.decks[id]; store.set(KEYS.decks,state.decks); renderClassDeckDatalists(); renderDeckSelect(); renderCardsList(); }
+  if(confirm('Delete this deck and its cards?')){
+    delete state.decks[id];
+    store.set(KEYS.decks,state.decks);
+    renderClassDeckDatalists(); renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+  }
 });
+
 $('#exportDeckBtn').addEventListener('click',()=>{
   const id=selectedDeckId(); if(!id) return;
   const blob=new Blob([JSON.stringify(state.decks[id],null,2)],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${(state.decks[id].deckName||'Deck').replace(/\W+/g,'_')}.json`; a.click(); URL.revokeObjectURL(a.href);
 });
+
 $('#importDeckBtn').addEventListener('click',()=>{
   alert(`Import formats:
 1) App deck JSON (this app's export)
-2) MCQ JSON array: [{"Question","Correct Answer","Wrong Answer 1","Wrong Answer 2","Wrong Answer 3","Subdeck?"}, ...]
+2) MCQ JSON array: [{"Question":"...","Correct Answer":"...","Wrong Answer 1":"...","Wrong Answer 2":"...","Wrong Answer 3":"...","Subdeck":""}, ...]
 3) TXT lines: Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub‑deck(optional)`);
   $('#importDeckInput').click();
 });
+
 $('#importDeckInput').addEventListener('change',async e=>{
   const f=e.target.files?.[0]; if(!f) return;
   const txt=await f.text();
   try{
     let data=null; try{data=JSON.parse(txt)}catch{}
-    const createDeck=(cls,dk,cards,sd='')=>{
-      const id=uid('deck');
-      state.decks[id]={id,className:cls||'Class',deckName:dk||f.name.replace(/\.[^.]+$/,''),subdeck:sd||'',cards:cards.map(c=>({
+    const upsertDeck=(cls,dk,cards,declaredTag='')=>{
+      // Find or create merged deck by (class+name)
+      let ex=Object.values(state.decks).find(d=>(d.className||'').toLowerCase()===cls.toLowerCase()&&(d.deckName||'').toLowerCase()===dk.toLowerCase());
+      if(!ex){
+        const id=uid('deck');
+        ex=state.decks[id]={id,className:cls||'Class',deckName:dk||f.name.replace(/\.[^.]+$/,''),cards:[],tags:[],createdAt:Date.now()};
+      }
+      // Append cards; normalize fields
+      ex.cards.push(...cards.map(c=>({
         id:uid('card'),
         q:(c.q||c.Question||'').trim(),
         a:(c.a||c['Correct Answer']||'').trim(),
         distractors:(c.distractors||[c['Wrong Answer 1'],c['Wrong Answer 2'],c['Wrong Answer 3']]).filter(Boolean).map(s=>String(s).trim()),
         sub:(c.sub||c.Subdeck||'').trim(),
         createdAt:Date.now()
-      }))};
-      store.set(KEYS.decks,state.decks); renderClassDeckDatalists(); renderDeckSelect(); alert('Deck imported.');
+      })));
+      // Add declared tag if provided
+      if(declaredTag) ex.tags = unique([...(ex.tags||[]), declaredTag]);
+      store.set(KEYS.decks,state.decks);
+      renderClassDeckDatalists(); renderDeckSelect(); alert('Deck imported.');
     };
-    if(data && data.deckName && Array.isArray(data.cards)){ createDeck(data.className,data.deckName,data.cards,data.subdeck); }
-    else if(Array.isArray(data) && data[0] && (data[0].Question||data[0]['Correct Answer'])){ createDeck('Class',f.name.replace(/\.json$/i,'').replace(/_/g,' '),data); }
+    if(data && data.deckName && Array.isArray(data.cards)){ upsertDeck(data.className||'Class',data.deckName,data.cards,(data.subdeck||'').trim()); }
+    else if(Array.isArray(data) && data[0] && (data[0].Question||data[0]['Correct Answer'])){ upsertDeck('Class',f.name.replace(/\.json$/i,'').replace(/_/g,' '),data); }
     else{
       const lines=txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
       const cards=lines.map(line=>{
@@ -157,7 +319,7 @@ $('#importDeckInput').addEventListener('change',async e=>{
         const tag=parts[parts.length-1]?.startsWith('#')?parts.pop().slice(1):'';
         const [q,a,...wrongs]=parts; return {q,a,distractors:wrongs,sub:tag};
       });
-      createDeck('Class',f.name.replace(/\.[^.]+$/,'').replace(/_/g,' '),cards);
+      upsertDeck('Class',f.name.replace(/\.[^.]+$/,'').replace(/_/g,' '),cards);
     }
   }catch(err){ alert('Import failed: '+err.message); }
   e.target.value='';
@@ -172,7 +334,7 @@ $('#bulkAddBtn').addEventListener('click',()=>{
     let sub=''; if(parts[parts.length-1].startsWith?.('#')) sub=parts.pop().slice(1);
     const [q,a,...wrongs]=parts; state.decks[id].cards.push({id:uid('card'),q,a,distractors:wrongs,sub,createdAt:Date.now()}); n++;
   }
-  store.set(KEYS.decks,state.decks); $('#bulkTextarea').value=''; renderDeckSelect(); renderCardsList(); alert(`Added ${n} card(s).`);
+  store.set(KEYS.decks,state.decks); $('#bulkTextarea').value=''; renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList(); alert(`Added ${n} card(s).`);
 });
 
 $('#addCardBtn').addEventListener('click',()=>{
@@ -180,11 +342,12 @@ $('#addCardBtn').addEventListener('click',()=>{
   const q=$('#qInput').value.trim(), a=$('#aCorrectInput').value.trim(), w1=$('#aWrong1Input').value.trim(), w2=$('#aWrong2Input').value.trim(), w3=$('#aWrong3Input').value.trim(), sub=$('#cardSubInput').value.trim();
   if(!q||!a||!w1) return alert('Enter question, correct, and at least one wrong answer.');
   state.decks[id].cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
+  if(sub){ const d=state.decks[id]; d.tags = unique([...(d.tags||[]), sub]); }
   store.set(KEYS.decks,state.decks);
   ['#qInput','#aCorrectInput','#aWrong1Input','#aWrong2Input','#aWrong3Input','#cardSubInput'].forEach(sel=>$(sel).value='');
-  renderCardsList();
+  renderDeckMeta(); renderSubdeckManager(); renderCardsList();
 });
-deckSelect.addEventListener('change',renderCardsList);
+deckSelect.addEventListener('change',()=>{ renderDeckMeta(); renderSubdeckManager(); renderCardsList(); });
 
 function renderCardsList(){
   const id=selectedDeckId();
@@ -198,16 +361,17 @@ function renderCardsList(){
       <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
     </div>`).join('');
   cardsList.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',()=>{
-    const cid=b.closest('.cardline').dataset.id; state.decks[id].cards=state.decks[id].cards.filter(c=>c.id!==cid); store.set(KEYS.decks,state.decks); renderCardsList(); renderDeckSelect();
+    const cid=b.closest('.cardline').dataset.id; d.cards=d.cards.filter(c=>c.id!==cid); store.set(KEYS.decks,state.decks); renderDeckMeta(); renderSubdeckManager(); renderCardsList(); renderDeckSelect();
   }));
   cardsList.querySelectorAll('.btn-edit').forEach(b=>b.addEventListener('click',()=>{
-    const cid=b.closest('.cardline').dataset.id; const card=state.decks[id].cards.find(c=>c.id===cid); if(!card) return;
+    const cid=b.closest('.cardline').dataset.id; const card=d.cards.find(c=>c.id===cid); if(!card) return;
     const q=prompt('Question:',card.q); if(q===null) return;
     const a=prompt('Correct answer:',card.a); if(a===null) return;
     const wrong=prompt('Wrong answers (separate by |):',(card.distractors||[]).join('|'));
     const sub=prompt('Card sub‑deck (optional):',card.sub||''); if(sub===null) return;
     card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
-    store.set(KEYS.decks,state.decks); renderCardsList();
+    if(card.sub){ d.tags = unique([...(d.tags||[]), card.sub]); }
+    store.set(KEYS.decks,state.decks); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   }));
 }
 
@@ -215,7 +379,7 @@ function renderCardsList(){
    BUILD TEST
 =================================================================== */
 const testsList=$('#testsList'), testNameInput=$('#testNameInput'), deckPickList=$('#deckPickList');
-const previewToggle=$('#previewToggle'), previewPanel=$('#previewPanel'), previewTitle=$('#previewTitle'), previewMeta=$('#previewMeta');
+const previewToggle=$('#previewToggle'), previewPanel=$('#previewPanel'), previewTitle=$('#previewTitle'), previewMeta=$('#previewMeta']);
 
 function renderBuild(){ renderTestsDatalist(); renderDeckPickList(); syncPreview() }
 function renderTestsDatalist(){
@@ -241,16 +405,16 @@ $('#deleteTestBtn').addEventListener('click',()=>{
 });
 
 function renderDeckPickList(){
-  const decks=Object.values(state.decks).sort((a,b)=>a.className.localeCompare(b.className)||a.deckName.localeCompare(b.deckName));
+  const decks=listUniqueDecks();
   const selected=Object.values(state.tests).find(t=>t.name.toLowerCase()===testNameInput.value.trim().toLowerCase());
   const selMap=new Map((selected?.selections||[]).map(s=>[s.deckId,s]));
   deckPickList.innerHTML=decks.map(d=>{
-    const subs=unique(d.cards.map(c=>c.sub||'').filter(Boolean)).sort();
+    const subs=deckSubTags(d);
     const saved=selMap.get(d.id);
     const whole=saved?!!saved.whole:true; const savedSubs=new Set(saved?.subs||[]);
     return `<div class="deck-row" data-deck="${d.id}">
       <div class="top">
-        <label class="wrap"><input type="checkbox" class="ck-whole" ${whole?'checked':''}><strong>${esc(d.deckName)}</strong><span class="hint">[Class: ${esc(d.className)}${d.subdeck?' • Sub‑deck: '+esc(d.subdeck):''}]</span></label>
+        <label class="wrap"><input type="checkbox" class="ck-whole" ${whole?'checked':''}><strong>${esc(d.deckName)}</strong><span class="hint">[Class: ${esc(d.className)}]</span></label>
         ${subs.length?`<button type="button" class="btn ghost btn-expand">Sub‑decks</button>`:`<span class="hint">No sub‑decks</span>`}
       </div>
       <div class="subs hidden">${subs.map(s=>`<label class="subchip"><input type="checkbox" class="ck-sub" value="${esc(s)}" ${savedSubs.has(s)?'checked':''}><span>${esc(s)}</span></label>`).join('')}</div>
@@ -272,7 +436,6 @@ function readSelectionsFromUI(){
   }).filter(s=>s.whole || s.subs.length>0);
 }
 function dedupeSelections(selections){
-  // Prevent duplicates (and merge sub‑decks)
   const map=new Map();
   for(const s of selections){
     if(!map.has(s.deckId)) map.set(s.deckId,{deckId:s.deckId,whole:false,subs:new Set()});
@@ -316,7 +479,6 @@ $('#previewQuizBtn').addEventListener('click',()=>{ setParams({view:'quiz'}); ac
 
 /* Helpers for tests */
 function computePoolForTest(t){
-  // Ensure selections are deduped even for older saved tests
   const normalized=dedupeSelections(t.selections||[]);
   const pool=[];
   for(const sel of normalized){
@@ -335,6 +497,9 @@ const practiceTestSelect=$('#practiceTestSelect'), practiceDeckChecks=$('#practi
 
 function renderPracticeScreen(){
   fillTestsSelect(practiceTestSelect,true);
+  // restore last test
+  const last=store.get('bq_last_test', null);
+  if(last && practiceTestSelect.querySelector(`option[value="${last}"]`)) practiceTestSelect.value = last;
   buildPracticeDeckChecks();
 }
 function fillTestsSelect(sel,lockToStudent=false){
@@ -346,13 +511,16 @@ function fillTestsSelect(sel,lockToStudent=false){
   sel.disabled=false;
   sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('') || '';
 }
-practiceTestSelect.addEventListener('change',buildPracticeDeckChecks);
+practiceTestSelect.addEventListener('change',()=>{
+  buildPracticeDeckChecks();
+  store.set('bq_last_test', practiceTestSelect.value);
+});
 
 function buildPracticeDeckChecks(){
   const tid=practiceTestSelect.value; const t=state.tests[tid]; practiceDeckChecks.innerHTML='';
   if(!t){ practiceDeckChecks.innerHTML='<span class="hint">No test selected.</span>'; return; }
 
-  const seen=new Set(); // deckId dedupe
+  const seen=new Set();
   const chips=[];
   for(const sel of dedupeSelections(t.selections||[])){
     if(seen.has(sel.deckId)) continue; seen.add(sel.deckId);
@@ -379,9 +547,20 @@ $('#startPracticeBtn').addEventListener('click',()=>{
 });
 function showPractice(){
   const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx];
-  $('#practiceLabel').textContent=`Card ${idx+1} of ${total}`; $('#practiceProgress').textContent=``;
+  $('#practiceLabel').textContent=`Card ${idx+1} of ${total}`;
+  $('#practiceProgress').textContent=`Tap card to flip. Use ←/→ to navigate.`;
   $('#practiceQuestion').textContent=c.q; $('#practiceAnswer').textContent=c.a;
   const card=$('#practiceCard'); card.classList.remove('flipped'); card.onclick=()=>card.classList.toggle('flipped');
+
+  // Keyboard helpers
+  const handler = (e)=>{
+    if(e.key===' '){ e.preventDefault(); card.classList.toggle('flipped'); }
+    if(e.key==='ArrowRight'){ $('#practiceNext').click(); }
+    if(e.key==='ArrowLeft'){ $('#practicePrev').click(); }
+  };
+  window.removeEventListener('keydown', window.__bqPracticeKeys__);
+  window.__bqPracticeKeys__ = handler;
+  window.addEventListener('keydown', handler);
 }
 $('#practicePrev').addEventListener('click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
 $('#practiceNext').addEventListener('click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
@@ -390,20 +569,36 @@ $('#practiceShuffle').addEventListener('click',()=>{ state.practice.cards=shuffl
 /* ===================================================================
    QUIZ
 =================================================================== */
-const quizTestSelect=$('#quizTestSelect'), quizOptions=$('#quizOptions'), quizQuestion=$('#quizQuestion'), quizProgress=$('#quizProgress');
+const quizTestSelect=$('#quizTestSelect'), quizOptions=$('#quizOptions'), quizQuestion=$('#quizQuestion'), quizProgress=$('#quizProgress']);
 
 function renderQuizScreen(){
   fillTestsSelect(quizTestSelect,true);
+  const last=store.get('bq_last_test', null);
+  if(last && quizTestSelect.querySelector(`option[value="${last}"]`)) quizTestSelect.value = last;
   if(!$('#studentDate').value) $('#studentDate').value=todayISO();
   startOrRefreshQuiz();
 }
-quizTestSelect.addEventListener('change',startOrRefreshQuiz);
+quizTestSelect.addEventListener('change',()=>{
+  startOrRefreshQuiz();
+  store.set('bq_last_test', quizTestSelect.value);
+});
 
 function startOrRefreshQuiz(){
-  const tid=quizTestSelect.value; const t=state.tests[tid]; if(!t){ quizOptions.innerHTML=''; quizQuestion.textContent='Select a test above'; return; }
-  const pool=computePoolForTest(t); if(!pool.length){ quizOptions.innerHTML=''; quizQuestion.textContent='No questions in this test.'; return; }
+  const tid=quizTestSelect.value; const t=state.tests[tid];
+  if(!t){ quizOptions.innerHTML=''; quizQuestion.textContent='Select a test above'; return; }
+
+  const pool=computePoolForTest(t);
+  if(!pool.length){ quizOptions.innerHTML=''; quizQuestion.textContent='No questions in this test.'; return; }
+
   const n=Math.min(t.n||30,pool.length);
-  state.quiz.items=sample(pool,n).map(q=>({q:q.q,a:q.a,opts:shuffle([q.a,...(q.distractors||[])]),picked:null}));
+
+  // Ensure unique, non-empty options and minimum 2 choices
+  state.quiz.items = sample(pool, n).map(q=>{
+    const opts = unique([q.a, ...(q.distractors||[])].map(s => (s??'').trim()).filter(Boolean));
+    if(opts.length < 2) opts.push('—');
+    return { q:q.q, a:q.a, opts:shuffle(opts), picked:null };
+  });
+
   state.quiz.idx=0; state.quiz.n=n;
   $('#quizArea').classList.remove('hidden'); $('#quizFinished').classList.add('hidden');
   drawQuiz();
@@ -411,8 +606,31 @@ function startOrRefreshQuiz(){
 function drawQuiz(){
   const i=state.quiz.idx, it=state.quiz.items[i]; if(!it) return;
   quizQuestion.textContent=it.q; quizProgress.textContent=`${i+1}/${state.quiz.items.length}`;
-  quizOptions.innerHTML=it.opts.map((opt,idx)=>`<label class="option"><input type="radio" name="q${i}" value="${esc(opt)}" ${it.picked===opt?'checked':''}><span>${esc(opt)}</span></label>`).join('');
-  quizOptions.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',()=>{ it.picked=r.value }));
+  quizOptions.innerHTML=it.opts.map((opt,idx)=>`
+    <label class="option">
+      <input type="radio" name="q${i}" value="${esc(opt)}" ${it.picked===opt?'checked':''}>
+      <span><kbd>${idx+1}</kbd> ${esc(opt)}</span>
+    </label>
+  `).join('');
+
+  quizOptions.querySelectorAll('input[type=radio]').forEach((r, idx)=>{
+    r.addEventListener('change',()=>{ it.picked=r.value; });
+  });
+
+  // 1–4 number hotkeys + arrows
+  const handler = (e)=>{
+    if(e.target.tagName==='INPUT') return;
+    const n = e.keyCode - 49; // '1' -> 0
+    if(n>=0 && n<it.opts.length){
+      const radios=quizOptions.querySelectorAll('input[type=radio]');
+      if(radios[n]){ radios[n].checked=true; radios[n].dispatchEvent(new Event('change')); }
+    }
+    if(e.key==='ArrowRight'){ $('#quizNext').click(); }
+    if(e.key==='ArrowLeft'){ $('#quizPrev').click(); }
+  };
+  window.removeEventListener('keydown', window.__bqQuizKeys__);
+  window.__bqQuizKeys__ = handler;
+  window.addEventListener('keydown', handler);
 }
 $('#quizPrev').addEventListener('click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
 $('#quizNext').addEventListener('click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
@@ -423,14 +641,13 @@ $('#submitQuizBtn').addEventListener('click',()=>{
   const tid=quizTestSelect.value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
   const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
   const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
-  // Save admin result
+
   const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
   state.results.push(row); store.set(KEYS.results,state.results);
-  // Save student's local history
+
   state.my.push({id:uid('myres'),date:dt,time:row.time,testId:tid,testName:t.name,location:loc,score,correct,of:total,answers});
   store.set(KEYS.my,state.my);
 
-  // Finished panel + full answer key (immediate review)
   $('#quizArea').classList.add('hidden'); $('#quizFinished').classList.remove('hidden');
   $('#finishedMsg').innerHTML=`Thanks, <strong>${esc(name)}</strong>! You scored <strong>${score}%</strong> (${correct}/${total}).`;
   $('#finishedAnswers').innerHTML=answers.map(a=>`
@@ -498,7 +715,6 @@ function drawReports(){
     </body>`);
   }));
 
-  // Most missed questions
   const missMap=new Map(); // key = q
   for(const r of rows){
     for(const a of (r.answers||[])){
@@ -537,7 +753,7 @@ $('#myResultsSearch').addEventListener('input',renderMyResults);
 $('#clearMyResultsBtn').addEventListener('click',()=>{ if(confirm('Clear your local “My Results”?')){ state.my=[]; store.set(KEYS.my,state.my); renderMyResults(); }});
 
 /* ===================================================================
-   Boot — normalize old tests to remove duplicates
+   Boot — migrate/normalize for merged-by-name
 =================================================================== */
 function normalizeTests(){
   let changed=false;
@@ -549,12 +765,17 @@ function normalizeTests(){
   if(changed) store.set(KEYS.tests,state.tests);
 }
 function boot(){
+  // Merge duplicate decks (by class+deck name) and migrate tests
+  mergeDecksByName();
   normalizeTests();
   applyStudentMode();
+
+  // iOS select quirks
   $$('select').forEach(sel=>{
     sel.style.pointerEvents='auto';
     sel.addEventListener('touchstart',()=>sel.focus(),{passive:true});
   });
+
   if(!$('#studentDate').value) $('#studentDate').value=todayISO();
   activate(qs().get('view')|| (isStudent() ? 'practice' : 'create'));
 }
