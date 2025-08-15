@@ -1,599 +1,684 @@
-/* Barista Flashcards & Quizzes — stable, aggregated decks build
-   - Class → Deck (unique per class) → Sub‑decks (aggregated)
-   - Buttons wired once; rendering functions re-bind internal handlers
-   - Student link (?mode=student&test=NAME) stays restricted
-*/
-const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
-const LS={get(k,f){try{return JSON.parse(localStorage.getItem(k))??f}catch{return f}},set(k,v){localStorage.setItem(k,JSON.stringify(v))}};
-const KEYS={decks:'bq_decks_v9',tests:'bq_tests_v9',results:'bq_results_v9',my:'bq_my_v9'};
-const uid=(p='id')=>p+'_'+Math.random().toString(36).slice(2,10);
-const esc=s=>(s??'').toString().replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-const shuffle=a=>{const x=a.slice();for(let i=x.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[x[i],x[j]]=[x[j],x[i]]}return x};
-const sample=(a,n)=>shuffle(a).slice(0,n);
-const unique=xs=>Array.from(new Set(xs));
-const today=()=>new Date().toISOString().slice(0,10);
-const ADMIN_VIEWS=new Set(['create','build','reports']);
+/* =============================
+   Storage model
+   =============================
 
-let state={
-  decks:LS.get(KEYS.decks,{}),     // {id,{className,deckName,subdeck?,cards:[]}}
-  tests:LS.get(KEYS.tests,{}),     // {id,{name,title,n,selections:[{deckId,whole,subs:[]}]}}
-  results:LS.get(KEYS.results,[]), // submissions (admin side)
-  my:LS.get(KEYS.my,[]),           // local submissions (student side)
-  practice:{cards:[],idx:0},
-  quiz:{items:[],idx:0,locked:false,testId:''}
-};
-
-/* ---------------- Router & Student Mode ---------------- */
-const qs=()=>new URLSearchParams(location.search);
-function setParams(obj){const p=qs();for(const[k,v]of Object.entries(obj)){if(v==null)p.delete(k);else p.set(k,v)}history.replaceState(null,'',location.pathname+'?'+p)}
-function isStudent(){return qs().get('mode')==='student';}
-function routeTo(view){
-  if(isStudent() && ADMIN_VIEWS.has(view)) view='practice';
-  $$('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+view));
-  $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.route===view));
-  ({create:renderCreate,build:renderBuild,practice:renderPractice,quiz:renderQuiz,reports:renderReports,myresults:renderMyResults}[view]||(()=>{}))();
-}
-window.addEventListener('popstate',()=>routeTo(qs().get('view')||'create'));
-$$('.tab').forEach(b=>b.addEventListener('click',()=>{setParams({view:b.dataset.route});routeTo(b.dataset.route)}));
-
-function applyStudentMode(){
-  document.body.classList.toggle('student',isStudent());
-  if(isStudent()){
-    const p=qs(); const name=p.get('test')||'';
-    if(name){
-      const entry=Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name.toLowerCase());
-      if(entry){ state.quiz.locked=true; state.quiz.testId=entry[0]; }
+state = {
+  classes: {
+    "<className>": {
+      decks: {
+        "<deckName>": {   // unique within class
+          subdecks: { "<subName>": true, ... },
+          cards: [ {q,a,wrongs:[...], class, deck, sub } ... ]
+        }, ...
+      }
+    }, ...
+  },
+  tests: {
+    "<testName>": {
+      title, count,
+      // selections is a normalized tree { [class]: { [deck]: Set(subdeckNames or '*') } }
+      selections
     }
-    const v=qs().get('view'); if(!v || ADMIN_VIEWS.has(v)) setParams({view:'practice'});
-  }
+  },
+  results: [ {id, test, title, name, location, dateISO, score, total, items:[{q,correct,choice,answer}], mode:'student'} ... ]
 }
 
-/* ---------------- Helpers: aggregation ---------------- */
-/* Group decks by Class then by Deck NAME (one row per deck), aggregating:
-   - deckIds: every deck record that shares that deck name in the class
-   - subs: union of (record.subdeck) and card.sub values
+Everything is persisted in localStorage under BARISTA_APP_V3
 */
-function groupedTree(filterSet=null){
-  const groups={}; // className -> {className, decks: {deckName -> {deckName, deckIds:Set, subs:Set}}}
-  for(const d of Object.values(state.decks)){
-    if(filterSet && !filterSet.has(d.id)) continue;
-    groups[d.className] ??= {className:d.className,decks:{}};
-    const g=groups[d.className];
-    const node=g.decks[d.deckName] ??= {deckName:d.deckName,deckIds:new Set(),subs:new Set()};
-    node.deckIds.add(d.id);
-    if(d.subdeck) node.subs.add(d.subdeck);
-    for(const c of (d.cards||[])) if(c.sub) node.subs.add(c.sub);
-  }
-  // finalize arrays & sort
-  return Object.values(groups).sort((a,b)=>a.className.localeCompare(b.className)).map(cls=>{
-    cls.decks = Object.values(cls.decks).sort((a,b)=>a.deckName.localeCompare(b.deckName)).map(x=>({deckName:x.deckName, deckIds:[...x.deckIds], subs:[...x.subs].sort()}));
-    return cls;
-  });
+
+const KEY = 'BARISTA_APP_V3';
+
+const $ = (sel, root=document) => root.querySelector(sel);
+const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+
+let state = load();
+
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { classes:{}, tests:{}, results:[] };
 }
-/* Build a pool of cards for a Test (selections are per-deckId) */
-function poolForTest(t){
-  const norm=dedupeSelections(t.selections||[]), pool=[];
-  for(const s of norm){
-    const d=state.decks[s.deckId]; if(!d) continue;
-    if(s.whole) pool.push(...d.cards);
-    else pool.push(...d.cards.filter(c=>s.subs.includes(c.sub||'')));
+function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
+
+/* ---------- Utilities ---------- */
+const todayISO = () => new Date().toISOString().slice(0,10);
+const uid = () => Math.random().toString(36).slice(2,10);
+
+/* Normalize & helpers */
+function ensureClassDeck(cName, dName){
+  if(!state.classes[cName]) state.classes[cName] = {decks:{}};
+  const decks = state.classes[cName].decks;
+  if(!decks[dName]) decks[dName] = {subdecks:{}, cards:[]};
+  return decks[dName];
+}
+function allDeckOptions() {
+  // return [{class, deck, label:"Deck — Class"}] unique per (class,deck)
+  const out = [];
+  for (const [cls, {decks}] of Object.entries(state.classes)) {
+    for (const deck of Object.keys(decks)) {
+      out.push({class:cls, deck, label:`${deck} — ${cls}`});
+    }
+  }
+  // stable sort
+  out.sort((a,b)=> (a.class+a.deck).localeCompare(b.class+b.deck));
+  return out;
+}
+function classDeckTree() {
+  // -> [{class, decks:[{deck, sub:[...]}]}] with unique deck names per class
+  const list = [];
+  for (const [cls, obj] of Object.entries(state.classes)) {
+    const decks = Object.entries(obj.decks).map(([deck,dobj])=>{
+      return { deck, sub: Object.keys(dobj.subdecks).sort() };
+    }).sort((a,b)=>a.deck.localeCompare(b.deck));
+    list.push({class:cls, decks});
+  }
+  list.sort((a,b)=>a.class.localeCompare(b.class));
+  return list;
+}
+function pickCardsFromSelections(selections) {
+  // selections = { class:{ deck:Set(subs or '*') } }
+  const pool = [];
+  for(const [cls, dmap] of Object.entries(selections)){
+    for(const [deck, subs] of Object.entries(dmap)){
+      const deckObj = state.classes?.[cls]?.decks?.[deck];
+      if(!deckObj) continue;
+      for(const c of deckObj.cards){
+        if(subs === '*' || subs.has(c.sub || '')) pool.push(c);
+      }
+    }
   }
   return pool;
 }
-const dedupeSelections=sel=>{
-  const map=new Map();
-  for(const s of sel||[]){
-    if(!map.has(s.deckId)) map.set(s.deckId,{deckId:s.deckId,whole:false,subs:new Set()});
-    const x=map.get(s.deckId); x.whole = x.whole || (s.whole && (!s.subs||s.subs.length===0));
-    (s.subs||[]).forEach(v=>x.subs.add(v));
+function shuffle(arr){
+  for(let i=arr.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]]=[arr[j],arr[i]];
   }
-  return [...map.values()].map(x=>({deckId:x.deckId,whole:x.whole && x.subs.size===0,subs:[...x.subs]}));
-};
+  return arr;
+}
 
-/* ---------------- CREATE ---------------- */
+/* ---------- Router ---------- */
+function getParams(){
+  return new URLSearchParams(location.search);
+}
+function setParams(patch){
+  const sp = getParams();
+  for(const [k,v] of Object.entries(patch)){
+    if(v===null) sp.delete(k); else sp.set(k,v);
+  }
+  history.replaceState(null,'',`${location.pathname}?${sp.toString()}`);
+}
+function activateView(v){
+  $$('.view').forEach(el=>el.classList.add('hidden'));
+  $(`#view-${v}`)?.classList.remove('hidden');
+  $$('.tab').forEach(b=>b.classList.toggle('active', b.dataset.route===v));
+}
+
+/* ---------- UI Populate helpers ---------- */
+function fillDatalist(id, values){
+  const dl = $(id);
+  dl.innerHTML = values.map(v=>`<option value="${escapeHtml(v)}"></option>`).join('');
+}
+function fillSelect(sel, items, withBlank=true){
+  const el = $(sel);
+  const ops = [];
+  if(withBlank) ops.push(`<option value="">—</option>`);
+  for(const it of items){
+    if(typeof it==='string') ops.push(`<option value="${escapeHtml(it)}">${escapeHtml(it)}</option>`);
+    else ops.push(`<option value="${escapeHtml(it.value)}">${escapeHtml(it.label)}</option>`);
+  }
+  el.innerHTML = ops.join('');
+}
+function escapeHtml(s){ return (s??'').toString().replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])) }
+
+/* ---------- Create view ---------- */
 function renderCreate(){
-  const classList=$('#classNames'), deckList=$('#deckNames'), select=$('#deckSelect');
-  const arr=Object.values(state.decks);
-  const classes=unique(arr.map(d=>d.className).filter(Boolean)).sort();
-  const decks=unique(arr.map(d=>d.deckName).filter(Boolean)).sort();
-  classList.innerHTML=classes.map(v=>`<option value="${esc(v)}"></option>`).join('');
-  deckList.innerHTML=decks.map(v=>`<option value="${esc(v)}"></option>`).join('');
-  // deck selector (by deck record)
-  const items=arr.sort((a,b)=>a.deckName.localeCompare(b.deckName)||a.className.localeCompare(b.className));
-  select.innerHTML=items.length ? items.map(d=>`<option value="${d.id}">${esc(d.deckName)} (${d.cards.length}) [${esc(d.className)}${d.subdeck?' / '+esc(d.subdeck):''}]</option>`).join('') : `<option value="">No decks yet</option>`;
-  drawCardsList(select.value);
+  // datalists
+  fillDatalist('#clsList', Object.keys(state.classes).sort());
+  const deckNames = new Set();
+  for(const c of Object.values(state.classes)) Object.keys(c.decks).forEach(n=>deckNames.add(n));
+  fillDatalist('#deckList', [...deckNames].sort());
+
+  // pick by deck (unique by class+deck label)
+  fillSelect('#pickDeckByName', allDeckOptions().map(x=>({value:`${x.class}::${x.deck}`, label:x.label})), false);
 }
-function drawCardsList(deckId){
-  const list=$('#cardsList'), d=state.decks[deckId];
-  if(!d){ list.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
-  if(!d.cards.length){ list.innerHTML='<div class="hint">No cards yet—add your first one above.</div>'; return; }
-  list.innerHTML=d.cards.map(c=>`
-    <div class="cardline" data-id="${c.id}">
-      <div><strong>Q:</strong> ${esc(c.q)}</div>
-      <div><strong>Correct:</strong> ${esc(c.a)}<br><span class="hint">Wrong:</span> ${esc((c.distractors||[]).join(' | '))}${c.sub? `<br><span class="hint">Sub‑deck: ${esc(c.sub)}</span>`:''}</div>
-      <div class="actions"><button class="btn ghost btn-edit" type="button">Edit</button><button class="btn danger btn-del" type="button">Delete</button></div>
-    </div>`).join('');
-  list.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',()=>{
-    const cid=b.closest('.cardline').dataset.id; d.cards=d.cards.filter(x=>x.id!==cid); LS.set(KEYS.decks,state.decks); drawCardsList(deckId);
-  }));
-  list.querySelectorAll('.btn-edit').forEach(b=>b.addEventListener('click',()=>{
-    const cid=b.closest('.cardline').dataset.id; const c=d.cards.find(x=>x.id===cid); if(!c) return;
-    const q=prompt('Question:',c.q); if(q===null) return;
-    const a=prompt('Correct answer:',c.a); if(a===null) return;
-    const w=prompt('Wrong answers (separate by |):',(c.distractors||[]).join('|'));
-    const sub=prompt('Card sub‑deck (optional):',c.sub||''); if(sub===null) return;
-    c.q=q.trim(); c.a=a.trim(); c.distractors=(w||'').split('|').map(s=>s.trim()).filter(Boolean); c.sub=sub.trim();
-    LS.set(KEYS.decks,state.decks); drawCardsList(deckId);
-  }));
-}
-$('#deckSelect').addEventListener('change',e=>drawCardsList(e.target.value));
-$('#toggleSubdeckBtn').addEventListener('click',()=>$('#newSubdeck').classList.toggle('hidden'));
-$('#addDeckBtn').addEventListener('click',()=>{
-  const cls=$('#newClassName').value.trim(), dnm=$('#newDeckName').value.trim(), sdn=$('#newSubdeck').classList.contains('hidden')?'':$('#newSubdeck').value.trim();
-  if(!cls||!dnm) return alert('Class and Deck are required.');
-  const existing=Object.values(state.decks).find(d=>d.className.toLowerCase()===cls.toLowerCase()&&d.deckName.toLowerCase()===dnm.toLowerCase()&&(d.subdeck||'').toLowerCase()===(sdn||'').toLowerCase());
-  if(existing){ $('#deckSelect').value=existing.id; drawCardsList(existing.id); return alert('Selected existing deck.'); }
-  const id=uid('deck'); state.decks[id]={id,className:cls,deckName:dnm,subdeck:sdn,cards:[],createdAt:Date.now()};
-  LS.set(KEYS.decks,state.decks);
-  $('#newClassName').value=$('#newDeckName').value=$('#newSubdeck').value=''; $('#newSubdeck').classList.add('hidden');
-  renderCreate(); $('#deckSelect').value=id; drawCardsList(id);
-});
-$('#renameDeckBtn').addEventListener('click',()=>{
-  const id=$('#deckSelect').value; const d=state.decks[id]; if(!d) return alert('Pick a deck first.');
-  const cls=prompt('Class:',d.className||''); if(cls===null) return;
-  const dk=prompt('Deck:',d.deckName||''); if(dk===null) return;
-  const sd=prompt('Sub‑deck (optional):',d.subdeck||''); if(sd===null) return;
-  d.className=cls.trim(); d.deckName=dk.trim(); d.subdeck=sd.trim(); LS.set(KEYS.decks,state.decks); renderCreate(); $('#deckSelect').value=id; drawCardsList(id);
-});
-$('#editDeckMetaBtn').addEventListener('click',()=>{
-  const id=$('#deckSelect').value; const d=state.decks[id]; if(!d) return alert('Pick a deck first.');
-  const cls=prompt('Edit Class:',d.className||''); if(cls===null) return;
-  const sd=prompt('Edit Sub‑deck (optional):',d.subdeck||''); if(sd===null) return;
-  d.className=cls.trim(); d.subdeck=sd.trim(); LS.set(KEYS.decks,state.decks); renderCreate(); $('#deckSelect').value=id;
-});
-$('#deleteDeckBtn').addEventListener('click',()=>{
-  const id=$('#deckSelect').value; if(!id) return alert('Pick a deck first.');
-  if(confirm('Delete this deck and its cards?')){ delete state.decks[id]; LS.set(KEYS.decks,state.decks); renderCreate(); }
-});
-$('#exportDeckBtn').addEventListener('click',()=>{
-  const id=$('#deckSelect').value; const d=state.decks[id]; if(!d) return alert('Pick a deck first.');
-  const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${(d.deckName||'Deck').replace(/\W+/g,'_')}.json`; a.click(); URL.revokeObjectURL(a.href);
-});
-$('#importDeckBtn').addEventListener('click',()=>{
-  alert(`Import formats:
-1) App deck JSON (this app's export)
-2) MCQ JSON array: [{"Question","Correct Answer","Wrong Answer 1","Wrong Answer 2","Wrong Answer 3","Subdeck?"}, ...]
-3) TXT lines: Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub‑deck(optional)`);
-  $('#importDeckInput').click();
-});
-$('#importDeckInput').addEventListener('change',async e=>{
-  const f=e.target.files?.[0]; if(!f) return;
-  const txt=await f.text(); let data=null; try{data=JSON.parse(txt)}catch{}
-  const mk=(cls,dk,cards,sd='')=>{
-    const id=uid('deck');
-    state.decks[id]={id,className:cls||'Class',deckName:dk||f.name.replace(/\.[^.]+$/,''),subdeck:sd||'',cards:cards.map(c=>({
-      id:uid('card'),q:(c.q||c.Question||'').trim(),a:(c.a||c['Correct Answer']||'').trim(),
-      distractors:(c.distractors||[c['Wrong Answer 1'],c['Wrong Answer 2'],c['Wrong Answer 3']]).filter(Boolean).map(s=>String(s).trim()),
-      sub:(c.sub||c.Subdeck||'').trim(),createdAt:Date.now()
-    }))};
-    LS.set(KEYS.decks,state.decks); renderCreate(); $('#deckSelect').value=id; drawCardsList(id); alert('Deck imported.');
-  };
-  try{
-    if(data && data.deckName && Array.isArray(data.cards)) mk(data.className,data.deckName,data.cards,data.subdeck);
-    else if(Array.isArray(data) && data[0] && (data[0].Question||data[0]['Correct Answer'])) mk('Class',f.name.replace(/\.json$/i,'').replace(/_/g,' '),data);
-    else{
-      const lines=txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-      const cards=lines.map(line=>{
-        const parts=line.split('|').map(s=>s.trim()); if(parts.length<3) throw new Error('Each line needs at least: Question | Correct | Wrong1');
-        const tag=parts[parts.length-1]?.startsWith('#')?parts.pop().slice(1):'';
-        const [q,a,...wrongs]=parts; return {q,a,distractors:wrongs,sub:tag};
-      });
-      mk('Class',f.name.replace(/\.[^.]+$/,'').replace(/_/g,' '),cards);
-    }
-  }catch(err){ alert('Import failed: '+err.message); }
-  e.target.value='';
+
+$('#btnAddDeck').addEventListener('click', ()=>{
+  const cls = $('#clsName').value.trim();
+  const deck = $('#deckName').value.trim();
+  const sub = $('#subdeckName').value.trim();
+  if(!cls || !deck){ alert('Class and Deck are required.'); return; }
+  const d = ensureClassDeck(cls, deck);
+  if(sub) d.subdecks[sub]=true;
+  save(); renderCreate(); renderBuildTrees();
 });
 
-$('#bulkSummaryBtn').addEventListener('click',()=>alert('Bulk Add format:\nQuestion | Correct answer | Wrong 1 | Wrong 2 | Wrong 3 | #Sub‑deck(optional)\n(At least one wrong answer is required.)'));
-$('#bulkAddBtn').addEventListener('click',()=>{
-  const id=$('#deckSelect').value; const d=state.decks[id]; if(!d) return alert('Select a deck first.');
-  const txt=$('#bulkTextarea').value.trim(); if(!txt) return alert('Paste at least one line.');
-  let n=0; for(const line of txt.split(/\r?\n/)){
-    const parts=line.split('|').map(s=>s.trim()).filter(Boolean); if(parts.length<3) continue;
-    let sub=''; if(parts[parts.length-1].startsWith?.('#')) sub=parts.pop().slice(1);
-    const [q,a,...wr]=parts; d.cards.push({id:uid('card'),q,a,distractors:wr,sub,createdAt:Date.now()}); n++;
+$('#btnBulkAdd').addEventListener('click', ()=>{
+  const sel = $('#pickDeckByName').value || '';
+  if(!sel){ alert('Pick a deck (by name) above first.'); return; }
+  const [cls, deck] = sel.split('::');
+  const d = ensureClassDeck(cls, deck);
+
+  const lines = $('#bulkText').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  let added=0, bad=0;
+  for(const line of lines){
+    const parts = line.split('|').map(x=>x.trim());
+    if(parts.length<3){ bad++; continue; }
+    const q = parts[0], a = parts[1];
+    const wrongs = parts.slice(2,5).filter(Boolean);
+    const maybeSub = parts.slice(5).join('|').trim();
+    const sub = maybeSub.startsWith('#') ? maybeSub.slice(1).trim() : (maybeSub||'');
+    if(!wrongs.length){ bad++; continue; }
+    if(sub) d.subdecks[sub]=true;
+    d.cards.push({q,a,wrongs, class:cls, deck, sub});
+    added++;
   }
-  LS.set(KEYS.decks,state.decks); $('#bulkTextarea').value=''; renderCreate(); $('#deckSelect').value=id; drawCardsList(id); alert(`Added ${n} card(s).`);
-});
-$('#addCardBtn').addEventListener('click',()=>{
-  const id=$('#deckSelect').value; const d=state.decks[id]; if(!d) return alert('Select a deck first.');
-  const q=$('#qInput').value.trim(), a=$('#aCorrectInput').value.trim(), w1=$('#aWrong1Input').value.trim(), w2=$('#aWrong2Input').value.trim(), w3=$('#aWrong3Input').value.trim(), sub=$('#cardSubInput').value.trim();
-  if(!q||!a||!w1) return alert('Enter question, correct, and at least one wrong answer.');
-  d.cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
-  LS.set(KEYS.decks,state.decks); ['#qInput','#aCorrectInput','#aWrong1Input','#aWrong2Input','#aWrong3Input','#cardSubInput'].forEach(sel=>$(sel).value=''); drawCardsList(id);
+  save(); renderBuildTrees();
+  alert(`Bulk import: added ${added} card(s). ${bad? bad+' line(s) skipped.':''}`);
 });
 
-/* ---------------- BUILD: tree, save, share, preview ---------------- */
+$('#btnSaveCard').addEventListener('click', ()=>{
+  const sel = $('#pickDeckByName').value || '';
+  if(!sel){ alert('Pick a deck (by name) above first.'); return; }
+  const [cls, deck] = sel.split('::');
+  const d = ensureClassDeck(cls, deck);
+  const q=$('#q').value.trim(),
+        a=$('#a').value.trim(),
+        w1=$('#w1').value.trim(),
+        w2=$('#w2').value.trim(),
+        w3=$('#w3').value.trim(),
+        sub=$('#sd').value.trim();
+  if(!q || !a || !w1){ alert('Question, Correct, and Wrong1 are required.'); return; }
+  const wrongs=[w1,w2,w3].filter(Boolean);
+  if(sub) d.subdecks[sub]=true;
+  d.cards.push({q,a,wrongs,class:cls,deck,sub});
+  save();
+  ['#q','#a','#w1','#w2','#w3','#sd'].forEach(id=>$(id).value='');
+  alert('Card saved to deck.');
+});
+
+/* ---------- Build view ---------- */
+function selectionsFromTree(root){
+  // read checkboxes -> normalized selections
+  const sel = {};
+  $$('.tree input[type=checkbox][data-level="class"]', root).forEach(clsBox=>{
+    if(!clsBox.checked) return;
+    const cls = clsBox.value;
+    // whole class?
+    if(clsBox.dataset.all==='1'){
+      // include all decks fully
+      const dmap = {};
+      for(const d of Object.keys(state.classes[cls]?.decks||{})) dmap[d] = '*';
+      sel[cls] = dmap;
+      return;
+    }
+  });
+
+  // deck-level
+  $$('.tree input[type=checkbox][data-level="deck"]', root).forEach(dBox=>{
+    if(!dBox.checked) return;
+    const cls = dBox.dataset.class, deck = dBox.value;
+    if(!sel[cls]) sel[cls]={};
+    if(dBox.dataset.all==='1'){ sel[cls][deck]='*'; }
+  });
+
+  // subdeck-level (if any are checked)
+  $$('.tree input[type=checkbox][data-level="sub"]', root).forEach(sBox=>{
+    if(!sBox.checked) return;
+    const cls=sBox.dataset.class, deck=sBox.dataset.deck, sub=sBox.value;
+    if(!sel[cls]) sel[cls]={};
+    if(!sel[cls][deck] || sel[cls][deck]==='*') sel[cls][deck]=new Set();
+    sel[cls][deck] instanceof Set ? sel[cls][deck].add(sub) : sel[cls][deck]=new Set([sub]);
+  });
+
+  // convert sets to serializable
+  for(const [cls,dmap] of Object.entries(sel)){
+    for(const [deck,v] of Object.entries(dmap)){
+      if(v instanceof Set) dmap[deck] = Array.from(v);
+    }
+  }
+  return sel;
+}
+function deserializeSelections(obj){
+  // convert array to Set where needed
+  const out={};
+  for(const [cls,dmap] of Object.entries(obj||{})){
+    out[cls]={};
+    for(const [deck,v] of Object.entries(dmap)){
+      out[cls][deck] = (v==='*') ? '*' : new Set(v);
+    }
+  }
+  return out;
+}
+
+function buildTree(containerId, allowClassAll=true){
+  const box = $(containerId);
+  const tree = classDeckTree();
+  box.innerHTML = '';
+  const wrap = document.createElement('div'); wrap.className='tree';
+  tree.forEach(node=>{
+    const clsId = uid();
+    const clsLi = document.createElement('div');
+    clsLi.innerHTML = `
+      <label><input type="checkbox" data-level="class" data-all="${allowClassAll?1:0}" value="${escapeHtml(node.class)}">
+      <strong>${escapeHtml(node.class)}</strong></label>
+      <ul></ul>`;
+    const ul = $('ul', clsLi);
+    // merge by deck name (already unique in model)
+    node.decks.forEach(d=>{
+      const deckLi = document.createElement('li');
+      const subList = d.sub.length ? `<ul>${d.sub.map(s=>`
+          <li><label><input type="checkbox" data-level="sub" data-class="${escapeHtml(node.class)}" data-deck="${escapeHtml(d.deck)}" value="${escapeHtml(s)}"><span class="badge-pill">${escapeHtml(s)}</span></label></li>`).join('')}</ul>` : '';
+      deckLi.innerHTML = `
+        <label><input type="checkbox" data-level="deck" data-class="${escapeHtml(node.class)}" data-all="1" value="${escapeHtml(d.deck)}">
+          <span class="badge-pill">📚 ${escapeHtml(d.deck)}</span>
+        </label>
+        ${subList}`;
+      ul.appendChild(deckLi);
+    });
+    wrap.appendChild(clsLi);
+  });
+  box.appendChild(wrap);
+  return wrap;
+}
+
+let chooseTreeEl, practiceTreeEl;
+
+function renderBuildTrees(){
+  // for Create
+  renderCreate();
+  // for Build
+  chooseTreeEl = buildTree('#chooseTree');
+  // for Practice (student/admin preview)
+  practiceTreeEl = buildTree('#practiceTree', false);
+}
+
+$('#btnSaveTest').addEventListener('click', ()=>{
+  const name = $('#testName').value.trim();
+  if(!name){ alert('Enter a test name.'); return; }
+  const title = $('#testTitle').value.trim() || name;
+  const count = parseInt($('#testCount').value,10) || 30;
+  const selections = selectionsFromTree(chooseTreeEl);
+  if(Object.keys(selections).length===0){ alert('Pick at least one class/deck/sub‑deck.'); return; }
+  state.tests[name] = {title, count, selections};
+  save(); renderBuild(); alert('Test saved.');
+});
+
+$('#btnDeleteTest').addEventListener('click', ()=>{
+  const t = $('#testName').value.trim();
+  if(!t || !state.tests[t]){ alert('Pick a test to delete.'); return; }
+  if(confirm(`Delete test "${t}"?`)){ delete state.tests[t]; save(); renderBuild(); }
+});
+
+$('#btnCopyStudent').addEventListener('click', ()=>{
+  const t = $('#testName').value.trim();
+  if(!t || !state.tests[t]){ alert('Save/select a test first.'); return; }
+  const url = `${location.origin}${location.pathname}?view=quiz&mode=student&test=${encodeURIComponent(t)}`;
+  navigator.clipboard.writeText(url).then(()=> alert('Student link copied to clipboard.'));
+});
+$('#btnOpenStudent').addEventListener('click', ()=>{
+  const t = $('#testName').value.trim();
+  if(!t || !state.tests[t]){ alert('Save/select a test first.'); return; }
+  const url = `${location.origin}${location.pathname}?view=quiz&mode=student&test=${encodeURIComponent(t)}`;
+  window.open(url, '_blank');
+});
+
 function renderBuild(){
-  fillTestsDatalist(); buildTreeUI(); syncPreviewPanel();
-}
-function fillTestsDatalist(){
-  const list=$('#testsList'); const arr=Object.values(state.tests).sort((a,b)=>a.name.localeCompare(b.name));
-  list.innerHTML=arr.map(t=>`<option value="${esc(t.name)}"></option>`).join('');
-}
-$('#saveTestBtn').addEventListener('click',()=>{
-  try{
-    const name=$('#testNameInput').value.trim(); if(!name) return alert('Enter/select a test name.');
-    let t=Object.values(state.tests).find(x=>x.name.toLowerCase()===name.toLowerCase());
-    if(!t){ const id=uid('test'); t=state.tests[id]={id,name,title:name,n:30,selections:[]}; }
-    t.title=$('#builderTitle').value.trim()||t.title||name;
-    t.n=Math.max(1,+$('#builderCount').value||t.n||30);
-    t.selections=readSelectionsFromTree($('#treeBuild')); // per-deckId selections
-    LS.set(KEYS.tests,state.tests);
-    alert(`Test “${name}” saved.`);
-    fillTestsDatalist();
-  }catch(err){ console.error(err); alert('Save failed: '+err.message); }
-});
-$('#deleteTestBtn').addEventListener('click',()=>{
-  const name=$('#testNameInput').value.trim(); if(!name) return;
-  const entry=Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name.toLowerCase());
-  if(!entry) return alert('Test not found.');
-  if(confirm(`Delete test “${name}”?`)){ delete state.tests[entry[0]]; LS.set(KEYS.tests,state.tests); $('#testNameInput').value=''; fillTestsDatalist(); buildTreeUI(); }
-});
+  // lists
+  fillDatalist('#testList', Object.keys(state.tests).sort());
+  renderBuildTrees();
 
-function buildTreeUI(){
-  const selected=Object.values(state.tests).find(t=>t.name.toLowerCase()===$('#testNameInput').value.trim().toLowerCase());
-  const selectedSet=new Set(dedupeSelections(selected?.selections||[]).map(s=>s.deckId));
-  const selectedSubsMap=new Map(); (selected?.selections||[]).forEach(s=>{ if(s.subs?.length) selectedSubsMap.set(s.deckId,new Set(s.subs)); });
-
-  const classes=groupedTree(); // aggregated by deck name
-  const el=$('#treeBuild');
-  el.innerHTML = classes.map(cls=>{
-    const decksHTML = cls.decks.map(group=>{
-      const whole = group.deckIds.every(id=>selectedSet.has(id) && !(selectedSubsMap.get(id)?.size));
-      const anySubs = unique(group.deckIds.flatMap(id=>[...(selectedSubsMap.get(id)||[])])).length>0;
-      return `
-      <div class="node child">
-        <div class="row">
-          <label><input type="checkbox" class="ck-deck" data-ids="${group.deckIds.join(',')}" ${whole?'checked':''}>
-            <span class="label-main">${esc(group.deckName)}</span>
-          </label>
-          <div class="spacer"></div>
-          ${group.subs.length?`<button class="expand" type="button" aria-expanded="${anySubs?'true':'false'}">Sub‑decks</button>`:'<span class="hint">No sub‑decks</span>'}
-        </div>
-        <div class="children ${anySubs?'':'hidden'}">
-          <div class="subchips">
-            ${group.subs.map(su=>{
-              const checked = group.deckIds.some(id=>selectedSubsMap.get(id)?.has(su));
-              return `<label class="chip"><input type="checkbox" class="ck-sub" data-ids="${group.deckIds.join(',')}" value="${esc(su)}" ${checked?'checked':''}> <span>${esc(su)}</span></label>`;
-            }).join('')}
-          </div>
-        </div>
-      </div>`;
-    }).join('');
-
-    return `
-    <div class="node">
-      <div class="row">
-        <label><input type="checkbox" class="ck-class" data-class="${esc(cls.className)}" checked>
-          <span class="label-main">${esc(cls.className)}</span></label>
-        <div class="spacer"></div>
-        <button class="expand" type="button" aria-expanded="true">Decks</button>
-      </div>
-      <div class="children"><div class="child-group">${decksHTML}</div></div>
-    </div>`;
-  }).join('') || `<div class="hint">No decks yet. Add some in Create.</div>`;
-
-  // wire expands
-  el.querySelectorAll('.expand').forEach(btn=>btn.addEventListener('click',()=>{
-    const region=btn.closest('.node').querySelector('.children');
-    const open=btn.getAttribute('aria-expanded')==='true';
-    btn.setAttribute('aria-expanded',String(!open));
-    region.classList.toggle('hidden',open);
-  }));
-  // deck vs sub-decks exclusivity
-  el.querySelectorAll('.ck-sub').forEach(cb=>cb.addEventListener('change',()=>{
-    const child=cb.closest('.child'); if(child.querySelectorAll('.ck-sub:checked').length>0) child.querySelector('.ck-deck').checked=false;
-  }));
-  el.querySelectorAll('.ck-deck').forEach(cb=>cb.addEventListener('change',()=>{
-    if(cb.checked){ cb.closest('.child').querySelectorAll('.ck-sub:checked').forEach(s=>s.checked=false); }
-  }));
-}
-
-function readSelectionsFromTree(root){
-  const sels=[];
-  root.querySelectorAll('.child').forEach(node=>{
-    const ids=node.querySelector('.ck-deck')?.dataset.ids.split(',').filter(Boolean)||[];
-    const deckChecked=node.querySelector('.ck-deck')?.checked||false;
-    const subs=[...node.querySelectorAll('.ck-sub:checked')].map(i=>i.value);
-    if(deckChecked){
-      ids.forEach(id=>sels.push({deckId:id,whole:true,subs:[]}));
-    }else if(subs.length){
-      ids.forEach(id=>sels.push({deckId:id,whole:false,subs:[...subs]}));
+  // if testName matches existing, load its selections
+  const tname = $('#testName').value.trim();
+  if(state.tests[tname]){
+    $('#testTitle').value = state.tests[tname].title || tname;
+    $('#testCount').value = state.tests[tname].count || 30;
+    // check boxes based on selections
+    const sel = deserializeSelections(state.tests[tname].selections);
+    // clear
+    $$('input[type=checkbox]', chooseTreeEl).forEach(b=>b.checked=false);
+    for(const [cls,dmap] of Object.entries(sel)){
+      if(dmap && Object.keys(dmap).length === Object.keys(state.classes[cls]?.decks||{}).length){
+        // may set class checkbox (visual)
+        const cbox = $(`input[data-level="class"][value="${CSS.escape(cls)}"]`, chooseTreeEl);
+        if(cbox) cbox.checked = false; // leave to per-deck to be explicit
+      }
+      for(const [deck,v] of Object.entries(dmap)){
+        const dbox = $(`input[data-level="deck"][data-class="${CSS.escape(cls)}"][value="${CSS.escape(deck)}"]`, chooseTreeEl);
+        if(dbox){ dbox.checked = (v==='*'); }
+        if(v!=='*' && v instanceof Set === false){
+          // array of subs
+          for(const s of v){
+            const sbox = $(`input[data-level="sub"][data-class="${CSS.escape(cls)}"][data-deck="${CSS.escape(deck)}"][value="${CSS.escape(s)}"]`, chooseTreeEl);
+            if(sbox) sbox.checked = true;
+          }
+        }
+      }
     }
-  });
-  // class "check all" (only if nothing else selected inside the class)
-  root.querySelectorAll('> .node').forEach(cls=>{
-    const ck=cls.querySelector(':scope > .row .ck-class');
-    if(!ck?.checked) return;
-    const any=cls.querySelectorAll('.ck-deck:checked,.ck-sub:checked').length>0; if(any) return;
-    cls.querySelectorAll('.child .ck-deck').forEach(d=>{
-      const ids=d.dataset.ids.split(',').filter(Boolean);
-      ids.forEach(id=>sels.push({deckId:id,whole:true,subs:[]}));
-    });
-  });
-  return dedupeSelections(sels);
-}
-
-/* Share */
-function curSavedTest(){
-  const name=$('#testNameInput').value.trim(); if(!name) return null;
-  return Object.values(state.tests).find(x=>x.name.toLowerCase()===name.toLowerCase())||null;
-}
-function studentURL(t){ const u=new URL(location.href); u.searchParams.set('mode','student'); u.searchParams.set('test',t.name); u.searchParams.set('view','practice'); return u.toString(); }
-
-$('#copyShareBtn').addEventListener('click',async()=>{
-  const t=curSavedTest(); if(!t) return alert('Save the test first.');
-  t.title=$('#builderTitle').value.trim()||t.title||t.name;
-  t.n=Math.max(1,+$('#builderCount').value||t.n||30);
-  t.selections=readSelectionsFromTree($('#treeBuild'));
-  LS.set(KEYS.tests,state.tests);
-  const link=studentURL(t);
-  try{ await navigator.clipboard.writeText(link); alert('Student link copied to clipboard!'); }
-  catch{ const ta=document.createElement('textarea'); ta.value=link; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); alert('Student link copied.'); }
-});
-$('#openShareBtn').addEventListener('click',()=>{
-  const t=curSavedTest(); if(!t) return alert('Save the test first.');
-  open(studentURL(t),'_blank','noopener');
-});
-
-$('#previewToggle').addEventListener('change',syncPreviewPanel);
-function syncPreviewPanel(){
-  const on=$('#previewToggle').checked; $('#deckChooser').open=!on; $('#previewPanel').classList.toggle('hidden',!on);
-  const t=curSavedTest(); if(!on || !t){ $('#previewTitle').textContent='Preview'; $('#previewMeta').textContent=''; return; }
-  const pool=poolForTest({...t,selections:readSelectionsFromTree($('#treeBuild'))});
-  $('#previewTitle').textContent=t.title||t.name; $('#previewMeta').textContent=`~${pool.length} eligible questions • ${t.n} will be asked`;
-}
-$('#previewPracticeBtn').addEventListener('click',()=>{ setParams({view:'practice'}); routeTo('practice'); });
-$('#previewQuizBtn').addEventListener('click',()=>{ setParams({view:'quiz'}); routeTo('quiz'); });
-
-/* ---------------- PRACTICE ---------------- */
-function renderPractice(){
-  fillTestsSelect($('#practiceTestSelect'),true);
-  renderPracticeTree();
-}
-function fillTestsSelect(sel,lock){
-  const list=Object.entries(state.tests).sort((a,b)=>a[1].name.localeCompare(b[1].name));
-  if(state.quiz.locked && state.quiz.testId && lock){
-    const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(t.name)}</option>`:''; sel.value=state.quiz.testId; sel.disabled=true; return;
   }
-  sel.disabled=false; sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('');
 }
-$('#practiceTestSelect').addEventListener('change',renderPracticeTree);
 
-function renderPracticeTree(){
-  const tid=$('#practiceTestSelect').value; const t=state.tests[tid]; const wrap=$('#treePractice');
-  if(!t){ wrap.innerHTML='<div class="hint">No test selected.</div>'; return; }
-  const allowed=new Set(dedupeSelections(t.selections).map(s=>s.deckId));
-  const classes=groupedTree(allowed); // aggregated within allowed set only
-  // Decide which subs to show: if test picked subs for a deck, only show those subs
-  const subsMap=new Map(); (t.selections||[]).forEach(s=>{ if(s.subs?.length) subsMap.set(s.deckId,new Set(s.subs)); });
+/* ---------- Practice view ---------- */
+function renderPractice(){
+  const tests = Object.keys(state.tests);
+  fillSelect('#practiceTest', tests);
+  renderBuildTrees(); // ensure tree is fresh
+  $('#practiceStage').classList.add('hidden');
+}
 
-  wrap.innerHTML = classes.map(cls=>{
-    const decksHTML = cls.decks.map(group=>{
-      const showSubs = unique(group.deckIds.flatMap(id=>[...(subsMap.get(id)||[])]));
-      const subs = showSubs.length ? showSubs : group.subs;
-      // When test whitelisted subs, default to those; else default to whole deck.
-      const wholeDefault = showSubs.length===0;
-      return `
-      <div class="node child">
-        <div class="row">
-          <label><input type="checkbox" class="pc-deck" data-ids="${group.deckIds.join(',')}" ${wholeDefault?'checked':''}>
-            <span class="label-main">${esc(group.deckName)}</span></label>
-          <div class="spacer"></div>
-          ${subs.length?`<button class="expand" type="button" aria-expanded="false">Sub‑decks</button>`:'<span class="hint">No sub‑decks</span>'}
-        </div>
-        <div class="children hidden">
-          <div class="subchips">
-            ${subs.map(su=>`<label class="chip"><input type="checkbox" class="pc-sub" data-ids="${group.deckIds.join(',')}" value="${esc(su)}" ${showSubs.includes(su)?'checked':''}> <span>${esc(su)}</span></label>`).join('')}
-          </div>
+$('#btnStartPractice').addEventListener('click', ()=>{
+  const t = $('#practiceTest').value;
+  if(!t){ alert('Select a test first.'); return; }
+  const baseSel = deserializeSelections(state.tests[t].selections);
+  // override with user's hand‑picked items in practiceTree (optional)
+  const pick = selectionsFromTree(practiceTreeEl);
+  // merge: if pick empty, use baseSel; else intersect
+  const sel = Object.keys(pick).length? intersectSelections(baseSel, deserializeSelections(pick)) : baseSel;
+  const pool = pickCardsFromSelections(sel);
+  if(pool.length===0){ alert('No cards matched your selection.'); return; }
+  const stage = $('#practiceStage');
+  stage.classList.remove('hidden');
+  runFlashcards(stage, shuffle([...pool]));
+});
+
+function intersectSelections(a,b){
+  // returns selections that exist in both
+  const out={};
+  for(const [cls,dmap] of Object.entries(a)){
+    for(const [deck,va] of Object.entries(dmap)){
+      const vb = b?.[cls]?.[deck];
+      if(!vb) continue;
+      if(va==='*' && vb==='*'){ if(!out[cls]) out[cls]={}; out[cls][deck]='*'; continue; }
+      const setA = (va==='*') ? new Set(Object.keys(state.classes[cls]?.decks?.[deck]?.subdecks||{})) : new Set(va);
+      const setB = (vb==='*') ? new Set(Object.keys(state.classes[cls]?.decks?.[deck]?.subdecks||{})) : new Set(vb);
+      const inter = new Set([...setA].filter(s=>setB.has(s)));
+      if(inter.size){ if(!out[cls]) out[cls]={}; out[cls][deck]=inter; }
+    }
+  }
+  return out;
+}
+
+function runFlashcards(container, cards){
+  let i=0;
+  function render(){
+    if(i>=cards.length){
+      container.innerHTML = `<div class="qcard"><strong>All done.</strong></div>`;
+      return;
+    }
+    const c = cards[i];
+    container.innerHTML = `
+      <div class="qcard">
+        <div class="qtext">Q${i+1}/${cards.length}: ${escapeHtml(c.q)}</div>
+        <button class="primary" id="flip">Show answer</button>
+        <div id="ans" class="hidden" style="margin-top:10px">
+          <div class="opt correct">Answer: ${escapeHtml(c.a)}</div>
+          <div class="muted small">Sub‑deck: ${escapeHtml(c.sub||'—')}</div>
+          <div class="row"><button id="prev">Prev</button><button id="next" class="primary">Next</button></div>
         </div>
       </div>`;
-    }).join('');
-
-    return `
-    <div class="node">
-      <div class="row">
-        <label><input type="checkbox" class="pc-class" data-class="${esc(cls.className)}" checked>
-          <span class="label-main">${esc(cls.className)}</span></label>
-        <div class="spacer"></div>
-        <button class="expand" type="button" aria-expanded="true">Decks</button>
-      </div>
-      <div class="children"><div class="child-group">${decksHTML}</div></div>
-    </div>`;
-  }).join('') || '<div class="hint">This test has no decks selected.</div>';
-
-  wrap.querySelectorAll('.expand').forEach(btn=>btn.addEventListener('click',()=>{
-    const region=btn.closest('.node').querySelector('.children');
-    const open=btn.getAttribute('aria-expanded')==='true';
-    btn.setAttribute('aria-expanded',String(!open));
-    region.classList.toggle('hidden',open);
-  }));
-  wrap.querySelectorAll('.pc-sub').forEach(cb=>cb.addEventListener('change',()=>{
-    const deck=cb.closest('.child'); if(deck.querySelectorAll('.pc-sub:checked').length>0) deck.querySelector('.pc-deck').checked=false;
-  }));
-  wrap.querySelectorAll('.pc-deck').forEach(cb=>cb.addEventListener('change',()=>{
-    if(cb.checked){ cb.closest('.child').querySelectorAll('.pc-sub:checked').forEach(s=>s.checked=false); }
-  }));
-  wrap.querySelectorAll('.pc-deck,.pc-sub').forEach(cb=>cb.addEventListener('change',()=>{
-    const clsNode=cb.closest('.node').closest('.node')||cb.closest('.node');
-    const classBox=clsNode.querySelector('.pc-class');
-    if(classBox) classBox.checked = clsNode.querySelectorAll('.pc-deck:checked,.pc-sub:checked').length===0;
-  }));
-}
-
-$('#startPracticeBtn').addEventListener('click',()=>{
-  const tid=$('#practiceTestSelect').value; const t=state.tests[tid]; if(!t) return alert('Pick a test.');
-  const selections=readPracticeSelections();
-  const pool=[]; for(const s of selections){ const ids=s.deckIds; ids.forEach(id=>{ const d=state.decks[id]; if(!d) return; if(s.whole) pool.push(...d.cards); else pool.push(...d.cards.filter(c=>s.subs.includes(c.sub||''))); }); }
-  if(!pool.length) return alert('No cards to practice.');
-  state.practice.cards=shuffle(pool); state.practice.idx=0; $('#practiceArea').hidden=false; showPractice();
-});
-function readPracticeSelections(){
-  const list=[]; const root=$('#treePractice');
-  root.querySelectorAll('.child').forEach(node=>{
-    const ids=node.querySelector('.pc-deck')?.dataset.ids.split(',').filter(Boolean)||[];
-    const whole=node.querySelector('.pc-deck')?.checked||false;
-    const subs=[...node.querySelectorAll('.pc-sub:checked')].map(i=>i.value);
-    if(whole || subs.length) list.push({deckIds:ids,whole:whole && subs.length===0,subs});
-  });
-  root.querySelectorAll('> .node').forEach(cls=>{
-    const box=cls.querySelector(':scope > .row .pc-class');
-    if(!box?.checked) return;
-    const any=cls.querySelectorAll('.pc-deck:checked,.pc-sub:checked').length>0; if(any) return;
-    cls.querySelectorAll('.child .pc-deck').forEach(d=>{
-      const ids=d.dataset.ids.split(',').filter(Boolean);
-      list.push({deckIds:ids,whole:true,subs:[]});
-    });
-  });
-  // flatten by deckIds
-  const flattened=[];
-  for(const s of list){ for(const id of s.deckIds){ flattened.push({deckId:id,whole:s.whole,subs:s.subs}); } }
-  return dedupeSelections(flattened);
-}
-function showPractice(){
-  const i=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[i];
-  $('#practiceLabel').textContent=`Card ${i+1} of ${total}`; $('#practiceQuestion').textContent=c.q; $('#practiceAnswer').textContent=c.a;
-  const card=$('#practiceCard'); card.classList.remove('flipped'); card.onclick=()=>card.classList.toggle('flipped');
-}
-$('#practicePrev').addEventListener('click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
-$('#practiceNext').addEventListener('click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
-$('#practiceShuffle').addEventListener('click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
-
-/* ---------------- QUIZ ---------------- */
-function renderQuiz(){
-  fillTestsSelect($('#quizTestSelect'),true);
-  if(!$('#studentDate').value) $('#studentDate').value=today();
-  startQuiz();
-}
-$('#quizTestSelect').addEventListener('change',startQuiz);
-function startQuiz(){
-  const tid=$('#quizTestSelect').value; const t=state.tests[tid];
-  const opts=$('#quizOptions'); const ql=$('#quizQuestion');
-  if(!t){ opts.innerHTML=''; ql.textContent='Select a test above'; return; }
-  const pool=poolForTest(t); if(!pool.length){ opts.innerHTML=''; ql.textContent='No questions in this test.'; return; }
-  const n=Math.min(t.n||30,pool.length);
-  state.quiz.items=sample(pool,n).map(q=>({q:q.q,a:q.a,opts:shuffle([q.a,...(q.distractors||[])]),picked:null}));
-  state.quiz.idx=0;
-  $('#quizArea').classList.remove('hidden'); $('#quizFinished').classList.add('hidden');
-  drawQuiz();
-}
-function drawQuiz(){
-  const i=state.quiz.idx, it=state.quiz.items[i]; if(!it) return;
-  $('#quizQuestion').textContent=it.q; $('#quizProgress').textContent=`${i+1}/${state.quiz.items.length}`;
-  $('#quizOptions').innerHTML=it.opts.map((o)=>`<label class="option"><input type="radio" name="q${i}" value="${esc(o)}" ${it.picked===o?'checked':''}><span>${esc(o)}</span></label>`).join('');
-  $$('#quizOptions input[type=radio]').forEach(r=>r.addEventListener('change',()=>{ it.picked=r.value; }));
-}
-$('#quizPrev').addEventListener('click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
-$('#quizNext').addEventListener('click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
-$('#submitQuizBtn').addEventListener('click',()=>{
-  const name=$('#studentName').value.trim(), loc=$('#studentLocation').value.trim(), dt=$('#studentDate').value;
-  if(!name||!loc||!dt) return alert('Name, location and date are required.');
-  const tid=$('#quizTestSelect').value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
-  const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
-  const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
-  const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
-  state.results.push(row); LS.set(KEYS.results,state.results);
-  state.my.push({id:uid('myres'),date:dt,time:row.time,testId:tid,testName:t.name,location:loc,score,correct,of:total,answers});
-  LS.set(KEYS.my,state.my);
-
-  $('#quizArea').classList.add('hidden'); $('#quizFinished').classList.remove('hidden');
-  $('#finishedMsg').innerHTML=`Thanks, <strong>${esc(name)}</strong>! You scored <strong>${score}%</strong> (${correct}/${total}).`;
-  $('#finishedAnswers').innerHTML=answers.map(a=>`
-    <div class="row"><div class="q">${esc(a.q)}</div>
-      <div class="a"><span class="tag ${a.picked===a.correct?'good':'bad'}">Your: ${esc(a.picked??'—')}</span>
-      <span class="tag good">Correct: ${esc(a.correct)}</span></div></div>`).join('');
-});
-$('#restartQuizBtn').addEventListener('click',()=>{ $('#quizFinished').classList.add('hidden'); $('#quizArea').classList.remove('hidden'); startQuiz(); });
-$('#finishedPracticeBtn').addEventListener('click',()=>{ setParams({view:'practice'}); routeTo('practice'); });
-
-/* ---------------- REPORTS & MY RESULTS ---------------- */
-function renderReports(){
-  const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
-  const keep=$('#repLocation').value;
-  $('#repLocation').innerHTML=`<option value="">All locations</option>`+locs.map(l=>`<option ${keep===l?'selected':''}>${esc(l)}</option>`).join('');
-  drawReports();
-}
-$('#repLocation').addEventListener('change',drawReports);
-$('#repAttemptView').addEventListener('change',drawReports);
-$('#repSort').addEventListener('change',drawReports);
-function drawReports(){
-  const loc=$('#repLocation').value, attempt=$('#repAttemptView').value, sort=$('#repSort').value;
-  let rows=[...state.results];
-  if(loc) rows=rows.filter(r=>r.location===loc);
-  if(attempt!=='all'){
-    const map=new Map(); for(const r of rows){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
-    rows=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); rows.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
+    $('#flip',container).onclick=()=>$('#ans',container).classList.remove('hidden');
+    $('#prev',container).onclick=()=>{ i=Math.max(0,i-1); render(); };
+    $('#next',container).onclick=()=>{ i++; render(); };
   }
-  if(sort==='date_desc') rows.sort((a,b)=>b.time-a.time);
-  if(sort==='date_asc') rows.sort((a,b)=>a.time-b.time);
-  if(sort==='test_asc') rows.sort((a,b)=>a.testName.localeCompare(b.testName));
-  if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
+  render();
+}
 
-  const tb=$('#repTable tbody');
-  tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
-    <td>${new Date(r.time).toLocaleString()}</td><td>${esc(r.name)}</td><td>${esc(r.location)}</td>
-    <td>${esc(r.testName)}</td><td>${r.score}%</td><td>${r.correct}/${r.of}</td>
-    <td><button class="btn ghost view-btn" type="button">Open</button></td></tr>`).join('');
+/* ---------- Quiz view ---------- */
+function renderQuiz(){
+  const tests = Object.keys(state.tests);
+  fillSelect('#quizTest', tests);
+  $('#studentDate').value = todayISO();
+  $('#quizStage').classList.add('hidden');
+}
 
-  tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
-    const id=btn.closest('tr').dataset.id; const r=state.results.find(x=>x.id===id); if(!r) return;
-    const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
-      <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
-      <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
-      <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
+$('#btnStartQuiz').addEventListener('click', ()=>{
+  const t = $('#quizTest').value;
+  const nm = $('#studentName').value.trim();
+  const loc = $('#studentLoc').value.trim();
+  const dt = $('#studentDate').value;
+  if(!t){ alert('Select a test first.'); return; }
+  if(!nm || !loc){ alert('Name and Location are required.'); return; }
+
+  const test = state.tests[t];
+  const pool = pickCardsFromSelections( deserializeSelections(test.selections) );
+  if(!pool.length){ alert('No cards in this test.'); return; }
+  const questions = shuffle(pool).slice(0, Math.min(test.count || 30, pool.length));
+  const stage = $('#quizStage'); stage.classList.remove('hidden');
+
+  const answers = [];
+  let idx=0;
+
+  function renderQ(){
+    if(idx>=questions.length){ return renderFinish(); }
+    const q = questions[idx];
+    // build options
+    const opts = shuffle([q.a, ...q.wrongs]).slice(0, Math.max(2, Math.min(4, 1+q.wrongs.length)));
+    stage.innerHTML = '';
+    const card = $('#tpl-question').content.firstElementChild.cloneNode(true);
+    $('.qtext',card).textContent = `Q${idx+1}/${questions.length}: ${q.q}`;
+    const box = $('.opts',card);
+    opts.forEach(op=>{
+      const b = document.createElement('button');
+      b.className='opt';
+      b.textContent = op;
+      b.onclick = ()=>{
+        const correct = (op===q.a);
+        answers.push({q:q.q, answer:q.a, choice:op, correct});
+        idx++; renderQ();
+      };
+      box.appendChild(b);
+    });
+    stage.appendChild(card);
+  }
+
+  function renderFinish(){
+    const score = answers.filter(x=>x.correct).length;
+    const total = answers.length;
+    const rec = { id:uid(), test:t, title:test.title||t, name:nm, location:loc, dateISO:dt, score, total,
+                  items:answers, mode: (getParams().get('mode')==='student')?'student':'admin' };
+    state.results.push(rec); save();
+
+    stage.innerHTML = `
+      <div class="qcard">
+        <h3>Finished!</h3>
+        <p>Thanks, <strong>${escapeHtml(nm)}</strong>! You scored <strong>${Math.round(score/total*100)}%</strong> (${score}/${total}).</p>
+        <div class="row">
+          <button id="btnRestart" class="primary">Restart with fresh questions</button>
+          <button id="btnToPractice">Go to Practice</button>
+          <button id="btnShowKey" class="success">Your Answers & Key</button>
+        </div>
+      </div>
+      <div id="ansKey" class="qcard hidden"></div>
+    `;
+    $('#btnRestart').onclick = ()=>{ idx=0; answers.length=0; shuffle(questions); renderQ(); };
+    $('#btnToPractice').onclick = ()=> routeTo('practice');
+    $('#btnShowKey').onclick = ()=>{
+      const panel = $('#ansKey');
+      panel.classList.remove('hidden');
+      panel.innerHTML = answers.map((a,i)=>`
+        <div class="qcard">
+          <div class="qtext">Q${i+1}: ${escapeHtml(a.q)}</div>
+          <div class="opt ${a.correct?'correct':'incorrect'}">Your choice: ${escapeHtml(a.choice)}</div>
+          <div class="opt correct">Correct: ${escapeHtml(a.answer)}</div>
+        </div>`).join('');
+    };
+  }
+
+  renderQ();
+});
+
+/* ---------- Reports (admin) & My Results ---------- */
+function renderReports(){
+  const tests = Object.keys(state.tests);
+  fillSelect('#repTest', tests);
+  const locSet = new Set(state.results.map(r=>r.location).filter(Boolean));
+  $('#repLocation').innerHTML = `<option value="">All</option>` + [...locSet].sort().map(l=>`<option>${escapeHtml(l)}</option>`).join('');
+  renderRepTable();
+  renderMissed();
+}
+function renderRepTable(){
+  const t = $('#repTest').value, loc = $('#repLocation').value, sort = $('#repSort').value;
+  let rows = state.results.slice();
+  if(t) rows = rows.filter(r=>r.test===t);
+  if(loc) rows = rows.filter(r=>r.location===loc);
+  rows.sort((a,b)=>{
+    if(sort==='dateDesc') return b.dateISO.localeCompare(a.dateISO);
+    if(sort==='dateAsc') return a.dateISO.localeCompare(b.dateISO);
+    if(sort==='scoreDesc') return (b.score/b.total) - (a.score/a.total);
+    return (a.score/a.total) - (b.score/b.total);
+  });
+  const html = `
+    <table class="table">
+      <thead><tr><th>Date</th><th>Name</th><th>Location</th><th>Test</th><th>Score</th><th></th></tr></thead>
+      <tbody>
+      ${rows.map(r=>`
+        <tr>
+          <td>${escapeHtml(r.dateISO)}</td>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${escapeHtml(r.location)}</td>
+          <td>${escapeHtml(r.title||r.test)}</td>
+          <td>${r.score}/${r.total}</td>
+          <td><button data-open="${r.id}">Open</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  $('#repTable').innerHTML = html;
+  $$('button[data-open]').forEach(b=> b.onclick = ()=>{
+    const r = state.results.find(x=>x.id===b.dataset.open);
+    openResultModal(r);
+  });
+}
+function renderMissed(){
+  const t = $('#repTest').value;
+  const rows = state.results.filter(r=>!t || r.test===t);
+  const map = new Map(); // q -> [wrongCount, total]
+  for(const r of rows){
+    for(const it of r.items){
+      const m = map.get(it.q) || [0,0];
+      m[1]++; if(!it.correct) m[0]++; map.set(it.q,m);
+    }
+  }
+  const list = [...map.entries()]
+    .map(([q,[w,tot]])=>({q,w,tot,p: tot? (w/tot):0}))
+    .sort((a,b)=>b.p-a.p).slice(0,15);
+  $('#repMissed').innerHTML = list.length? `
+    <table class="table">
+      <thead><tr><th>Question</th><th>Wrong</th><th>Total</th><th>% Missed</th></tr></thead>
+      <tbody>${list.map(x=>`<tr><td>${escapeHtml(x.q)}</td><td>${x.w}</td><td>${x.tot}</td><td>${Math.round(x.p*100)}%</td></tr>`).join('')}</tbody>
+    </table>` : `<div class="muted">No data yet.</div>`;
+}
+
+/* My results */
+function renderMine(){
+  const nm = (getParams().get('name')||'').trim();
+  const mine = nm ? state.results.filter(r=>r.name.toLowerCase()===nm.toLowerCase()) : state.results.slice(-50);
+  $('#mineTable').innerHTML = mine.length? `
+    <table class="table">
+      <thead><tr><th>Date</th><th>Name</th><th>Test</th><th>Score</th><th></th></tr></thead>
+      <tbody>${mine.map(r=>`
+        <tr>
+          <td>${escapeHtml(r.dateISO)}</td>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${escapeHtml(r.title||r.test)}</td>
+          <td>${r.score}/${r.total}</td>
+          <td><button data-open="${r.id}">Open</button></td>
+        </tr>`).join('')}</tbody>
+    </table>` : `<div class="muted">No results yet.</div>`;
+  $$(`#view-mine button[data-open]`).forEach(b=> b.onclick = ()=>{
+    const r = state.results.find(x=>x.id===b.dataset.open); openResultModal(r);
+  });
+}
+
+function openResultModal(r){
+  if(!r) return;
+  const win = window.open('', '_blank','width=720,height=800');
+  const rows = r.items.map((it,i)=>`
+    <div class="qcard">
+      <div class="qtext">Q${i+1}: ${escapeHtml(it.q)}</div>
+      <div class="opt ${it.correct?'correct':'incorrect'}">Choice: ${escapeHtml(it.choice)}</div>
+      <div class="opt correct">Correct: ${escapeHtml(it.answer)}</div>
     </div>`).join('');
-    const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
-    w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
-      <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
-      <div>${rows}</div></body>`);
-  }));
-
-  const miss=new Map();
-  for(const r of rows){ for(const a of (r.answers||[])){ const k=a.q; if(!miss.has(k)) miss.set(k,{q:k,misses:0,total:0}); const m=miss.get(k); m.total++; if(a.picked!==a.correct) m.misses++; } }
-  const top=[...miss.values()].filter(x=>x.total>0).sort((a,b)=>b.misses-a.misses).slice(0,10);
-  $('#missedSummary').innerHTML=top.length? top.map(m=>`
-    <div class="missrow"><div class="misscount"><div>${m.misses}/${m.total}</div><div class="hint">missed</div></div><div class="missq">${esc(m.q)}</div></div>`).join('') : '<div class="hint">No data yet.</div>';
+  win.document.write(`
+    <title>${escapeHtml(r.title||r.test)} — ${escapeHtml(r.name)}</title>
+    <link rel="stylesheet" href="${location.origin+location.pathname.replace(/[^/]+$/,'')}styles.css">
+    <div class="view">
+      <h2>${escapeHtml(r.title||r.test)}</h2>
+      <div class="card">
+        <div class="kv">
+          <div class="muted">Name</div><div>${escapeHtml(r.name)}</div>
+          <div class="muted">Location</div><div>${escapeHtml(r.location)}</div>
+          <div class="muted">Date</div><div>${escapeHtml(r.dateISO)}</div>
+          <div class="muted">Score</div><div><strong>${r.score}/${r.total}</strong></div>
+        </div>
+      </div>
+      <section class="card">${rows}</section>
+    </div>`);
+  win.document.close();
 }
 
-function renderMyResults(){
-  const tb=$('#myResultsTable tbody'); const q=($('#myResultsSearch').value||'').toLowerCase();
-  const rows=state.my.filter(r=>`${r.testName} ${r.location}`.toLowerCase().includes(q)).sort((a,b)=>b.time-a.time);
-  tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}"><td>${new Date(r.time).toLocaleString()}</td><td>${esc(r.testName)}</td><td>${esc(r.location)}</td><td>${r.score}%</td><td>${r.correct}/${r.of}</td><td><button class="btn ghost view-btn" type="button">Open</button></td></tr>`).join('');
-  const panel=$('#myDetail'), body=$('#myDetailBody'); panel.classList.add('hidden');
-  tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
-    const id=btn.closest('tr').dataset.id; const r=state.my.find(x=>x.id===id); if(!r) return;
-    body.innerHTML=r.answers.map(a=>`<div class="row"><div class="q">${esc(a.q)}</div>
-      <div class="a"><span class="tag ${a.picked===a.correct?'good':'bad'}">Your: ${esc(a.picked??'—')}</span>
-      <span class="tag good">Correct: ${esc(a.correct)}</span></div></div>`).join('');
-    panel.classList.remove('hidden'); panel.open=true; panel.scrollIntoView({behavior:'smooth'});
-  }));
-}
-$('#myResultsSearch').addEventListener('input',renderMyResults);
-$('#clearMyResultsBtn').addEventListener('click',()=>{ if(confirm('Clear your local “My Results”?')){ state.my=[]; LS.set(KEYS.my,state.my); renderMyResults(); }});
+/* ---------- Export CSV ---------- */
+$('#btnExportCSV').addEventListener('click', ()=>{
+  const fields = ['dateISO','name','location','test','title','score','total'];
+  const lines = [fields.join(',')];
+  for(const r of state.results){
+    const row = fields.map(f => `"${String(r[f]??'').replace(/"/g,'""')}"`).join(',');
+    lines.push(row);
+  }
+  const blob = new Blob([lines.join('\n')],{type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download='results.csv'; a.click();
+  URL.revokeObjectURL(a.href);
+});
 
-/* ---------------- Boot ---------------- */
-function normalizeTests(){
-  let changed=false;
-  for(const id of Object.keys(state.tests)){ const t=state.tests[id]; const norm=dedupeSelections(t.selections||[]); if(JSON.stringify(norm)!==JSON.stringify(t.selections||[])){ t.selections=norm; changed=true; } }
-  if(changed) LS.set(KEYS.tests,state.tests);
+/* ---------- Router wiring & restrictions ---------- */
+function routeTo(view){
+  setParams({view});
+  activateView(view); // also refresh content each time
+  if(view==='create') renderCreate();
+  if(view==='build') renderBuild();
+  if(view==='practice') renderPractice();
+  if(view==='quiz') renderQuiz();
+  if(view==='reports') renderReports();
+  if(view==='mine') renderMine();
 }
+
+// Tabs act as router
+$$('.tab').forEach(btn=> btn.addEventListener('click', ()=> routeTo(btn.dataset.route)));
+
 function boot(){
-  try{
-    normalizeTests(); applyStudentMode();
-    if(!$('#studentDate').value) $('#studentDate').value=today();
-    routeTo(qs().get('view')|| (isStudent() ? 'practice' : 'create'));
-  }catch(e){ console.error(e); alert('App failed to load: '+e.message); }
+  renderBuildTrees();
+
+  // Student restriction mode
+  const sp = getParams();
+  const mode = sp.get('mode') || '';
+  const testParam = sp.get('test') || '';
+
+  if(mode==='student'){
+    // hide admin tabs, lock to student
+    $('#modeBadge').textContent = 'Student link';
+    // only show Practice/Quiz/My Results
+    $$('.tab').forEach(b=>{
+      const ok = ['practice','quiz','mine'].includes(b.dataset.route);
+      b.style.display = ok? '' : 'none';
+    });
+    // preselect test in dropdowns
+    requestAnimationFrame(()=>{
+      routeTo(sp.get('view') || 'quiz');
+      if(testParam && state.tests[testParam]){
+        fillSelect('#quizTest', [testParam], false);
+        fillSelect('#practiceTest', [testParam], false);
+      }
+    });
+  } else {
+    $('#modeBadge').textContent = 'Admin';
+    routeTo(sp.get('view') || 'create');
+  }
+
+  // default date
+  const d = $('#studentDate'); if(d) d.value = todayISO();
 }
 boot();
+
+/* End */ 
