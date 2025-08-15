@@ -61,6 +61,7 @@ function allDeckOptions() {
       out.push({class:cls, deck, label:`${deck} — ${cls}`});
     }
   }
+  // stable sort
   out.sort((a,b)=> (a.class+a.deck).localeCompare(b.class+b.deck));
   return out;
 }
@@ -207,6 +208,7 @@ function selectionsFromTree(root){
     const cls = clsBox.value;
     // whole class?
     if(clsBox.dataset.all==='1'){
+      // include all decks fully
       const dmap = {};
       for(const d of Object.keys(state.classes[cls]?.decks||{})) dmap[d] = '*';
       sel[cls] = dmap;
@@ -257,12 +259,14 @@ function buildTree(containerId, allowClassAll=true){
   box.innerHTML = '';
   const wrap = document.createElement('div'); wrap.className='tree';
   tree.forEach(node=>{
+    const clsId = uid();
     const clsLi = document.createElement('div');
     clsLi.innerHTML = `
       <label><input type="checkbox" data-level="class" data-all="${allowClassAll?1:0}" value="${escapeHtml(node.class)}">
       <strong>${escapeHtml(node.class)}</strong></label>
       <ul></ul>`;
     const ul = $('ul', clsLi);
+    // merge by deck name (already unique in model)
     node.decks.forEach(d=>{
       const deckLi = document.createElement('li');
       const subList = d.sub.length ? `<ul>${d.sub.map(s=>`
@@ -331,14 +335,21 @@ function renderBuild(){
   if(state.tests[tname]){
     $('#testTitle').value = state.tests[tname].title || tname;
     $('#testCount').value = state.tests[tname].count || 30;
+    // check boxes based on selections
     const sel = deserializeSelections(state.tests[tname].selections);
     // clear
     $$('input[type=checkbox]', chooseTreeEl).forEach(b=>b.checked=false);
     for(const [cls,dmap] of Object.entries(sel)){
+      if(dmap && Object.keys(dmap).length === Object.keys(state.classes[cls]?.decks||{}).length){
+        // may set class checkbox (visual)
+        const cbox = $(`input[data-level="class"][value="${CSS.escape(cls)}"]`, chooseTreeEl);
+        if(cbox) cbox.checked = false; // leave to per-deck to be explicit
+      }
       for(const [deck,v] of Object.entries(dmap)){
         const dbox = $(`input[data-level="deck"][data-class="${CSS.escape(cls)}"][value="${CSS.escape(deck)}"]`, chooseTreeEl);
         if(dbox){ dbox.checked = (v==='*'); }
         if(v!=='*' && v instanceof Set === false){
+          // array of subs
           for(const s of v){
             const sbox = $(`input[data-level="sub"][data-class="${CSS.escape(cls)}"][data-deck="${CSS.escape(deck)}"][value="${CSS.escape(s)}"]`, chooseTreeEl);
             if(sbox) sbox.checked = true;
@@ -353,7 +364,7 @@ function renderBuild(){
 function renderPractice(){
   const tests = Object.keys(state.tests);
   fillSelect('#practiceTest', tests);
-  renderBuildTrees();
+  renderBuildTrees(); // ensure tree is fresh
   $('#practiceStage').classList.add('hidden');
 }
 
@@ -442,6 +453,7 @@ $('#btnStartQuiz').addEventListener('click', ()=>{
   function renderQ(){
     if(idx>=questions.length){ return renderFinish(); }
     const q = questions[idx];
+    // build options
     const opts = shuffle([q.a, ...q.wrongs]).slice(0, Math.max(2, Math.min(4, 1+q.wrongs.length)));
     stage.innerHTML = '';
     const card = $('#tpl-question').content.firstElementChild.cloneNode(true);
@@ -623,7 +635,7 @@ $('#btnExportCSV').addEventListener('click', ()=>{
 /* ---------- Router wiring & restrictions ---------- */
 function routeTo(view){
   setParams({view});
-  activateView(view);
+  activateView(view); // also refresh content each time
   if(view==='create') renderCreate();
   if(view==='build') renderBuild();
   if(view==='practice') renderPractice();
@@ -638,16 +650,20 @@ $$('.tab').forEach(btn=> btn.addEventListener('click', ()=> routeTo(btn.dataset.
 function boot(){
   renderBuildTrees();
 
+  // Student restriction mode
   const sp = getParams();
   const mode = sp.get('mode') || '';
   const testParam = sp.get('test') || '';
 
   if(mode==='student'){
+    // hide admin tabs, lock to student
     $('#modeBadge').textContent = 'Student link';
+    // only show Practice/Quiz/My Results
     $$('.tab').forEach(b=>{
       const ok = ['practice','quiz','mine'].includes(b.dataset.route);
       b.style.display = ok? '' : 'none';
     });
+    // preselect test in dropdowns
     requestAnimationFrame(()=>{
       routeTo(sp.get('view') || 'quiz');
       if(testParam && state.tests[testParam]){
@@ -660,8 +676,9 @@ function boot(){
     routeTo(sp.get('view') || 'create');
   }
 
+  // default date
   const d = $('#studentDate'); if(d) d.value = todayISO();
 }
 boot();
 
-/* End */
+/* End */ 
