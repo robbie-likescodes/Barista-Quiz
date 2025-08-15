@@ -1,595 +1,561 @@
-/* =============================
-   Persistent state + shape
-   ============================= */
-const KEY = 'BARISTA_APP_V3';
-const $ = (s,r=document)=>r.querySelector(s);
-const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+/* Barista Flashcards & Quizzes — local-first SPA with restricted student link
+   Terms:
+   - Class (e.g., "Barista Training")
+   - Deck  (e.g., "Hot Drinks")
+   - Sub‑deck (optional tag per card)
+   - Test  (saved selection of decks/sub‑decks + question count + display title)
+*/
+const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
+const store={get(k,f){try{return JSON.parse(localStorage.getItem(k))??f}catch{return f}},set(k,v){localStorage.setItem(k,JSON.stringify(v))}};
+const KEYS={decks:'bq_decks_v6',tests:'bq_tests_v6',results:'bq_results_v6',my:'bq_my_v6'};
+const uid=(p='id')=>p+'_'+Math.random().toString(36).slice(2,10);
+const todayISO=()=>new Date().toISOString().slice(0,10);
+const esc=s=>(s??'').toString().replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const shuffle=a=>{const x=a.slice();for(let i=x.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[x[i],x[j]]=[x[j],x[i]]}return x};
+const sample=(a,n)=>shuffle(a).slice(0,n);
+const unique=xs=>Array.from(new Set(xs));
+const ADMIN_VIEWS=new Set(['create','build','reports']);
 
-let state = load();
-function load(){ try{const r=localStorage.getItem(KEY); if(r) return JSON.parse(r);}catch{} return {classes:{},tests:{},results:[]}; }
-function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
+let state={
+  decks:store.get(KEYS.decks,{}),
+  tests:store.get(KEYS.tests,{}),
+  results:store.get(KEYS.results,[]), // Admin-only (this device)
+  my:store.get(KEYS.my,[]),           // Student history (this device)
+  practice:{cards:[],idx:0},
+  quiz:{items:[],idx:0,n:30,locked:false,testId:''}
+};
 
-const todayISO = () => new Date().toISOString().slice(0,10);
-const uid = () => Math.random().toString(36).slice(2,10);
-const esc = s => (s??'').toString().replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+/* ---------- Router & Mode ---------- */
+const qs=()=>new URLSearchParams(location.search);
+function setParams(obj){const p=qs();for(const[k,v]of Object.entries(obj)){if(v==null)p.delete(k);else p.set(k,v)}history.pushState(null,'',location.pathname+'?'+p)}
+function isStudent(){ return qs().get('mode')==='student'; }
 
-/* ---------- Data helpers ---------- */
-function ensureClassDeck(cls, deck){
-  if(!state.classes[cls]) state.classes[cls] = { decks:{} };
-  if(!state.classes[cls].decks[deck]) state.classes[cls].decks[deck] = { subdecks:{}, cards:[] };
-  return state.classes[cls].decks[deck];
+function activate(view){
+  if(isStudent() && ADMIN_VIEWS.has(view)){ view='practice'; setParams({view}); }
+  $$('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+view));
+  $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.route===view));
+  if(view==='create') renderCreate();
+  if(view==='build')  renderBuild();
+  if(view==='practice') renderPracticeScreen();
+  if(view==='quiz') renderQuizScreen();
+  if(view==='reports') renderReports();
+  if(view==='myresults') renderMyResults();
 }
-function classDeckTree(){
-  const out = [];
-  for(const [cls, obj] of Object.entries(state.classes)){
-    const decks = Object.entries(obj.decks).map(([deck, dobj]) => ({
-      deck,
-      sub: Object.keys(dobj.subdecks).sort()
-    })).sort((a,b)=>a.deck.localeCompare(b.deck));
-    out.push({class:cls, decks});
-  }
-  out.sort((a,b)=>a.class.localeCompare(b.class));
-  return out;
-}
-function allDeckOptions(){
-  // unique by (class,deck) for dropdowns
-  const list = [];
-  for (const [cls, obj] of Object.entries(state.classes)){
-    for (const deck of Object.keys(obj.decks)){
-      list.push({value:`${cls}::${deck}`, label:`${deck} — ${cls}`});
+window.addEventListener('popstate',()=>activate(qs().get('view')||'create'));
+$$('.tab').forEach(b=>b.addEventListener('click',()=>{setParams({view:b.dataset.route});activate(b.dataset.route)}));
+
+function applyStudentMode(){
+  const p=qs();
+  const student=isStudent();
+  document.body.classList.toggle('student',student);
+  if(student){
+    const name=p.get('test')||'';
+    if(name){
+      const entry=Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name.toLowerCase());
+      if(entry){ state.quiz.locked=true; state.quiz.testId=entry[0]; }
     }
+    const next = p.get('view') && !ADMIN_VIEWS.has(p.get('view')) ? p.get('view') : 'practice';
+    setParams({view:next});
   }
-  list.sort((a,b)=>a.label.localeCompare(b.label));
-  return list;
 }
-function pickCardsFromSelections(selections){
-  // selections: { class: { deck: '*' | [subs] } }
+
+/* ===================================================================
+   CREATE
+=================================================================== */
+const classListEl=$('#classNames'), deckListEl=$('#deckNames'), deckSelect=$('#deckSelect'), cardsList=$('#cardsList');
+
+function renderCreate(){
+  renderClassDeckDatalists();
+  renderDeckSelect();
+  renderCardsList();
+}
+function renderClassDeckDatalists(){
+  const arr=Object.values(state.decks);
+  const classes=unique(arr.map(d=>d.className).filter(Boolean)).sort();
+  const decks=unique(arr.map(d=>d.deckName).filter(Boolean)).sort();
+  classListEl.innerHTML=classes.map(v=>`<option value="${esc(v)}"></option>`).join('');
+  deckListEl.innerHTML=decks.map(v=>`<option value="${esc(v)}"></option>`).join('');
+}
+function renderDeckSelect(){
+  const arr=Object.values(state.decks).sort((a,b)=>a.deckName.localeCompare(b.deckName)||a.className.localeCompare(b.className));
+  if(arr.length===0){ deckSelect.innerHTML=`<option value="">No decks yet</option>`; return; }
+  const html=arr.map(d=>`<option value="${d.id}">${esc(d.deckName)} (${d.cards.length}) [${esc(d.className)}${d.subdeck? ' / '+esc(d.subdeck):''}]</option>`).join('');
+  deckSelect.innerHTML=html; deckSelect.style.pointerEvents='auto';
+}
+function selectedDeckId(){const id=deckSelect.value;return state.decks[id]?id:null}
+
+$('#toggleSubdeckBtn').addEventListener('click',()=>$('#newSubdeck').classList.toggle('hidden'));
+$('#addDeckBtn').addEventListener('click',()=>{
+  const cls=$('#newClassName').value.trim();
+  const dnm=$('#newDeckName').value.trim();
+  const sdn=$('#newSubdeck').classList.contains('hidden')?'':$('#newSubdeck').value.trim();
+  if(!cls||!dnm) return alert('Class and Deck are required.');
+  const existing=Object.values(state.decks).find(d=>d.className.toLowerCase()===cls.toLowerCase()&&d.deckName.toLowerCase()===dnm.toLowerCase()&&(d.subdeck||'').toLowerCase()===(sdn||'').toLowerCase());
+  if(existing){ deckSelect.value=existing.id; renderCardsList(); alert('Selected existing deck.'); return; }
+  const id=uid('deck');
+  state.decks[id]={id,className:cls,deckName:dnm,subdeck:sdn,cards:[],createdAt:Date.now()};
+  store.set(KEYS.decks,state.decks);
+  $('#newClassName').value=$('#newDeckName').value=$('#newSubdeck').value=''; $('#newSubdeck').classList.add('hidden');
+  renderClassDeckDatalists(); renderDeckSelect(); deckSelect.value=id; renderCardsList();
+});
+$('#renameDeckBtn').addEventListener('click',()=>{
+  const id=selectedDeckId(); if(!id) return;
+  const d=state.decks[id];
+  const cls=prompt('Class:',d.className||''); if(cls===null) return;
+  const dnk=prompt('Deck:',d.deckName||''); if(dnk===null) return;
+  const sdn=prompt('Sub‑deck (optional):',d.subdeck||''); if(sdn===null) return;
+  d.className=cls.trim(); d.deckName=dnk.trim(); d.subdeck=sdn.trim();
+  store.set(KEYS.decks,state.decks); renderClassDeckDatalists(); renderDeckSelect(); renderCardsList();
+});
+$('#editDeckMetaBtn').addEventListener('click',()=>{
+  const id=selectedDeckId(); if(!id) return;
+  const d=state.decks[id];
+  const cls=prompt('Edit Class:',d.className||''); if(cls===null) return;
+  const sdn=prompt('Edit Sub‑deck (optional):',d.subdeck||''); if(sdn===null) return;
+  d.className=cls.trim(); d.subdeck=sdn.trim();
+  store.set(KEYS.decks,state.decks); renderClassDeckDatalists(); renderDeckSelect();
+});
+$('#deleteDeckBtn').addEventListener('click',()=>{
+  const id=selectedDeckId(); if(!id) return;
+  if(confirm('Delete this deck and its cards?')){ delete state.decks[id]; store.set(KEYS.decks,state.decks); renderClassDeckDatalists(); renderDeckSelect(); renderCardsList(); }
+});
+$('#exportDeckBtn').addEventListener('click',()=>{
+  const id=selectedDeckId(); if(!id) return;
+  const blob=new Blob([JSON.stringify(state.decks[id],null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${(state.decks[id].deckName||'Deck').replace(/\W+/g,'_')}.json`; a.click(); URL.revokeObjectURL(a.href);
+});
+$('#importDeckBtn').addEventListener('click',()=>{
+  alert(`Import formats:
+1) App deck JSON (this app's export)
+2) MCQ JSON array: [{"Question","Correct Answer","Wrong Answer 1","Wrong Answer 2","Wrong Answer 3","Subdeck?"}, ...]
+3) TXT lines: Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub‑deck(optional)`);
+  $('#importDeckInput').click();
+});
+$('#importDeckInput').addEventListener('change',async e=>{
+  const f=e.target.files?.[0]; if(!f) return;
+  const txt=await f.text();
+  try{
+    let data=null; try{data=JSON.parse(txt)}catch{}
+    const createDeck=(cls,dk,cards,sd='')=>{
+      const id=uid('deck');
+      state.decks[id]={id,className:cls||'Class',deckName:dk||f.name.replace(/\.[^.]+$/,''),subdeck:sd||'',cards:cards.map(c=>({
+        id:uid('card'),
+        q:(c.q||c.Question||'').trim(),
+        a:(c.a||c['Correct Answer']||'').trim(),
+        distractors:(c.distractors||[c['Wrong Answer 1'],c['Wrong Answer 2'],c['Wrong Answer 3']]).filter(Boolean).map(s=>String(s).trim()),
+        sub:(c.sub||c.Subdeck||'').trim(),
+        createdAt:Date.now()
+      }))};
+      store.set(KEYS.decks,state.decks); renderClassDeckDatalists(); renderDeckSelect(); alert('Deck imported.');
+    };
+    if(data && data.deckName && Array.isArray(data.cards)){ createDeck(data.className,data.deckName,data.cards,data.subdeck); }
+    else if(Array.isArray(data) && data[0] && (data[0].Question||data[0]['Correct Answer'])){ createDeck('Class',f.name.replace(/\.json$/i,'').replace(/_/g,' '),data); }
+    else{
+      const lines=txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+      const cards=lines.map(line=>{
+        const parts=line.split('|').map(s=>s.trim()); if(parts.length<3) throw new Error('Each line needs at least: Question | Correct | Wrong1');
+        const tag=parts[parts.length-1]?.startsWith('#')?parts.pop().slice(1):'';
+        const [q,a,...wrongs]=parts; return {q,a,distractors:wrongs,sub:tag};
+      });
+      createDeck('Class',f.name.replace(/\.[^.]+$/,'').replace(/_/g,' '),cards);
+    }
+  }catch(err){ alert('Import failed: '+err.message); }
+  e.target.value='';
+});
+
+$('#bulkSummaryBtn').addEventListener('click',()=>setTimeout(()=>alert('Bulk Add format:\nQuestion | Correct answer | Wrong 1 | Wrong 2 | Wrong 3 | #Sub‑deck(optional)\n(At least one wrong answer is required.)'),60));
+$('#bulkAddBtn').addEventListener('click',()=>{
+  const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
+  const txt=$('#bulkTextarea').value.trim(); if(!txt) return alert('Paste at least one line.');
+  let n=0; for(const line of txt.split(/\r?\n/)){
+    const parts=line.split('|').map(s=>s.trim()).filter(Boolean); if(parts.length<3) continue;
+    let sub=''; if(parts[parts.length-1].startsWith?.('#')) sub=parts.pop().slice(1);
+    const [q,a,...wrongs]=parts; state.decks[id].cards.push({id:uid('card'),q,a,distractors:wrongs,sub,createdAt:Date.now()}); n++;
+  }
+  store.set(KEYS.decks,state.decks); $('#bulkTextarea').value=''; renderDeckSelect(); renderCardsList(); alert(`Added ${n} card(s).`);
+});
+
+$('#addCardBtn').addEventListener('click',()=>{
+  const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
+  const q=$('#qInput').value.trim(), a=$('#aCorrectInput').value.trim(), w1=$('#aWrong1Input').value.trim(), w2=$('#aWrong2Input').value.trim(), w3=$('#aWrong3Input').value.trim(), sub=$('#cardSubInput').value.trim();
+  if(!q||!a||!w1) return alert('Enter question, correct, and at least one wrong answer.');
+  state.decks[id].cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
+  store.set(KEYS.decks,state.decks);
+  ['#qInput','#aCorrectInput','#aWrong1Input','#aWrong2Input','#aWrong3Input','#cardSubInput'].forEach(sel=>$(sel).value='');
+  renderCardsList();
+});
+deckSelect.addEventListener('change',renderCardsList);
+
+function renderCardsList(){
+  const id=selectedDeckId();
+  if(!id){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
+  const d=state.decks[id];
+  if(!d.cards.length){ cardsList.innerHTML='<div class="hint">No cards yet—add your first one above.</div>'; return; }
+  cardsList.innerHTML=d.cards.map(c=>`
+    <div class="cardline" data-id="${c.id}">
+      <div><strong>Q:</strong> ${esc(c.q)}</div>
+      <div><strong>Correct:</strong> ${esc(c.a)}<br><span class="hint">Wrong:</span> ${esc((c.distractors||[]).join(' | '))}${c.sub? `<br><span class="hint">Sub‑deck: ${esc(c.sub)}</span>`:''}</div>
+      <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
+    </div>`).join('');
+  cardsList.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',()=>{
+    const cid=b.closest('.cardline').dataset.id; state.decks[id].cards=state.decks[id].cards.filter(c=>c.id!==cid); store.set(KEYS.decks,state.decks); renderCardsList(); renderDeckSelect();
+  }));
+  cardsList.querySelectorAll('.btn-edit').forEach(b=>b.addEventListener('click',()=>{
+    const cid=b.closest('.cardline').dataset.id; const card=state.decks[id].cards.find(c=>c.id===cid); if(!card) return;
+    const q=prompt('Question:',card.q); if(q===null) return;
+    const a=prompt('Correct answer:',card.a); if(a===null) return;
+    const wrong=prompt('Wrong answers (separate by |):',(card.distractors||[]).join('|'));
+    const sub=prompt('Card sub‑deck (optional):',card.sub||''); if(sub===null) return;
+    card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
+    store.set(KEYS.decks,state.decks); renderCardsList();
+  }));
+}
+
+/* ===================================================================
+   BUILD TEST
+=================================================================== */
+const testsList=$('#testsList'), testNameInput=$('#testNameInput'), deckPickList=$('#deckPickList');
+const previewToggle=$('#previewToggle'), previewPanel=$('#previewPanel'), previewTitle=$('#previewTitle'), previewMeta=$('#previewMeta');
+
+function renderBuild(){ renderTestsDatalist(); renderDeckPickList(); syncPreview() }
+function renderTestsDatalist(){
+  const arr=Object.values(state.tests).sort((a,b)=>a.name.localeCompare(b.name));
+  testsList.innerHTML=arr.map(t=>`<option value="${esc(t.name)}"></option>`).join('');
+}
+$('#saveTestBtn').addEventListener('click',()=>{
+  const name=testNameInput.value.trim(); if(!name) return alert('Enter or select a test name.');
+  let t=Object.values(state.tests).find(x=>x.name.toLowerCase()===name.toLowerCase());
+  if(!t){ const id=uid('test'); t=state.tests[id]={id,name,title:name,n:30,selections:[]}; }
+  t.title=$('#builderTitle').value.trim()||t.title||name;
+  t.n=Math.max(1,+$('#builderCount').value||t.n||30);
+  t.selections=dedupeSelections(readSelectionsFromUI());
+  store.set(KEYS.tests,state.tests);
+  alert(`Test “${name}” saved.`);
+  renderTestsDatalist();
+});
+$('#deleteTestBtn').addEventListener('click',()=>{
+  const name=testNameInput.value.trim(); if(!name) return;
+  const entry=Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name.toLowerCase());
+  if(!entry) return alert('Test not found.');
+  if(confirm(`Delete test “${name}”?`)){ delete state.tests[entry[0]]; store.set(KEYS.tests,state.tests); testNameInput.value=''; renderTestsDatalist(); renderDeckPickList(); }
+});
+
+function renderDeckPickList(){
+  const decks=Object.values(state.decks).sort((a,b)=>a.className.localeCompare(b.className)||a.deckName.localeCompare(b.deckName));
+  const selected=Object.values(state.tests).find(t=>t.name.toLowerCase()===testNameInput.value.trim().toLowerCase());
+  const selMap=new Map((selected?.selections||[]).map(s=>[s.deckId,s]));
+  deckPickList.innerHTML=decks.map(d=>{
+    const subs=unique(d.cards.map(c=>c.sub||'').filter(Boolean)).sort();
+    const saved=selMap.get(d.id);
+    const whole=saved?!!saved.whole:true; const savedSubs=new Set(saved?.subs||[]);
+    return `<div class="deck-row" data-deck="${d.id}">
+      <div class="top">
+        <label class="wrap"><input type="checkbox" class="ck-whole" ${whole?'checked':''}><strong>${esc(d.deckName)}</strong><span class="hint">[Class: ${esc(d.className)}${d.subdeck?' • Sub‑deck: '+esc(d.subdeck):''}]</span></label>
+        ${subs.length?`<button type="button" class="btn ghost btn-expand">Sub‑decks</button>`:`<span class="hint">No sub‑decks</span>`}
+      </div>
+      <div class="subs hidden">${subs.map(s=>`<label class="subchip"><input type="checkbox" class="ck-sub" value="${esc(s)}" ${savedSubs.has(s)?'checked':''}><span>${esc(s)}</span></label>`).join('')}</div>
+    </div>`;
+  }).join('') || `<div class="hint">No decks yet. Add some in Create.</div>`;
+
+  deckPickList.querySelectorAll('.btn-expand').forEach(b=>b.addEventListener('click',()=>b.closest('.deck-row').querySelector('.subs').classList.toggle('hidden')));
+  deckPickList.querySelectorAll('.ck-sub').forEach(cb=>cb.addEventListener('change',()=>{
+    const row=cb.closest('.deck-row'); const any=row.querySelectorAll('.ck-sub:checked').length>0; row.querySelector('.ck-whole').checked=!any;
+  }));
+  deckPickList.querySelectorAll('.ck-whole').forEach(cb=>cb.addEventListener('change',()=>{ if(cb.checked) cb.closest('.deck-row').querySelectorAll('.ck-sub').forEach(s=>s.checked=false) }));
+
+  if(selected){ $('#builderTitle').value=selected.title||selected.name; $('#builderCount').value=selected.n||30; }
+}
+function readSelectionsFromUI(){
+  return [...deckPickList.querySelectorAll('.deck-row')].map(row=>{
+    const deckId=row.dataset.deck; const subs=[...row.querySelectorAll('.ck-sub:checked')].map(i=>i.value);
+    const whole=subs.length===0 && row.querySelector('.ck-whole').checked; return {deckId,whole,subs};
+  }).filter(s=>s.whole || s.subs.length>0);
+}
+function dedupeSelections(selections){
+  // Prevent duplicates (and merge sub‑decks)
+  const map=new Map();
+  for(const s of selections){
+    if(!map.has(s.deckId)) map.set(s.deckId,{deckId:s.deckId,whole:false,subs:new Set()});
+    const agg=map.get(s.deckId);
+    agg.whole = agg.whole || s.whole;
+    s.subs?.forEach(x=>agg.subs.add(x));
+  }
+  return [...map.values()].map(x=>({deckId:x.deckId,whole:x.whole && x.subs.size===0,subs:[...x.subs]}));
+}
+
+/* Share: student link */
+$('#copyShareBtn').addEventListener('click',()=>{
+  const t=getCurrentTestOrSave(); if(!t) return;
+  const url=new URL(location.href); url.searchParams.set('mode','student'); url.searchParams.set('test',t.name); url.searchParams.set('view','practice');
+  navigator.clipboard.writeText(url.toString()); alert('Student link copied to clipboard!');
+});
+$('#openShareBtn').addEventListener('click',()=>{
+  const t=getCurrentTestOrSave(); if(!t) return;
+  const url=new URL(location.href); url.searchParams.set('mode','student'); url.searchParams.set('test',t.name); url.searchParams.set('view','practice');
+  open(url.toString(),'_blank');
+});
+function getCurrentTestOrSave(){
+  const name=testNameInput.value.trim(); if(!name) return alert('Enter a test name first.');
+  let t=Object.values(state.tests).find(x=>x.name.toLowerCase()===name.toLowerCase());
+  if(!t){ alert('Save the test first.'); return null; }
+  t.title=$('#builderTitle').value.trim()||t.title||name; t.n=Math.max(1,+$('#builderCount').value||t.n||30); t.selections=dedupeSelections(readSelectionsFromUI()); store.set(KEYS.tests,state.tests); return t;
+}
+
+/* Preview toggle */
+previewToggle.addEventListener('change',syncPreview);
+function syncPreview(){
+  const on=previewToggle.checked; $('#deckChooser').open=!on; $('#previewPanel').classList.toggle('hidden',!on);
+  if(!on) return;
+  const t=getCurrentTestOrSave(); if(!t) return;
+  $('#previewTitle').textContent=t.title||t.name;
+  const n=computePoolForTest(t).length;
+  $('#previewMeta').textContent=`~${n} eligible questions • ${t.n} will be asked`;
+}
+$('#previewPracticeBtn').addEventListener('click',()=>{ setParams({view:'practice'}); activate('practice'); });
+$('#previewQuizBtn').addEventListener('click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
+
+/* Helpers for tests */
+function computePoolForTest(t){
+  // Ensure selections are deduped even for older saved tests
+  const normalized=dedupeSelections(t.selections||[]);
   const pool=[];
-  for(const [cls, dmap] of Object.entries(selections||{})){
-    for(const [deck, sel] of Object.entries(dmap||{})){
-      const d = state.classes?.[cls]?.decks?.[deck];
-      if(!d) continue;
-      const subs = sel==='*' ? null : new Set(sel);
-      for(const c of d.cards){
-        if(!subs || subs.has(c.sub||'')) pool.push(c);
-      }
-    }
+  for(const sel of normalized){
+    const d=state.decks[sel.deckId]; if(!d) continue;
+    if(sel.whole){ pool.push(...d.cards); }
+    else if(sel.subs?.length){ pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||''))); }
   }
   return pool;
 }
-function deserializeSelections(raw){
-  // arrays as-is, '*' kept
-  const out={};
-  for(const [cls,dmap] of Object.entries(raw||{})){
-    out[cls]={};
-    for(const [deck,v] of Object.entries(dmap)) out[cls][deck]=v;
+const deckLabel = d => `${d.deckName} — ${d.className}`;
+
+/* ===================================================================
+   PRACTICE
+=================================================================== */
+const practiceTestSelect=$('#practiceTestSelect'), practiceDeckChecks=$('#practiceDeckChecks'), practiceArea=$('#practiceArea');
+
+function renderPracticeScreen(){
+  fillTestsSelect(practiceTestSelect,true);
+  buildPracticeDeckChecks();
+}
+function fillTestsSelect(sel,lockToStudent=false){
+  const list=Object.entries(state.tests).sort((a,b)=>a[1].name.localeCompare(b[1].name));
+  if(state.quiz.locked && state.quiz.testId && lockToStudent){
+    const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(t.name)}</option>`:'';
+    sel.value=state.quiz.testId; sel.disabled=true; return;
   }
-  return out;
+  sel.disabled=false;
+  sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('') || '';
 }
-function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]] } return a; }
+practiceTestSelect.addEventListener('change',buildPracticeDeckChecks);
 
-/* ---------- Router ---------- */
-function getParams(){ return new URLSearchParams(location.search); }
-function setParams(patch){ const sp=getParams(); for(const[k,v] of Object.entries(patch)){ if(v===null) sp.delete(k); else sp.set(k,v); } history.replaceState(null,'',`${location.pathname}?${sp.toString()}`); }
-function activateView(v){
-  $$('.view').forEach(x=>x.classList.add('hidden'));
-  $(`#view-${v}`)?.classList.remove('hidden');
-  $$('.tab').forEach(b=>b.classList.toggle('active', b.dataset.route===v));
+function buildPracticeDeckChecks(){
+  const tid=practiceTestSelect.value; const t=state.tests[tid]; practiceDeckChecks.innerHTML='';
+  if(!t){ practiceDeckChecks.innerHTML='<span class="hint">No test selected.</span>'; return; }
+
+  const seen=new Set(); // deckId dedupe
+  const chips=[];
+  for(const sel of dedupeSelections(t.selections||[])){
+    if(seen.has(sel.deckId)) continue; seen.add(sel.deckId);
+    const d=state.decks[sel.deckId]; if(!d) continue;
+    const chip=document.createElement('label'); chip.className='chip';
+    const ck=document.createElement('input'); ck.type='checkbox'; ck.dataset.deck=sel.deckId; ck.checked=true; chip.appendChild(ck);
+    const span=document.createElement('span'); span.textContent=deckLabel(d); chip.appendChild(span);
+    chips.push(chip);
+  }
+  if(chips.length) chips.forEach(c=>practiceDeckChecks.appendChild(c));
+  else practiceDeckChecks.innerHTML='<span class="hint">This test has no decks selected.</span>';
 }
-
-/* ---------- Fill helpers ---------- */
-function fillDatalist(id, arr){ const el=$(id); el.innerHTML = arr.map(x=>`<option value="${esc(x)}"></option>`).join(''); }
-function fillSelect(sel, items, withBlank=true){
-  const el=$(sel); const ops=[]; if(withBlank) ops.push(`<option value="">—</option>`);
-  for(const it of items){ ops.push(`<option value="${esc(it.value)}">${esc(it.label)}</option>`); }
-  el.innerHTML = ops.join('');
+$('#startPracticeBtn').addEventListener('click',()=>{
+  const tid=practiceTestSelect.value; const t=state.tests[tid]; if(!t) return alert('Pick a test.');
+  const chosen=new Set([...practiceDeckChecks.querySelectorAll('input[type=checkbox]:checked')].map(i=>i.dataset.deck));
+  const pool=[];
+  for(const sel of dedupeSelections(t.selections||[])){
+    if(!chosen.has(sel.deckId)) continue;
+    const d=state.decks[sel.deckId]; if(!d) continue;
+    if(sel.whole) pool.push(...d.cards); else pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||'')));
+  }
+  if(!pool.length) return alert('No cards to practice.');
+  state.practice.cards=shuffle(pool); state.practice.idx=0; practiceArea.hidden=false; showPractice();
+});
+function showPractice(){
+  const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx];
+  $('#practiceLabel').textContent=`Card ${idx+1} of ${total}`; $('#practiceProgress').textContent=``;
+  $('#practiceQuestion').textContent=c.q; $('#practiceAnswer').textContent=c.a;
+  const card=$('#practiceCard'); card.classList.remove('flipped'); card.onclick=()=>card.classList.toggle('flipped');
 }
+$('#practicePrev').addEventListener('click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
+$('#practiceNext').addEventListener('click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
+$('#practiceShuffle').addEventListener('click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
 
-/* ---------- Create view ---------- */
-function renderCreate(){
-  fillDatalist('#clsList', Object.keys(state.classes).sort());
-  const allDecks = new Set(); Object.values(state.classes).forEach(c => Object.keys(c.decks).forEach(d=>allDecks.add(d)));
-  fillDatalist('#deckList', [...allDecks].sort());
+/* ===================================================================
+   QUIZ
+=================================================================== */
+const quizTestSelect=$('#quizTestSelect'), quizOptions=$('#quizOptions'), quizQuestion=$('#quizQuestion'), quizProgress=$('#quizProgress');
 
-  // deck picker (unique deck names, grouped by class)
-  const deckSel = $('#pickDeckByName');
-  deckSel.innerHTML = allDeckOptions().map(o=>`<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
-  if(!deckSel.value && deckSel.options.length) deckSel.selectedIndex=0;
-
-  // subdeck picker for selected deck
-  refreshSubdeckPicker();
-  renderCardList();
+function renderQuizScreen(){
+  fillTestsSelect(quizTestSelect,true);
+  if(!$('#studentDate').value) $('#studentDate').value=todayISO();
+  startOrRefreshQuiz();
 }
-function refreshSubdeckPicker(){
-  const sel = $('#pickDeckByName').value || '';
-  const [cls, deck] = sel.split('::');
-  const subSel = $('#pickSubByName');
-  const subs = Object.keys(state.classes?.[cls]?.decks?.[deck]?.subdecks || {});
-  subSel.innerHTML = `<option value="">(all/none)</option>` + subs.map(s=>`<option>${esc(s)}</option>`).join('');
+quizTestSelect.addEventListener('change',startOrRefreshQuiz);
+
+function startOrRefreshQuiz(){
+  const tid=quizTestSelect.value; const t=state.tests[tid]; if(!t){ quizOptions.innerHTML=''; quizQuestion.textContent='Select a test above'; return; }
+  const pool=computePoolForTest(t); if(!pool.length){ quizOptions.innerHTML=''; quizQuestion.textContent='No questions in this test.'; return; }
+  const n=Math.min(t.n||30,pool.length);
+  state.quiz.items=sample(pool,n).map(q=>({q:q.q,a:q.a,opts:shuffle([q.a,...(q.distractors||[])]),picked:null}));
+  state.quiz.idx=0; state.quiz.n=n;
+  $('#quizArea').classList.remove('hidden'); $('#quizFinished').classList.add('hidden');
+  drawQuiz();
 }
-function renderCardList(){
-  const sel = $('#pickDeckByName').value || '';
-  const [cls, deck] = sel.split('::');
-  const sub = $('#pickSubByName').value || '';
-  const container = $('#cardList');
-  const d = state.classes?.[cls]?.decks?.[deck];
-  if(!d){ $('#cardStats').textContent='No deck selected.'; container.innerHTML=''; return; }
-  const items = d.cards.filter(c => !sub || (c.sub||'')===sub);
-  $('#cardStats').textContent = `${cls} › ${deck}${sub? ' › '+sub:''} — ${items.length} card(s)`;
-  container.innerHTML = items.map((c,i)=>`
-    <div class="item">
-      <div>
-        <div class="small muted">Q${i+1}</div>
-        <div>${esc(c.q)}</div>
-        <div class="small muted">A: ${esc(c.a)} ${c.sub? ` • sub: ${esc(c.sub)}`:''}</div>
-      </div>
-      <div class="row">
-        <button data-del="${i}">Delete</button>
+function drawQuiz(){
+  const i=state.quiz.idx, it=state.quiz.items[i]; if(!it) return;
+  quizQuestion.textContent=it.q; quizProgress.textContent=`${i+1}/${state.quiz.items.length}`;
+  quizOptions.innerHTML=it.opts.map((opt,idx)=>`<label class="option"><input type="radio" name="q${i}" value="${esc(opt)}" ${it.picked===opt?'checked':''}><span>${esc(opt)}</span></label>`).join('');
+  quizOptions.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',()=>{ it.picked=r.value }));
+}
+$('#quizPrev').addEventListener('click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
+$('#quizNext').addEventListener('click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
+
+$('#submitQuizBtn').addEventListener('click',()=>{
+  const name=$('#studentName').value.trim(), loc=$('#studentLocation').value.trim(), dt=$('#studentDate').value;
+  if(!name||!loc||!dt) return alert('Name, location and date are required.');
+  const tid=quizTestSelect.value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
+  const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
+  const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
+  // Save admin result
+  const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
+  state.results.push(row); store.set(KEYS.results,state.results);
+  // Save student's local history
+  state.my.push({id:uid('myres'),date:dt,time:row.time,testId:tid,testName:t.name,location:loc,score,correct,of:total,answers});
+  store.set(KEYS.my,state.my);
+
+  // Finished panel + full answer key (immediate review)
+  $('#quizArea').classList.add('hidden'); $('#quizFinished').classList.remove('hidden');
+  $('#finishedMsg').innerHTML=`Thanks, <strong>${esc(name)}</strong>! You scored <strong>${score}%</strong> (${correct}/${total}).`;
+  $('#finishedAnswers').innerHTML=answers.map(a=>`
+    <div class="row">
+      <div class="q">${esc(a.q)}</div>
+      <div class="a">
+        <span class="tag ${a.picked===a.correct?'good':'bad'}">Your: ${esc(a.picked??'—')}</span>
+        <span class="tag good">Correct: ${esc(a.correct)}</span>
       </div>
     </div>`).join('');
-  $$('button[data-del]',container).forEach(b=> b.onclick = ()=>{
-    const idx = +b.dataset.del;
-    const subset = d.cards.filter(c => !sub || (c.sub||'')===sub);
-    const target = subset[idx];
-    const globalIdx = d.cards.indexOf(target);
-    if(globalIdx>-1){ d.cards.splice(globalIdx,1); save(); renderCardList(); }
-  });
+});
+
+$('#restartQuizBtn').addEventListener('click',()=>{ $('#quizFinished').classList.add('hidden'); $('#quizArea').classList.remove('hidden'); startOrRefreshQuiz(); });
+$('#finishedPracticeBtn').addEventListener('click',()=>{ setParams({view:'practice'}); activate('practice'); });
+
+/* ===================================================================
+   REPORTS & MY RESULTS
+=================================================================== */
+function renderReports(){
+  const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
+  const keep=$('#repLocation').value;
+  $('#repLocation').innerHTML=`<option value="">All locations</option>`+locs.map(l=>`<option ${keep===l?'selected':''}>${esc(l)}</option>`).join('');
+  drawReports();
 }
+$('#repLocation').addEventListener('change',drawReports);
+$('#repAttemptView').addEventListener('change',drawReports);
+$('#repSort').addEventListener('change',drawReports);
 
-/* Create handlers */
-$('#btnAddDeck').addEventListener('click', ()=>{
-  const cls=$('#clsName').value.trim(), deck=$('#deckName').value.trim(), sub=$('#subdeckName').value.trim();
-  if(!cls || !deck){ alert('Class and Deck required.'); return; }
-  const d=ensureClassDeck(cls, deck);
-  if(sub) d.subdecks[sub]=true;
-  save(); ['#subdeckName'].forEach(id=>$(id).value='');
-  renderCreate();
-});
-$('#pickDeckByName').addEventListener('change', ()=>{ refreshSubdeckPicker(); renderCardList(); });
-$('#pickSubByName').addEventListener('change', renderCardList);
-
-$('#btnExportDeck').addEventListener('click', ()=>{
-  const sel=$('#pickDeckByName').value; if(!sel){alert('Pick a deck first.');return;}
-  const [cls,deck]=sel.split('::'); const d=state.classes?.[cls]?.decks?.[deck];
-  const lines = d.cards.map(c => [c.q,c.a,...c.wrongs,(c.sub?('#'+c.sub):'')].join(' | '));
-  const blob=new Blob([lines.join('\n')],{type:'text/plain'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${deck}-${cls}.txt`; a.click(); URL.revokeObjectURL(a.href);
-});
-
-$('#importFile').addEventListener('change', e=>{
-  const file = e.target.files?.[0]; if(!file) return;
-  const sel=$('#pickDeckByName').value; if(!sel){ alert('Pick a deck to import into first.'); e.target.value=''; return; }
-  const [cls,deck]=sel.split('::'); const d=ensureClassDeck(cls,deck);
-  const reader=new FileReader();
-  reader.onload=()=>{
-    try{
-      let text = String(reader.result||'');
-      // allow JSON export of our deck too
-      if(file.name.endsWith('.json')){
-        const obj = JSON.parse(text);
-        if(Array.isArray(obj.cards)){
-          obj.cards.forEach(c=>{ if(c.sub) d.subdecks[c.sub]=true; d.cards.push(c); });
-        }
-      }else{
-        const lines=text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-        let ok=0, bad=0;
-        for(const line of lines){
-          const parts=line.split('|').map(x=>x.trim());
-          if(parts.length<3){ bad++; continue; }
-          const q=parts[0], a=parts[1], wrongs=parts.slice(2,5).filter(Boolean);
-          let sub=''; const tail=parts.slice(5).join('|').trim();
-          if(tail.startsWith('#')) sub=tail.slice(1).trim();
-          if(!wrongs.length){ bad++; continue; }
-          if(sub) d.subdecks[sub]=true;
-          d.cards.push({q,a,wrongs,class:cls,deck,sub});
-          ok++;
-        }
-        alert(`Import complete: ${ok} added${bad?`, ${bad} skipped`:''}.`);
-      }
-      save(); refreshSubdeckPicker(); renderCardList();
-    }catch(err){ alert('Import failed: '+err.message); }
-    e.target.value='';
-  };
-  reader.readAsText(file);
-});
-
-$('#btnBulkAdd').addEventListener('click', ()=>{
-  const sel=$('#pickDeckByName').value; if(!sel){ alert('Pick a deck first.'); return; }
-  const [cls,deck]=sel.split('::'); const d=ensureClassDeck(cls,deck);
-  const preferredSub = $('#pickSubByName').value.trim(); // optional default sub
-  const lines=$('#bulkText').value.split('\n').map(s=>s.trim()).filter(Boolean);
-  if(!lines.length){ alert('Paste some lines first.'); return; }
-  let ok=0,bad=0;
-  for(const line of lines){
-    const parts=line.split('|').map(x=>x.trim());
-    if(parts.length<3){ bad++; continue; }
-    const q=parts[0], a=parts[1], wrongs=parts.slice(2,5).filter(Boolean);
-    let sub=preferredSub; const tail=parts.slice(5).join('|').trim();
-    if(tail.startsWith('#')) sub=tail.slice(1).trim();
-    if(!wrongs.length){ bad++; continue; }
-    if(sub) d.subdecks[sub]=true;
-    d.cards.push({q,a,wrongs,class:cls,deck,sub});
-    ok++;
+function drawReports(){
+  const loc=$('#repLocation').value, attempt=$('#repAttemptView').value, sort=$('#repSort').value;
+  let rows=[...state.results];
+  if(loc) rows=rows.filter(r=>r.location===loc);
+  if(attempt!=='all'){
+    const map=new Map();
+    for(const r of rows){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
+    rows=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); rows.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
   }
-  save(); renderCardList();
-  alert(`Bulk import: added ${ok} card(s). ${bad? bad+' skipped for format.':''}`);
-});
-$('#btnClearBulk').addEventListener('click', ()=> $('#bulkText').value='');
+  if(sort==='date_desc') rows.sort((a,b)=>b.time-a.time);
+  if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
+  if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
+  if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
 
-/* ---------- Build view ---------- */
-let chooseTreeEl, practiceTreeEl;
+  const tb=$('#repTable tbody');
+  tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
+    <td>${new Date(r.time).toLocaleString()}</td>
+    <td>${esc(r.name)}</td>
+    <td>${esc(r.location)}</td>
+    <td>${esc(r.testName)}</td>
+    <td>${r.score}%</td>
+    <td>${r.correct}/${r.of}</td>
+    <td><button class="btn ghost view-btn">Open</button></td>
+  </tr>`).join('');
 
-function buildTree(containerId, allowClassAll=true){
-  const host=$(containerId);
-  host.innerHTML='';
-  const tree = classDeckTree();
-  const wrap=document.createElement('div'); wrap.className='tree';
-  tree.forEach(node=>{
-    const clsDiv=document.createElement('div');
-    clsDiv.innerHTML = `
-      <label><input type="checkbox" data-level="class" data-all="${allowClassAll?1:0}" value="${esc(node.class)}"><strong>${esc(node.class)}</strong></label>
-      <ul></ul>`;
-    const ul=$('ul',clsDiv);
-    node.decks.forEach(d=>{
-      const li=document.createElement('li');
-      const subList = d.sub.length ? `<ul>${d.sub.map(s=>`
-        <li><label><input type="checkbox" data-level="sub" data-class="${esc(node.class)}" data-deck="${esc(d.deck)}" value="${esc(s)}"><span class="badge-pill">${esc(s)}</span></label></li>
-      `).join('')}</ul>` : '';
-      li.innerHTML = `
-        <label><input type="checkbox" data-level="deck" data-class="${esc(node.class)}" data-all="1" value="${esc(d.deck)}">
-          <span class="badge-pill">📚 ${esc(d.deck)}</span></label>
-        ${subList}`;
-      ul.appendChild(li);
-    });
-    wrap.appendChild(clsDiv);
-  });
-  host.appendChild(wrap);
-  return wrap;
-}
-function selectionsFromTree(root){
-  const sel={};
-  // decks
-  $$('input[data-level="deck"]',root).forEach(b=>{
-    if(!b.checked) return;
-    const cls=b.dataset.class, deck=b.value;
-    sel[cls] ??= {};
-    sel[cls][deck] = '*'; // whole deck
-  });
-  // subs
-  $$('input[data-level="sub"]',root).forEach(b=>{
-    if(!b.checked) return;
-    const cls=b.dataset.class, deck=b.dataset.deck, sub=b.value;
-    sel[cls] ??= {}; sel[cls][deck] ??= [];
-    if(sel[cls][deck] === '*') return; // already whole deck
-    if(!Array.isArray(sel[cls][deck])) sel[cls][deck]=[];
-    if(!sel[cls][deck].includes(sub)) sel[cls][deck].push(sub);
-  });
-  // class-all (if checked but not overridden by deck/sub we’ll expand) – do after
-  $$('input[data-level="class"]',root).forEach(b=>{
-    if(!b.checked || b.dataset.all!=='1') return;
-    const cls=b.value;
-    sel[cls] ??= {};
-    const decks = Object.keys(state.classes?.[cls]?.decks||{});
-    decks.forEach(d=>{ sel[cls][d] ??= '*'; });
-  });
-  return sel;
-}
-function renderBuild(){
-  fillDatalist('#testList', Object.keys(state.tests).sort());
-  chooseTreeEl = buildTree('#chooseTree', true);
-}
-$('#btnSaveTest').addEventListener('click', ()=>{
-  const name=$('#testName').value.trim(); if(!name){ alert('Enter a test name.'); return; }
-  const title=$('#testTitle').value.trim() || name;
-  const count=parseInt($('#testCount').value,10)||30;
-  const selections=selectionsFromTree(chooseTreeEl);
-  if(!Object.keys(selections).length){ alert('Pick some content from the tree.'); return; }
-  state.tests[name] = {title,count,selections};
-  save(); alert('Test saved.');
-});
-$('#btnDeleteTest').addEventListener('click', ()=>{
-  const name=$('#testName').value.trim(); if(!name||!state.tests[name]){ alert('Pick an existing test.'); return; }
-  if(confirm(`Delete test "${name}"?`)){ delete state.tests[name]; save(); renderBuild(); }
-});
-$('#btnCopyStudent').addEventListener('click', ()=>{
-  const name=$('#testName').value.trim(); if(!name||!state.tests[name]){ alert('Save/select a test first.'); return; }
-  const url = `${location.origin}${location.pathname}?view=quiz&mode=student&test=${encodeURIComponent(name)}`;
-  navigator.clipboard.writeText(url).then(()=> alert('Student link copied.'));
-});
-$('#btnOpenStudent').addEventListener('click', ()=>{
-  const name=$('#testName').value.trim(); if(!name||!state.tests[name]){ alert('Save/select a test first.'); return; }
-  const url = `${location.origin}${location.pathname}?view=quiz&mode=student&test=${encodeURIComponent(name)}`;
-  window.open(url,'_blank');
-});
+  tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
+    const id=btn.closest('tr').dataset.id; const r=state.results.find(x=>x.id===id); if(!r) return;
+    const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
+      <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
+      <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
+      <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
+    </div>`).join('');
+    const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
+    w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
+      <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
+      <div>${rows}</div>
+    </body>`);
+  }));
 
-/* ---------- Practice (flip cards) ---------- */
-let practiceTreeEl;
-function renderPractice(){
-  const tests = Object.keys(state.tests).map(t=>({value:t,label:t}));
-  fillSelect('#practiceTest', tests);
-  practiceTreeEl = buildTree('#practiceTree', false);
-  $('#practiceStage').classList.add('hidden');
-}
-$('#btnStartPractice').addEventListener('click', ()=>{
-  const t=$('#practiceTest').value; if(!t){ alert('Select a test.'); return; }
-  const base = deserializeSelections(state.tests[t].selections);
-  const pick = selectionsFromTree(practiceTreeEl);
-  const use = Object.keys(pick).length ? intersectSel(base,pick) : base;
-  const cards=pickCardsFromSelections(use);
-  if(!cards.length){ alert('No cards match selection.'); return; }
-  startFlashcards(cards);
-});
-function intersectSel(a,b){
-  const out={};
-  for(const [cls, dmap] of Object.entries(a)){
-    for(const [deck, va] of Object.entries(dmap)){
-      const vb = b?.[cls]?.[deck];
-      if(!vb) continue;
-      if(va==='*' && vb==='*'){ out[cls]??={}; out[cls][deck]='*'; continue; }
-      const Sa = va==='*' ? new Set(Object.keys(state.classes[cls].decks[deck].subdecks)) : new Set(va);
-      const Sb = vb==='*' ? new Set(Object.keys(state.classes[cls].decks[deck].subdecks)) : new Set(vb);
-      const inter=[...Sa].filter(x=>Sb.has(x));
-      if(inter.length){ out[cls]??={}; out[cls][deck]=inter; }
+  // Most missed questions
+  const missMap=new Map(); // key = q
+  for(const r of rows){
+    for(const a of (r.answers||[])){
+      const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
+      const m=missMap.get(k); m.total++; if(a.picked!==a.correct) m.misses++;
     }
   }
-  return out;
-}
-function startFlashcards(cards){
-  const stage=$('#practiceStage'); stage.classList.remove('hidden');
-  let i=0; cards = shuffle([...cards]);
-  const render=()=>{
-    stage.innerHTML='';
-    const card=$('#tpl-flip').content.firstElementChild.cloneNode(true);
-    $('.qtext',card).textContent = `Q${i+1}/${cards.length}: ${cards[i].q}`;
-    $('.ans',card).textContent = cards[i].a;
-    card.addEventListener('click', ()=> card.classList.toggle('flipped'));
-    const nav=document.createElement('div'); nav.className='row qnav';
-    nav.innerHTML=`<button class="ghost" id="prev">Prev</button>
-                   <div class="muted small">${i+1}/${cards.length}</div>
-                   <button class="ghost" id="shuffle">Shuffle</button>
-                   <button class="primary" id="next">Next</button>`;
-    stage.append(card, nav);
-    $('#prev').onclick=()=>{ i=Math.max(0,i-1); render(); }
-    $('#next').onclick=()=>{ i=Math.min(cards.length-1,i+1); render(); }
-    $('#shuffle').onclick=()=>{ shuffle(cards); i=0; render(); }
-  };
-  render();
+  const top=[...missMap.values()].filter(x=>x.total>0).sort((a,b)=>b.misses-a.misses).slice(0,10);
+  $('#missedSummary').innerHTML = top.length? top.map(m=>`
+    <div class="missrow">
+      <div class="misscount"><div>${m.misses}/${m.total}</div><div class="hint">missed</div></div>
+      <div class="missq">${esc(m.q)}</div>
+    </div>`).join('') : '<div class="hint">No data yet.</div>';
 }
 
-/* ---------- Quiz (MCQ) ---------- */
-function renderQuiz(){
-  const tests=Object.keys(state.tests).map(t=>({value:t,label:t}));
-  fillSelect('#quizTest', tests);
-  $('#studentDate').value=todayISO();
-  $('#quizStage').classList.add('hidden');
-}
-$('#btnStartQuiz').addEventListener('click', ()=>{
-  const t=$('#quizTest').value, nm=$('#studentName').value.trim(), loc=$('#studentLoc').value.trim(), dt=$('#studentDate').value;
-  if(!t){ alert('Select a test.'); return; }
-  if(!nm || !loc){ alert('Name and Location required.'); return; }
-  const test=state.tests[t]; const pool=pickCardsFromSelections(deserializeSelections(test.selections));
-  if(!pool.length){ alert('This test has no cards.'); return; }
-  const questions = shuffle(pool).slice(0, Math.min(test.count||30, pool.length));
-  startQuiz(t, test.title||t, questions, nm, loc, dt);
-});
-
-function startQuiz(testName, title, questions, name, location, dateISO){
-  const stage=$('#quizStage'); stage.classList.remove('hidden');
-  let idx=0; const answers=new Array(questions.length).fill(null);
-
-  const renderQ=()=>{
-    stage.innerHTML='';
-    const q=questions[idx];
-    const node=$('#tpl-question').content.firstElementChild.cloneNode(true);
-    $('.qtext',node).textContent = `Q${idx+1}/${questions.length}: ${q.q}`;
-    const opts=shuffle([q.a, ...q.wrongs]).slice(0, Math.max(2, Math.min(4, 1+q.wrongs.length)));
-    const box=$('.opts',node);
-    opts.forEach(op=>{
-      const b=document.createElement('button');
-      b.className='opt';
-      b.textContent=op;
-      if(answers[idx] && answers[idx].choice===op){
-        b.classList.add(answers[idx].correct?'correct':'incorrect');
-      }
-      b.onclick=()=>{
-        const correct=(op===q.a);
-        answers[idx]={ q:q.q, answer:q.a, choice:op, correct };
-        // show immediate feedback
-        $$('button',box).forEach(x=>x.disabled=true);
-        b.classList.add(correct?'correct':'incorrect');
-      };
-      box.appendChild(b);
-    });
-    $('[data-progress]',node).textContent = `${idx+1}/${questions.length}`;
-    $('[data-prev]',node).onclick = ()=>{ idx=Math.max(0,idx-1); renderQ(); };
-    $('[data-next]',node).onclick = ()=>{
-      if(idx<questions.length-1){ idx++; renderQ(); } else { finish(); }
-    };
-    $('[data-shuffle]',node).onclick = ()=>{ shuffle(questions); idx=0; renderQ(); };
-    stage.appendChild(node);
-  };
-
-  const finish=()=>{
-    const filled = answers.map((a,i)=> a || {q:questions[i].q, answer:questions[i].a, choice:'(blank)', correct:false});
-    const score = filled.filter(x=>x.correct).length;
-    const rec={ id:uid(), test:testName, title, name, location, dateISO, score, total:filled.length, items:filled,
-                mode: (getParams().get('mode')==='student')?'student':'admin' };
-    state.results.push(rec); save();
-    stage.innerHTML = `
-      <div class="qcard">
-        <h3>Finished!</h3>
-        <p>Thanks, <strong>${esc(name)}</strong>! You scored <strong>${Math.round(score/filled.length*100)}%</strong> (${score}/${filled.length}).</p>
-        <div class="row">
-          <button id="btnRestart" class="primary">Restart (fresh shuffle)</button>
-          <button id="btnToPractice">Go to Practice</button>
-          <button id="btnShowKey" class="success">Your Answers & Key</button>
+/* My Results (student history) */
+function renderMyResults(){
+  const tb=$('#myResultsTable tbody');
+  const q=($('#myResultsSearch').value||'').toLowerCase();
+  const rows=state.my.filter(r=>`${r.testName} ${r.location}`.toLowerCase().includes(q)).sort((a,b)=>b.time-a.time);
+  tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}"><td>${new Date(r.time).toLocaleString()}</td><td>${esc(r.testName)}</td><td>${esc(r.location)}</td><td>${r.score}%</td><td>${r.correct}/${r.of}</td><td><button class="btn ghost view-btn">Open</button></td></tr>`).join('');
+  const panel=$('#myDetail'), body=$('#myDetailBody'); panel.classList.add('hidden');
+  tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
+    const id=btn.closest('tr').dataset.id; const r=state.my.find(x=>x.id===id); if(!r) return;
+    body.innerHTML=r.answers.map(a=>`
+      <div class="row"><div class="q">${esc(a.q)}</div>
+        <div class="a">
+          <span class="tag ${a.picked===a.correct?'good':'bad'}">Your: ${esc(a.picked??'—')}</span>
+          <span class="tag good">Correct: ${esc(a.correct)}</span>
         </div>
-      </div>
-      <div id="ansKey" class="qcard hidden"></div>`;
-    $('#btnRestart').onclick = ()=> startQuiz(testName,title,shuffle([...questions]),name,location,dateISO);
-    $('#btnToPractice').onclick = ()=> routeTo('practice');
-    $('#btnShowKey').onclick = ()=>{
-      const key=$('#ansKey'); key.classList.remove('hidden');
-      key.innerHTML = filled.map((a,i)=>`
-        <div class="qcard">
-          <div class="qtext">Q${i+1}: ${esc(a.q)}</div>
-          <div class="opt ${a.correct?'correct':'incorrect'}">Your choice: ${esc(a.choice)}</div>
-          <div class="opt correct">Correct: ${esc(a.answer)}</div>
-        </div>`).join('');
-    };
-  };
-
-  renderQ();
-}
-
-/* ---------- Reports & My Results ---------- */
-function renderReports(){
-  const tests=Object.keys(state.tests).map(t=>({value:t,label:t}));
-  fillSelect('#repTest', [{value:'',label:'All'},...tests], false);
-  const locSet=[...new Set(state.results.map(r=>r.location).filter(Boolean))].sort();
-  $('#repLocation').innerHTML = `<option value="">All</option>` + locSet.map(l=>`<option>${esc(l)}</option>`).join('');
-  $('#repSort').value='dateDesc';
-  renderRepTable(); renderMissed();
-}
-function renderRepTable(){
-  const t=$('#repTest').value, loc=$('#repLocation').value, sort=$('#repSort').value;
-  let rows = state.results.slice();
-  if(t) rows = rows.filter(r=>r.test===t);
-  if(loc) rows = rows.filter(r=>r.location===loc);
-  rows.sort((a,b)=>{
-    if(sort==='dateDesc') return b.dateISO.localeCompare(a.dateISO);
-    if(sort==='dateAsc') return a.dateISO.localeCompare(b.dateISO);
-    if(sort==='scoreDesc') return (b.score/b.total)-(a.score/a.total);
-    return (a.score/a.total)-(b.score/b.total);
-  });
-  $('#repTable').innerHTML = rows.length? `
-    <table class="table">
-      <thead><tr><th>Date</th><th>Name</th><th>Location</th><th>Test</th><th>Score</th><th></th></tr></thead>
-      <tbody>
-        ${rows.map(r=>`
-          <tr>
-            <td>${esc(r.dateISO)}</td>
-            <td>${esc(r.name)}</td>
-            <td>${esc(r.location)}</td>
-            <td>${esc(r.title||r.test)}</td>
-            <td>${r.score}/${r.total}</td>
-            <td><button data-open="${r.id}">Open</button></td>
-          </tr>`).join('')}
-      </tbody>
-    </table>` : `<div class="muted">No results yet.</div>`;
-  $$('button[data-open]').forEach(b=> b.onclick = ()=> openResultWindow(state.results.find(x=>x.id===b.dataset.open)));
-}
-function renderMissed(){
-  const t=$('#repTest').value;
-  const rows = state.results.filter(r=>!t || r.test===t);
-  const map=new Map(); // q -> [wrong,total]
-  rows.forEach(r=> r.items.forEach(it=>{
-    const m=map.get(it.q)||[0,0]; m[1]++; if(!it.correct) m[0]++; map.set(it.q,m);
+      </div>`).join('');
+    panel.classList.remove('hidden'); panel.open=true; panel.scrollIntoView({behavior:'smooth'});
   }));
-  const list=[...map.entries()].map(([q,[w,tot]])=>({q,w,tot,p:w/tot})).sort((a,b)=>b.p-a.p).slice(0,20);
-  $('#repMissed').innerHTML = list.length? `
-    <table class="table">
-      <thead><tr><th>Question</th><th>Wrong</th><th>Total</th><th>% Missed</th></tr></thead>
-      <tbody>${list.map(x=>`<tr><td>${esc(x.q)}</td><td>${x.w}</td><td>${x.tot}</td><td>${Math.round(x.p*100)}%</td></tr>`).join('')}</tbody>
-    </table>` : `<div class="muted">No data yet.</div>`;
 }
+$('#myResultsSearch').addEventListener('input',renderMyResults);
+$('#clearMyResultsBtn').addEventListener('click',()=>{ if(confirm('Clear your local “My Results”?')){ state.my=[]; store.set(KEYS.my,state.my); renderMyResults(); }});
 
-/* My results */
-function renderMine(){
-  const name = (getParams().get('name')||'').trim();
-  const mine = name ? state.results.filter(r=>r.name.toLowerCase()===name.toLowerCase()) : state.results.slice(-50);
-  $('#mineTable').innerHTML = mine.length? `
-    <table class="table">
-      <thead><tr><th>Date</th><th>Name</th><th>Test</th><th>Score</th><th></th></tr></thead>
-      <tbody>${mine.map(r=>`
-        <tr>
-          <td>${esc(r.dateISO)}</td>
-          <td>${esc(r.name)}</td>
-          <td>${esc(r.title||r.test)}</td>
-          <td>${r.score}/${r.total}</td>
-          <td><button data-open="${r.id}">Open</button></td>
-        </tr>`).join('')}</tbody>
-    </table>` : `<div class="muted">No results yet.</div>`;
-  $$(`#view-mine button[data-open]`).forEach(b=> b.onclick = ()=> openResultWindow(state.results.find(x=>x.id===b.dataset.open)));
-}
-
-function openResultWindow(r){
-  const w=window.open('','_blank','width=760,height=900');
-  const rows = r.items.map((it,i)=>`
-    <div class="qcard">
-      <div class="qtext">Q${i+1}: ${esc(it.q)}</div>
-      <div class="opt ${it.correct?'correct':'incorrect'}">Your choice: ${esc(it.choice)}</div>
-      <div class="opt correct">Correct: ${esc(it.answer)}</div>
-    </div>`).join('');
-  w.document.write(`
-    <title>${esc(r.title||r.test)} — ${esc(r.name)}</title>
-    <link rel="stylesheet" href="styles.css">
-    <main class="view">
-      <h2>${esc(r.title||r.test)}</h2>
-      <div class="card">
-        <div class="kv">
-          <div class="muted">Name</div><div>${esc(r.name)}</div>
-          <div class="muted">Location</div><div>${esc(r.location)}</div>
-          <div class="muted">Date</div><div>${esc(r.dateISO)}</div>
-          <div class="muted">Score</div><div><strong>${r.score}/${r.total}</strong></div>
-        </div>
-      </div>
-      <section class="card">${rows}</section>
-    </main>`);
-  w.document.close();
-}
-
-/* ---------- Export CSV ---------- */
-$('#btnExportCSV').addEventListener('click', ()=>{
-  const fields=['dateISO','name','location','test','title','score','total'];
-  const lines=[fields.join(',')];
-  for(const r of state.results){
-    lines.push(fields.map(f=>`"${String(r[f]??'').replace(/"/g,'""')}"`).join(','));
+/* ===================================================================
+   Boot — normalize old tests to remove duplicates
+=================================================================== */
+function normalizeTests(){
+  let changed=false;
+  for(const id of Object.keys(state.tests)){
+    const t=state.tests[id];
+    const norm=dedupeSelections(t.selections||[]);
+    if(JSON.stringify(norm)!==JSON.stringify(t.selections||[])){ t.selections=norm; changed=true; }
   }
-  const blob=new Blob([lines.join('\n')],{type:'text/csv'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='results.csv'; a.click(); URL.revokeObjectURL(a.href);
-});
-
-/* ---------- Navigation ---------- */
-function routeTo(view){
-  setParams({view});
-  activateView(view);
-  if(view==='create') renderCreate();
-  if(view==='build') renderBuild();
-  if(view==='practice') renderPractice();
-  if(view==='quiz') renderQuiz();
-  if(view==='reports') renderReports();
-  if(view==='mine') renderMine();
+  if(changed) store.set(KEYS.tests,state.tests);
 }
-$$('.tab').forEach(b=> b.addEventListener('click', ()=> routeTo(b.dataset.route)));
-
-/* ---------- Boot & Student restrictions ---------- */
 function boot(){
-  const sp=getParams();
-  const mode=sp.get('mode')||'';
-  const test=sp.get('test')||'';
-
-  if(mode==='student'){
-    $('#modeBadge').textContent='Student link';
-    // Hide admin-only tabs
-    $$('.tab').forEach(b=>{
-      const ok=['practice','quiz','mine'].includes(b.dataset.route);
-      b.style.display = ok? '' : 'none';
-    });
-  }else{
-    $('#modeBadge').textContent='Admin';
-  }
-
-  // First render
-  routeTo(sp.get('view') || (mode==='student'?'quiz':'create'));
-
-  // Pre-select test for student link
-  if(mode==='student' && test && state.tests[test]){
-    fillSelect('#quizTest', [{value:test,label:test}], false);
-    fillSelect('#practiceTest', [{value:test,label:test}], false);
-  }
-
-  // Default date
-  const d=$('#studentDate'); if(d) d.value=todayISO();
+  normalizeTests();
+  applyStudentMode();
+  $$('select').forEach(sel=>{
+    sel.style.pointerEvents='auto';
+    sel.addEventListener('touchstart',()=>sel.focus(),{passive:true});
+  });
+  if(!$('#studentDate').value) $('#studentDate').value=todayISO();
+  activate(qs().get('view')|| (isStudent() ? 'practice' : 'create'));
 }
 boot();
