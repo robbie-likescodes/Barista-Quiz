@@ -31,7 +31,6 @@ function isStudent(){ return qs().get('mode')==='student'; }
 
 function activate(view){
   if(isStudent() && ADMIN_VIEWS.has(view)){ view='practice'; setParams({view}); }
-  // Clean up view-specific key handlers when switching views
   window.removeEventListener('keydown', window.__bqPracticeKeys__);
   window.removeEventListener('keydown', window.__bqQuizKeys__);
 
@@ -67,19 +66,16 @@ function applyStudentMode(){
 =================================================================== */
 const deckKey = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName||'').trim().toLowerCase()}`;
 
-// Return array of decks grouped by (class + deck name), each deck appears once
 function listUniqueDecks(){
   const seen=new Set(), arr=[];
   for(const d of Object.values(state.decks)){
     const k=deckKey(d);
     if(!seen.has(k)){ seen.add(k); arr.push(d); }
   }
-  // Sort by class then deck
   arr.sort((a,b)=> (a.className||'').localeCompare(b.className||'') || (a.deckName||'').localeCompare(b.deckName||''));
   return arr;
 }
 
-// Compute unique sub-tags for a deck from cards + declared tags + legacy deck.subdeck
 function deckSubTags(d){
   const fromCards = (d.cards||[]).map(c=>c.sub||'').filter(Boolean);
   const declared = (d.tags||[]);
@@ -87,37 +83,28 @@ function deckSubTags(d){
   return unique([...fromCards, ...declared, ...legacy]).sort((a,b)=>a.localeCompare(b));
 }
 
-// Merge duplicate decks (same class+deckName), update tests to point to merged IDs
 function mergeDecksByName(){
   const mapByKey=new Map();
-  const idRemap=new Map(); // oldId -> newId
+  const idRemap=new Map();
 
   for(const [id,d] of Object.entries(state.decks)){
-    // Ensure basic fields exist
     d.cards = Array.isArray(d.cards)? d.cards : [];
     d.tags  = Array.isArray(d.tags)?  d.tags  : [];
 
     const k=deckKey(d);
     if(!mapByKey.has(k)){
       mapByKey.set(k,id);
-      // absorb legacy deck-level subdeck into tags (for visibility)
       if(d.subdeck) d.tags = unique([...(d.tags||[]), d.subdeck]);
       continue;
     }
-    // Merge into primary
     const primaryId = mapByKey.get(k);
     const P = state.decks[primaryId];
-    // move cards
     P.cards = [...(P.cards||[]), ...(d.cards||[])];
-    // merge tags & legacy subdeck
-    const tags = unique([...(P.tags||[]), ...(d.tags||[]), ...(d.subdeck?[d.subdeck]:[])]);
-    P.tags = tags;
-
+    P.tags = unique([...(P.tags||[]), ...(d.tags||[]), ...(d.subdeck?[d.subdeck]:[])]);
     idRemap.set(id, primaryId);
     delete state.decks[id];
   }
 
-  // Update tests selections to point to remapped IDs
   let changed=false;
   for(const t of Object.values(state.tests)){
     if(!t.selections) continue;
@@ -176,11 +163,8 @@ function renderDeckMeta(){
     btn.addEventListener('click',()=>{
       const tag=btn.dataset.sub;
       const alsoClear = confirm(`Remove sub‑deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards in this deck.\nCancel = just remove declared tag (cards keep their tag).`);
-      // Remove from declared tags
       d.tags = (d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){
-        (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; });
-      }
+      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
       store.set(KEYS.decks,state.decks);
       renderDeckMeta(); renderSubdeckManager(); renderCardsList();
     });
@@ -198,9 +182,7 @@ function renderSubdeckManager(){
       const tag=btn.dataset.sub;
       const alsoClear = confirm(`Remove sub‑deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards in this deck.\nCancel = just remove declared tag (cards keep their tag).`);
       d.tags = (d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){
-        (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; });
-      }
+      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
       store.set(KEYS.decks,state.decks);
       renderDeckMeta(); renderSubdeckManager(); renderCardsList();
     });
@@ -225,7 +207,6 @@ $('#addDeckBtn').addEventListener('click',()=>{
   const sdn=$('#newSubdeck').classList.contains('hidden')?'':$('#newSubdeck').value.trim();
   if(!cls||!dnm) return alert('Class and Deck are required.');
 
-  // find existing by class+deckName only (ignore subdeck)
   let existing = Object.values(state.decks).find(d=> (d.className||'').toLowerCase()===cls.toLowerCase() && (d.deckName||'').toLowerCase()===dnm.toLowerCase());
   if(existing){
     deckSelect.value = existing.id;
@@ -247,7 +228,6 @@ $('#renameDeckBtn').addEventListener('click',()=>{
   const cls=prompt('Class:',d.className||''); if(cls===null) return;
   const dnk=prompt('Deck (by name):',d.deckName||''); if(dnk===null) return;
   d.className=cls.trim(); d.deckName=dnk.trim();
-  // after rename, ensure uniqueness (merge again just in case)
   store.set(KEYS.decks,state.decks); mergeDecksByName();
   renderClassDeckDatalists(); renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
 });
@@ -290,13 +270,11 @@ $('#importDeckInput').addEventListener('change',async e=>{
   try{
     let data=null; try{data=JSON.parse(txt)}catch{}
     const upsertDeck=(cls,dk,cards,declaredTag='')=>{
-      // Find or create merged deck by (class+name)
       let ex=Object.values(state.decks).find(d=>(d.className||'').toLowerCase()===cls.toLowerCase()&&(d.deckName||'').toLowerCase()===dk.toLowerCase());
       if(!ex){
         const id=uid('deck');
         ex=state.decks[id]={id,className:cls||'Class',deckName:dk||f.name.replace(/\.[^.]+$/,''),cards:[],tags:[],createdAt:Date.now()};
       }
-      // Append cards; normalize fields
       ex.cards.push(...cards.map(c=>({
         id:uid('card'),
         q:(c.q||c.Question||'').trim(),
@@ -305,7 +283,6 @@ $('#importDeckInput').addEventListener('change',async e=>{
         sub:(c.sub||c.Subdeck||'').trim(),
         createdAt:Date.now()
       })));
-      // Add declared tag if provided
       if(declaredTag) ex.tags = unique([...(ex.tags||[]), declaredTag]);
       store.set(KEYS.decks,state.decks);
       renderClassDeckDatalists(); renderDeckSelect(); alert('Deck imported.');
@@ -446,7 +423,7 @@ function dedupeSelections(selections){
   return [...map.values()].map(x=>({deckId:x.deckId,whole:x.whole && x.subs.size===0,subs:[...x.subs]}));
 }
 
-/* Share: student link */
+/* Share */
 $('#copyShareBtn').addEventListener('click',()=>{
   const t=getCurrentTestOrSave(); if(!t) return;
   const url=new URL(location.href); url.searchParams.set('mode','student'); url.searchParams.set('test',t.name); url.searchParams.set('view','practice');
@@ -465,6 +442,7 @@ function getCurrentTestOrSave(){
 }
 
 /* Preview toggle */
+const previewToggle=$('#previewToggle'), previewPanel=$('#previewPanel'), previewTitle=$('#previewTitle'), previewMeta=$('#previewMeta']);
 previewToggle.addEventListener('change',syncPreview);
 function syncPreview(){
   const on=previewToggle.checked; $('#deckChooser').open=!on; $('#previewPanel').classList.toggle('hidden',!on);
@@ -497,7 +475,6 @@ const practiceTestSelect=$('#practiceTestSelect'), practiceDeckChecks=$('#practi
 
 function renderPracticeScreen(){
   fillTestsSelect(practiceTestSelect,true);
-  // restore last test
   const last=store.get('bq_last_test', null);
   if(last && practiceTestSelect.querySelector(`option[value="${last}"]`)) practiceTestSelect.value = last;
   buildPracticeDeckChecks();
@@ -552,7 +529,6 @@ function showPractice(){
   $('#practiceQuestion').textContent=c.q; $('#practiceAnswer').textContent=c.a;
   const card=$('#practiceCard'); card.classList.remove('flipped'); card.onclick=()=>card.classList.toggle('flipped');
 
-  // Keyboard helpers
   const handler = (e)=>{
     if(e.key===' '){ e.preventDefault(); card.classList.toggle('flipped'); }
     if(e.key==='ArrowRight'){ $('#practiceNext').click(); }
@@ -592,7 +568,6 @@ function startOrRefreshQuiz(){
 
   const n=Math.min(t.n||30,pool.length);
 
-  // Ensure unique, non-empty options and minimum 2 choices
   state.quiz.items = sample(pool, n).map(q=>{
     const opts = unique([q.a, ...(q.distractors||[])].map(s => (s??'').trim()).filter(Boolean));
     if(opts.length < 2) opts.push('—');
@@ -613,11 +588,10 @@ function drawQuiz(){
     </label>
   `).join('');
 
-  quizOptions.querySelectorAll('input[type=radio]').forEach((r, idx)=>{
+  quizOptions.querySelectorAll('input[type=radio]').forEach((r)=>{
     r.addEventListener('change',()=>{ it.picked=r.value; });
   });
 
-  // 1–4 number hotkeys + arrows
   const handler = (e)=>{
     if(e.target.tagName==='INPUT') return;
     const n = e.keyCode - 49; // '1' -> 0
@@ -715,7 +689,7 @@ function drawReports(){
     </body>`);
   }));
 
-  const missMap=new Map(); // key = q
+  const missMap=new Map();
   for(const r of rows){
     for(const a of (r.answers||[])){
       const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
@@ -730,7 +704,7 @@ function drawReports(){
     </div>`).join('') : '<div class="hint">No data yet.</div>';
 }
 
-/* My Results (student history) */
+/* My Results */
 function renderMyResults(){
   const tb=$('#myResultsTable tbody');
   const q=($('#myResultsSearch').value||'').toLowerCase();
@@ -765,12 +739,10 @@ function normalizeTests(){
   if(changed) store.set(KEYS.tests,state.tests);
 }
 function boot(){
-  // Merge duplicate decks (by class+deck name) and migrate tests
   mergeDecksByName();
   normalizeTests();
   applyStudentMode();
 
-  // iOS select quirks
   $$('select').forEach(sel=>{
     sel.style.pointerEvents='auto';
     sel.addEventListener('touchstart',()=>sel.focus(),{passive:true});
