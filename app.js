@@ -7,7 +7,7 @@
 */
 const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
 const store={get(k,f){try{return JSON.parse(localStorage.getItem(k))??f}catch{return f}},set(k,v){localStorage.setItem(k,JSON.stringify(v))}};
-const KEYS={decks:'bq_decks_v5',tests:'bq_tests_v5',results:'bq_results_v5',my:'bq_my_v5'};
+const KEYS={decks:'bq_decks_v6',tests:'bq_tests_v6',results:'bq_results_v6',my:'bq_my_v6'};
 const uid=(p='id')=>p+'_'+Math.random().toString(36).slice(2,10);
 const todayISO=()=>new Date().toISOString().slice(0,10);
 const esc=s=>(s??'').toString().replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -19,8 +19,8 @@ const ADMIN_VIEWS=new Set(['create','build','reports']);
 let state={
   decks:store.get(KEYS.decks,{}),
   tests:store.get(KEYS.tests,{}),
-  results:store.get(KEYS.results,[]), // Admin-only log of submissions (this device)
-  my:store.get(KEYS.my,[]),           // Student’s own history (this device)
+  results:store.get(KEYS.results,[]), // Admin-only (this device)
+  my:store.get(KEYS.my,[]),           // Student history (this device)
   practice:{cards:[],idx:0},
   quiz:{items:[],idx:0,n:30,locked:false,testId:''}
 };
@@ -85,7 +85,6 @@ function renderDeckSelect(){
 function selectedDeckId(){const id=deckSelect.value;return state.decks[id]?id:null}
 
 $('#toggleSubdeckBtn').addEventListener('click',()=>$('#newSubdeck').classList.toggle('hidden'));
-
 $('#addDeckBtn').addEventListener('click',()=>{
   const cls=$('#newClassName').value.trim();
   const dnm=$('#newDeckName').value.trim();
@@ -99,7 +98,6 @@ $('#addDeckBtn').addEventListener('click',()=>{
   $('#newClassName').value=$('#newDeckName').value=$('#newSubdeck').value=''; $('#newSubdeck').classList.add('hidden');
   renderClassDeckDatalists(); renderDeckSelect(); deckSelect.value=id; renderCardsList();
 });
-
 $('#renameDeckBtn').addEventListener('click',()=>{
   const id=selectedDeckId(); if(!id) return;
   const d=state.decks[id];
@@ -126,7 +124,6 @@ $('#exportDeckBtn').addEventListener('click',()=>{
   const blob=new Blob([JSON.stringify(state.decks[id],null,2)],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${(state.decks[id].deckName||'Deck').replace(/\W+/g,'_')}.json`; a.click(); URL.revokeObjectURL(a.href);
 });
-
 $('#importDeckBtn').addEventListener('click',()=>{
   alert(`Import formats:
 1) App deck JSON (this app's export)
@@ -275,7 +272,7 @@ function readSelectionsFromUI(){
   }).filter(s=>s.whole || s.subs.length>0);
 }
 function dedupeSelections(selections){
-  // Prevent duplicates (fixes duplicated decks in Practice)
+  // Prevent duplicates (and merge sub‑decks)
   const map=new Map();
   for(const s of selections){
     if(!map.has(s.deckId)) map.set(s.deckId,{deckId:s.deckId,whole:false,subs:new Set()});
@@ -319,14 +316,17 @@ $('#previewQuizBtn').addEventListener('click',()=>{ setParams({view:'quiz'}); ac
 
 /* Helpers for tests */
 function computePoolForTest(t){
+  // Ensure selections are deduped even for older saved tests
+  const normalized=dedupeSelections(t.selections||[]);
   const pool=[];
-  for(const sel of (t.selections||[])){
+  for(const sel of normalized){
     const d=state.decks[sel.deckId]; if(!d) continue;
     if(sel.whole){ pool.push(...d.cards); }
     else if(sel.subs?.length){ pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||''))); }
   }
   return pool;
 }
+const deckLabel = d => `${d.deckName} — ${d.className}`;
 
 /* ===================================================================
    PRACTICE
@@ -351,23 +351,25 @@ practiceTestSelect.addEventListener('change',buildPracticeDeckChecks);
 function buildPracticeDeckChecks(){
   const tid=practiceTestSelect.value; const t=state.tests[tid]; practiceDeckChecks.innerHTML='';
   if(!t){ practiceDeckChecks.innerHTML='<span class="hint">No test selected.</span>'; return; }
-  // Deduplicate deck ids (fixes duplicate chips)
-  const seen=new Set();
-  for(const sel of t.selections||[]){
+
+  const seen=new Set(); // deckId dedupe
+  const chips=[];
+  for(const sel of dedupeSelections(t.selections||[])){
     if(seen.has(sel.deckId)) continue; seen.add(sel.deckId);
     const d=state.decks[sel.deckId]; if(!d) continue;
-    const row=document.createElement('label'); row.className='chip';
-    const ck=document.createElement('input'); ck.type='checkbox'; ck.dataset.deck=sel.deckId; ck.checked=true; row.appendChild(ck);
-    const span=document.createElement('span'); span.textContent=d.deckName; row.appendChild(span);
-    practiceDeckChecks.appendChild(row);
+    const chip=document.createElement('label'); chip.className='chip';
+    const ck=document.createElement('input'); ck.type='checkbox'; ck.dataset.deck=sel.deckId; ck.checked=true; chip.appendChild(ck);
+    const span=document.createElement('span'); span.textContent=deckLabel(d); chip.appendChild(span);
+    chips.push(chip);
   }
-  if(!t.selections?.length){ practiceDeckChecks.innerHTML='<span class="hint">This test has no decks selected.</span>'; }
+  if(chips.length) chips.forEach(c=>practiceDeckChecks.appendChild(c));
+  else practiceDeckChecks.innerHTML='<span class="hint">This test has no decks selected.</span>';
 }
 $('#startPracticeBtn').addEventListener('click',()=>{
   const tid=practiceTestSelect.value; const t=state.tests[tid]; if(!t) return alert('Pick a test.');
   const chosen=new Set([...practiceDeckChecks.querySelectorAll('input[type=checkbox]:checked')].map(i=>i.dataset.deck));
   const pool=[];
-  for(const sel of t.selections||[]){
+  for(const sel of dedupeSelections(t.selections||[])){
     if(!chosen.has(sel.deckId)) continue;
     const d=state.decks[sel.deckId]; if(!d) continue;
     if(sel.whole) pool.push(...d.cards); else pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||'')));
@@ -421,14 +423,14 @@ $('#submitQuizBtn').addEventListener('click',()=>{
   const tid=quizTestSelect.value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
   const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
   const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
-  // Save admin-wide results (on this device only)
+  // Save admin result
   const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
   state.results.push(row); store.set(KEYS.results,state.results);
-  // Save student's local copy (full answers for review)
+  // Save student's local history
   state.my.push({id:uid('myres'),date:dt,time:row.time,testId:tid,testName:t.name,location:loc,score,correct,of:total,answers});
   store.set(KEYS.my,state.my);
 
-  // Finished panel + answer key
+  // Finished panel + full answer key (immediate review)
   $('#quizArea').classList.add('hidden'); $('#quizFinished').classList.remove('hidden');
   $('#finishedMsg').innerHTML=`Thanks, <strong>${esc(name)}</strong>! You scored <strong>${score}%</strong> (${correct}/${total}).`;
   $('#finishedAnswers').innerHTML=answers.map(a=>`
@@ -484,20 +486,20 @@ function drawReports(){
 
   tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
     const id=btn.closest('tr').dataset.id; const r=state.results.find(x=>x.id===id); if(!r) return;
-    const win=open('', '_blank','width=700,height=800'); if(!win) return;
     const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
       <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
       <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
       <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
     </div>`).join('');
-    win.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
+    const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
+    w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
       <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
       <div>${rows}</div>
     </body>`);
   }));
 
   // Most missed questions
-  const missMap=new Map(); // key = q, value = {q,misses,total}
+  const missMap=new Map(); // key = q
   for(const r of rows){
     for(const a of (r.answers||[])){
       const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
@@ -535,9 +537,19 @@ $('#myResultsSearch').addEventListener('input',renderMyResults);
 $('#clearMyResultsBtn').addEventListener('click',()=>{ if(confirm('Clear your local “My Results”?')){ state.my=[]; store.set(KEYS.my,state.my); renderMyResults(); }});
 
 /* ===================================================================
-   Boot
+   Boot — normalize old tests to remove duplicates
 =================================================================== */
+function normalizeTests(){
+  let changed=false;
+  for(const id of Object.keys(state.tests)){
+    const t=state.tests[id];
+    const norm=dedupeSelections(t.selections||[]);
+    if(JSON.stringify(norm)!==JSON.stringify(t.selections||[])){ t.selections=norm; changed=true; }
+  }
+  if(changed) store.set(KEYS.tests,state.tests);
+}
 function boot(){
+  normalizeTests();
   applyStudentMode();
   $$('select').forEach(sel=>{
     sel.style.pointerEvents='auto';
