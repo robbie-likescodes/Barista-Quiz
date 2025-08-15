@@ -1,641 +1,559 @@
 /* =============================
-   Storage model
-   =============================
-
-state = {
-  classes: {
-    "<className>": {
-      decks: {
-        "<deckName>": {   // unique within class
-          subdecks: { "<subName>": true, ... },
-          cards: [ {q,a,wrongs:[...], class, deck, sub } ... ]
-        }, ...
-      }
-    }, ...
-  },
-  tests: {
-    "<testName>": {
-      title, count,
-      // selections is a normalized tree { [class]: { [deck]: Set(subdeckNames or '*') } }
-      selections
-    }
-  },
-  results: [ {id, test, title, name, location, dateISO, score, total, items:[{q,correct,choice,answer}], mode:'student'} ... ]
-}
-
-Everything is persisted in localStorage under BARISTA_APP_V3
-*/
-
+   Persistent state + shape
+   ============================= */
 const KEY = 'BARISTA_APP_V3';
-
-const $ = (sel, root=document) => root.querySelector(sel);
-const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+const $ = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
 
 let state = load();
-
-function load() {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  return { classes:{}, tests:{}, results:[] };
-}
+function load(){ try{const r=localStorage.getItem(KEY); if(r) return JSON.parse(r);}catch{} return {classes:{},tests:{},results:[]}; }
 function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
 
-/* ---------- Utilities ---------- */
 const todayISO = () => new Date().toISOString().slice(0,10);
 const uid = () => Math.random().toString(36).slice(2,10);
+const esc = s => (s??'').toString().replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
 
-/* Normalize & helpers */
-function ensureClassDeck(cName, dName){
-  if(!state.classes[cName]) state.classes[cName] = {decks:{}};
-  const decks = state.classes[cName].decks;
-  if(!decks[dName]) decks[dName] = {subdecks:{}, cards:[]};
-  return decks[dName];
+/* ---------- Data helpers ---------- */
+function ensureClassDeck(cls, deck){
+  if(!state.classes[cls]) state.classes[cls] = { decks:{} };
+  if(!state.classes[cls].decks[deck]) state.classes[cls].decks[deck] = { subdecks:{}, cards:[] };
+  return state.classes[cls].decks[deck];
 }
-function allDeckOptions() {
-  // return [{class, deck, label:"Deck — Class"}] unique per (class,deck)
+function classDeckTree(){
   const out = [];
-  for (const [cls, {decks}] of Object.entries(state.classes)) {
-    for (const deck of Object.keys(decks)) {
-      out.push({class:cls, deck, label:`${deck} — ${cls}`});
-    }
+  for(const [cls, obj] of Object.entries(state.classes)){
+    const decks = Object.entries(obj.decks).map(([deck, dobj]) => ({
+      deck,
+      sub: Object.keys(dobj.subdecks).sort()
+    })).sort((a,b)=>a.deck.localeCompare(b.deck));
+    out.push({class:cls, decks});
   }
-  // stable sort
-  out.sort((a,b)=> (a.class+a.deck).localeCompare(b.class+b.deck));
+  out.sort((a,b)=>a.class.localeCompare(b.class));
   return out;
 }
-function classDeckTree() {
-  // -> [{class, decks:[{deck, sub:[...]}]}] with unique deck names per class
+function allDeckOptions(){
+  // unique by (class,deck) for dropdowns
   const list = [];
-  for (const [cls, obj] of Object.entries(state.classes)) {
-    const decks = Object.entries(obj.decks).map(([deck,dobj])=>{
-      return { deck, sub: Object.keys(dobj.subdecks).sort() };
-    }).sort((a,b)=>a.deck.localeCompare(b.deck));
-    list.push({class:cls, decks});
+  for (const [cls, obj] of Object.entries(state.classes)){
+    for (const deck of Object.keys(obj.decks)){
+      list.push({value:`${cls}::${deck}`, label:`${deck} — ${cls}`});
+    }
   }
-  list.sort((a,b)=>a.class.localeCompare(b.class));
+  list.sort((a,b)=>a.label.localeCompare(b.label));
   return list;
 }
-function pickCardsFromSelections(selections) {
-  // selections = { class:{ deck:Set(subs or '*') } }
-  const pool = [];
-  for(const [cls, dmap] of Object.entries(selections)){
-    for(const [deck, subs] of Object.entries(dmap)){
-      const deckObj = state.classes?.[cls]?.decks?.[deck];
-      if(!deckObj) continue;
-      for(const c of deckObj.cards){
-        if(subs === '*' || subs.has(c.sub || '')) pool.push(c);
+function pickCardsFromSelections(selections){
+  // selections: { class: { deck: '*' | [subs] } }
+  const pool=[];
+  for(const [cls, dmap] of Object.entries(selections||{})){
+    for(const [deck, sel] of Object.entries(dmap||{})){
+      const d = state.classes?.[cls]?.decks?.[deck];
+      if(!d) continue;
+      const subs = sel==='*' ? null : new Set(sel);
+      for(const c of d.cards){
+        if(!subs || subs.has(c.sub||'')) pool.push(c);
       }
     }
   }
   return pool;
 }
-function shuffle(arr){
-  for(let i=arr.length-1;i>0;i--){
-    const j=Math.floor(Math.random()*(i+1));
-    [arr[i],arr[j]]=[arr[j],arr[i]];
+function deserializeSelections(raw){
+  // arrays as-is, '*' kept
+  const out={};
+  for(const [cls,dmap] of Object.entries(raw||{})){
+    out[cls]={};
+    for(const [deck,v] of Object.entries(dmap)) out[cls][deck]=v;
   }
-  return arr;
+  return out;
 }
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]] } return a; }
 
 /* ---------- Router ---------- */
-function getParams(){
-  return new URLSearchParams(location.search);
-}
-function setParams(patch){
-  const sp = getParams();
-  for(const [k,v] of Object.entries(patch)){
-    if(v===null) sp.delete(k); else sp.set(k,v);
-  }
-  history.replaceState(null,'',`${location.pathname}?${sp.toString()}`);
-}
+function getParams(){ return new URLSearchParams(location.search); }
+function setParams(patch){ const sp=getParams(); for(const[k,v] of Object.entries(patch)){ if(v===null) sp.delete(k); else sp.set(k,v); } history.replaceState(null,'',`${location.pathname}?${sp.toString()}`); }
 function activateView(v){
-  $$('.view').forEach(el=>el.classList.add('hidden'));
+  $$('.view').forEach(x=>x.classList.add('hidden'));
   $(`#view-${v}`)?.classList.remove('hidden');
   $$('.tab').forEach(b=>b.classList.toggle('active', b.dataset.route===v));
 }
 
-/* ---------- UI Populate helpers ---------- */
-function fillDatalist(id, values){
-  const dl = $(id);
-  dl.innerHTML = values.map(v=>`<option value="${escapeHtml(v)}"></option>`).join('');
-}
+/* ---------- Fill helpers ---------- */
+function fillDatalist(id, arr){ const el=$(id); el.innerHTML = arr.map(x=>`<option value="${esc(x)}"></option>`).join(''); }
 function fillSelect(sel, items, withBlank=true){
-  const el = $(sel);
-  const ops = [];
-  if(withBlank) ops.push(`<option value="">—</option>`);
-  for(const it of items){
-    if(typeof it==='string') ops.push(`<option value="${escapeHtml(it)}">${escapeHtml(it)}</option>`);
-    else ops.push(`<option value="${escapeHtml(it.value)}">${escapeHtml(it.label)}</option>`);
-  }
+  const el=$(sel); const ops=[]; if(withBlank) ops.push(`<option value="">—</option>`);
+  for(const it of items){ ops.push(`<option value="${esc(it.value)}">${esc(it.label)}</option>`); }
   el.innerHTML = ops.join('');
 }
-function escapeHtml(s){ return (s??'').toString().replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])) }
 
 /* ---------- Create view ---------- */
 function renderCreate(){
-  // datalists
   fillDatalist('#clsList', Object.keys(state.classes).sort());
-  const deckNames = new Set();
-  for(const c of Object.values(state.classes)) Object.keys(c.decks).forEach(n=>deckNames.add(n));
-  fillDatalist('#deckList', [...deckNames].sort());
+  const allDecks = new Set(); Object.values(state.classes).forEach(c => Object.keys(c.decks).forEach(d=>allDecks.add(d)));
+  fillDatalist('#deckList', [...allDecks].sort());
 
-  // pick by deck (unique by class+deck label)
-  fillSelect('#pickDeckByName', allDeckOptions().map(x=>({value:`${x.class}::${x.deck}`, label:x.label})), false);
+  // deck picker (unique deck names, grouped by class)
+  const deckSel = $('#pickDeckByName');
+  deckSel.innerHTML = allDeckOptions().map(o=>`<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+  if(!deckSel.value && deckSel.options.length) deckSel.selectedIndex=0;
+
+  // subdeck picker for selected deck
+  refreshSubdeckPicker();
+  renderCardList();
+}
+function refreshSubdeckPicker(){
+  const sel = $('#pickDeckByName').value || '';
+  const [cls, deck] = sel.split('::');
+  const subSel = $('#pickSubByName');
+  const subs = Object.keys(state.classes?.[cls]?.decks?.[deck]?.subdecks || {});
+  subSel.innerHTML = `<option value="">(all/none)</option>` + subs.map(s=>`<option>${esc(s)}</option>`).join('');
+}
+function renderCardList(){
+  const sel = $('#pickDeckByName').value || '';
+  const [cls, deck] = sel.split('::');
+  const sub = $('#pickSubByName').value || '';
+  const container = $('#cardList');
+  const d = state.classes?.[cls]?.decks?.[deck];
+  if(!d){ $('#cardStats').textContent='No deck selected.'; container.innerHTML=''; return; }
+  const items = d.cards.filter(c => !sub || (c.sub||'')===sub);
+  $('#cardStats').textContent = `${cls} › ${deck}${sub? ' › '+sub:''} — ${items.length} card(s)`;
+  container.innerHTML = items.map((c,i)=>`
+    <div class="item">
+      <div>
+        <div class="small muted">Q${i+1}</div>
+        <div>${esc(c.q)}</div>
+        <div class="small muted">A: ${esc(c.a)} ${c.sub? ` • sub: ${esc(c.sub)}`:''}</div>
+      </div>
+      <div class="row">
+        <button data-del="${i}">Delete</button>
+      </div>
+    </div>`).join('');
+  $$('button[data-del]',container).forEach(b=> b.onclick = ()=>{
+    const idx = +b.dataset.del;
+    const subset = d.cards.filter(c => !sub || (c.sub||'')===sub);
+    const target = subset[idx];
+    const globalIdx = d.cards.indexOf(target);
+    if(globalIdx>-1){ d.cards.splice(globalIdx,1); save(); renderCardList(); }
+  });
 }
 
+/* Create handlers */
 $('#btnAddDeck').addEventListener('click', ()=>{
-  const cls = $('#clsName').value.trim();
-  const deck = $('#deckName').value.trim();
-  const sub = $('#subdeckName').value.trim();
-  if(!cls || !deck){ alert('Class and Deck are required.'); return; }
-  const d = ensureClassDeck(cls, deck);
+  const cls=$('#clsName').value.trim(), deck=$('#deckName').value.trim(), sub=$('#subdeckName').value.trim();
+  if(!cls || !deck){ alert('Class and Deck required.'); return; }
+  const d=ensureClassDeck(cls, deck);
   if(sub) d.subdecks[sub]=true;
-  save(); renderCreate(); renderBuildTrees();
+  save(); ['#subdeckName'].forEach(id=>$(id).value='');
+  renderCreate();
+});
+$('#pickDeckByName').addEventListener('change', ()=>{ refreshSubdeckPicker(); renderCardList(); });
+$('#pickSubByName').addEventListener('change', renderCardList);
+
+$('#btnExportDeck').addEventListener('click', ()=>{
+  const sel=$('#pickDeckByName').value; if(!sel){alert('Pick a deck first.');return;}
+  const [cls,deck]=sel.split('::'); const d=state.classes?.[cls]?.decks?.[deck];
+  const lines = d.cards.map(c => [c.q,c.a,...c.wrongs,(c.sub?('#'+c.sub):'')].join(' | '));
+  const blob=new Blob([lines.join('\n')],{type:'text/plain'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${deck}-${cls}.txt`; a.click(); URL.revokeObjectURL(a.href);
+});
+
+$('#importFile').addEventListener('change', e=>{
+  const file = e.target.files?.[0]; if(!file) return;
+  const sel=$('#pickDeckByName').value; if(!sel){ alert('Pick a deck to import into first.'); e.target.value=''; return; }
+  const [cls,deck]=sel.split('::'); const d=ensureClassDeck(cls,deck);
+  const reader=new FileReader();
+  reader.onload=()=>{
+    try{
+      let text = String(reader.result||'');
+      // allow JSON export of our deck too
+      if(file.name.endsWith('.json')){
+        const obj = JSON.parse(text);
+        if(Array.isArray(obj.cards)){
+          obj.cards.forEach(c=>{ if(c.sub) d.subdecks[c.sub]=true; d.cards.push(c); });
+        }
+      }else{
+        const lines=text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+        let ok=0, bad=0;
+        for(const line of lines){
+          const parts=line.split('|').map(x=>x.trim());
+          if(parts.length<3){ bad++; continue; }
+          const q=parts[0], a=parts[1], wrongs=parts.slice(2,5).filter(Boolean);
+          let sub=''; const tail=parts.slice(5).join('|').trim();
+          if(tail.startsWith('#')) sub=tail.slice(1).trim();
+          if(!wrongs.length){ bad++; continue; }
+          if(sub) d.subdecks[sub]=true;
+          d.cards.push({q,a,wrongs,class:cls,deck,sub});
+          ok++;
+        }
+        alert(`Import complete: ${ok} added${bad?`, ${bad} skipped`:''}.`);
+      }
+      save(); refreshSubdeckPicker(); renderCardList();
+    }catch(err){ alert('Import failed: '+err.message); }
+    e.target.value='';
+  };
+  reader.readAsText(file);
 });
 
 $('#btnBulkAdd').addEventListener('click', ()=>{
-  const sel = $('#pickDeckByName').value || '';
-  if(!sel){ alert('Pick a deck (by name) above first.'); return; }
-  const [cls, deck] = sel.split('::');
-  const d = ensureClassDeck(cls, deck);
-
-  const lines = $('#bulkText').value.split('\n').map(s=>s.trim()).filter(Boolean);
-  let added=0, bad=0;
+  const sel=$('#pickDeckByName').value; if(!sel){ alert('Pick a deck first.'); return; }
+  const [cls,deck]=sel.split('::'); const d=ensureClassDeck(cls,deck);
+  const preferredSub = $('#pickSubByName').value.trim(); // optional default sub
+  const lines=$('#bulkText').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!lines.length){ alert('Paste some lines first.'); return; }
+  let ok=0,bad=0;
   for(const line of lines){
-    const parts = line.split('|').map(x=>x.trim());
+    const parts=line.split('|').map(x=>x.trim());
     if(parts.length<3){ bad++; continue; }
-    const q = parts[0], a = parts[1];
-    const wrongs = parts.slice(2,5).filter(Boolean);
-    const maybeSub = parts.slice(5).join('|').trim();
-    const sub = maybeSub.startsWith('#') ? maybeSub.slice(1).trim() : (maybeSub||'');
+    const q=parts[0], a=parts[1], wrongs=parts.slice(2,5).filter(Boolean);
+    let sub=preferredSub; const tail=parts.slice(5).join('|').trim();
+    if(tail.startsWith('#')) sub=tail.slice(1).trim();
     if(!wrongs.length){ bad++; continue; }
     if(sub) d.subdecks[sub]=true;
-    d.cards.push({q,a,wrongs, class:cls, deck, sub});
-    added++;
+    d.cards.push({q,a,wrongs,class:cls,deck,sub});
+    ok++;
   }
-  save(); renderBuildTrees();
-  alert(`Bulk import: added ${added} card(s). ${bad? bad+' line(s) skipped.':''}`);
+  save(); renderCardList();
+  alert(`Bulk import: added ${ok} card(s). ${bad? bad+' skipped for format.':''}`);
 });
-
-$('#btnSaveCard').addEventListener('click', ()=>{
-  const sel = $('#pickDeckByName').value || '';
-  if(!sel){ alert('Pick a deck (by name) above first.'); return; }
-  const [cls, deck] = sel.split('::');
-  const d = ensureClassDeck(cls, deck);
-  const q=$('#q').value.trim(),
-        a=$('#a').value.trim(),
-        w1=$('#w1').value.trim(),
-        w2=$('#w2').value.trim(),
-        w3=$('#w3').value.trim(),
-        sub=$('#sd').value.trim();
-  if(!q || !a || !w1){ alert('Question, Correct, and Wrong1 are required.'); return; }
-  const wrongs=[w1,w2,w3].filter(Boolean);
-  if(sub) d.subdecks[sub]=true;
-  d.cards.push({q,a,wrongs,class:cls,deck,sub});
-  save();
-  ['#q','#a','#w1','#w2','#w3','#sd'].forEach(id=>$(id).value='');
-  alert('Card saved to deck.');
-});
+$('#btnClearBulk').addEventListener('click', ()=> $('#bulkText').value='');
 
 /* ---------- Build view ---------- */
-function selectionsFromTree(root){
-  // read checkboxes -> normalized selections
-  const sel = {};
-  $$('.tree input[type=checkbox][data-level="class"]', root).forEach(clsBox=>{
-    if(!clsBox.checked) return;
-    const cls = clsBox.value;
-    // whole class?
-    if(clsBox.dataset.all==='1'){
-      // include all decks fully
-      const dmap = {};
-      for(const d of Object.keys(state.classes[cls]?.decks||{})) dmap[d] = '*';
-      sel[cls] = dmap;
-      return;
-    }
-  });
-
-  // deck-level
-  $$('.tree input[type=checkbox][data-level="deck"]', root).forEach(dBox=>{
-    if(!dBox.checked) return;
-    const cls = dBox.dataset.class, deck = dBox.value;
-    if(!sel[cls]) sel[cls]={};
-    if(dBox.dataset.all==='1'){ sel[cls][deck]='*'; }
-  });
-
-  // subdeck-level (if any are checked)
-  $$('.tree input[type=checkbox][data-level="sub"]', root).forEach(sBox=>{
-    if(!sBox.checked) return;
-    const cls=sBox.dataset.class, deck=sBox.dataset.deck, sub=sBox.value;
-    if(!sel[cls]) sel[cls]={};
-    if(!sel[cls][deck] || sel[cls][deck]==='*') sel[cls][deck]=new Set();
-    sel[cls][deck] instanceof Set ? sel[cls][deck].add(sub) : sel[cls][deck]=new Set([sub]);
-  });
-
-  // convert sets to serializable
-  for(const [cls,dmap] of Object.entries(sel)){
-    for(const [deck,v] of Object.entries(dmap)){
-      if(v instanceof Set) dmap[deck] = Array.from(v);
-    }
-  }
-  return sel;
-}
-function deserializeSelections(obj){
-  // convert array to Set where needed
-  const out={};
-  for(const [cls,dmap] of Object.entries(obj||{})){
-    out[cls]={};
-    for(const [deck,v] of Object.entries(dmap)){
-      out[cls][deck] = (v==='*') ? '*' : new Set(v);
-    }
-  }
-  return out;
-}
-
-function buildTree(containerId, allowClassAll=true){
-  const box = $(containerId);
-  const tree = classDeckTree();
-  box.innerHTML = '';
-  const wrap = document.createElement('div'); wrap.className='tree';
-  tree.forEach(node=>{
-    const clsId = uid();
-    const clsLi = document.createElement('div');
-    clsLi.innerHTML = `
-      <label><input type="checkbox" data-level="class" data-all="${allowClassAll?1:0}" value="${escapeHtml(node.class)}">
-      <strong>${escapeHtml(node.class)}</strong></label>
-      <ul></ul>`;
-    const ul = $('ul', clsLi);
-    // merge by deck name (already unique in model)
-    node.decks.forEach(d=>{
-      const deckLi = document.createElement('li');
-      const subList = d.sub.length ? `<ul>${d.sub.map(s=>`
-          <li><label><input type="checkbox" data-level="sub" data-class="${escapeHtml(node.class)}" data-deck="${escapeHtml(d.deck)}" value="${escapeHtml(s)}"><span class="badge-pill">${escapeHtml(s)}</span></label></li>`).join('')}</ul>` : '';
-      deckLi.innerHTML = `
-        <label><input type="checkbox" data-level="deck" data-class="${escapeHtml(node.class)}" data-all="1" value="${escapeHtml(d.deck)}">
-          <span class="badge-pill">📚 ${escapeHtml(d.deck)}</span>
-        </label>
-        ${subList}`;
-      ul.appendChild(deckLi);
-    });
-    wrap.appendChild(clsLi);
-  });
-  box.appendChild(wrap);
-  return wrap;
-}
-
 let chooseTreeEl, practiceTreeEl;
 
-function renderBuildTrees(){
-  // for Create
-  renderCreate();
-  // for Build
-  chooseTreeEl = buildTree('#chooseTree');
-  // for Practice (student/admin preview)
-  practiceTreeEl = buildTree('#practiceTree', false);
+function buildTree(containerId, allowClassAll=true){
+  const host=$(containerId);
+  host.innerHTML='';
+  const tree = classDeckTree();
+  const wrap=document.createElement('div'); wrap.className='tree';
+  tree.forEach(node=>{
+    const clsDiv=document.createElement('div');
+    clsDiv.innerHTML = `
+      <label><input type="checkbox" data-level="class" data-all="${allowClassAll?1:0}" value="${esc(node.class)}"><strong>${esc(node.class)}</strong></label>
+      <ul></ul>`;
+    const ul=$('ul',clsDiv);
+    node.decks.forEach(d=>{
+      const li=document.createElement('li');
+      const subList = d.sub.length ? `<ul>${d.sub.map(s=>`
+        <li><label><input type="checkbox" data-level="sub" data-class="${esc(node.class)}" data-deck="${esc(d.deck)}" value="${esc(s)}"><span class="badge-pill">${esc(s)}</span></label></li>
+      `).join('')}</ul>` : '';
+      li.innerHTML = `
+        <label><input type="checkbox" data-level="deck" data-class="${esc(node.class)}" data-all="1" value="${esc(d.deck)}">
+          <span class="badge-pill">📚 ${esc(d.deck)}</span></label>
+        ${subList}`;
+      ul.appendChild(li);
+    });
+    wrap.appendChild(clsDiv);
+  });
+  host.appendChild(wrap);
+  return wrap;
 }
-
+function selectionsFromTree(root){
+  const sel={};
+  // decks
+  $$('input[data-level="deck"]',root).forEach(b=>{
+    if(!b.checked) return;
+    const cls=b.dataset.class, deck=b.value;
+    sel[cls] ??= {};
+    sel[cls][deck] = '*'; // whole deck
+  });
+  // subs
+  $$('input[data-level="sub"]',root).forEach(b=>{
+    if(!b.checked) return;
+    const cls=b.dataset.class, deck=b.dataset.deck, sub=b.value;
+    sel[cls] ??= {}; sel[cls][deck] ??= [];
+    if(sel[cls][deck] === '*') return; // already whole deck
+    if(!Array.isArray(sel[cls][deck])) sel[cls][deck]=[];
+    if(!sel[cls][deck].includes(sub)) sel[cls][deck].push(sub);
+  });
+  // class-all (if checked but not overridden by deck/sub we’ll expand) – do after
+  $$('input[data-level="class"]',root).forEach(b=>{
+    if(!b.checked || b.dataset.all!=='1') return;
+    const cls=b.value;
+    sel[cls] ??= {};
+    const decks = Object.keys(state.classes?.[cls]?.decks||{});
+    decks.forEach(d=>{ sel[cls][d] ??= '*'; });
+  });
+  return sel;
+}
+function renderBuild(){
+  fillDatalist('#testList', Object.keys(state.tests).sort());
+  chooseTreeEl = buildTree('#chooseTree', true);
+}
 $('#btnSaveTest').addEventListener('click', ()=>{
-  const name = $('#testName').value.trim();
-  if(!name){ alert('Enter a test name.'); return; }
-  const title = $('#testTitle').value.trim() || name;
-  const count = parseInt($('#testCount').value,10) || 30;
-  const selections = selectionsFromTree(chooseTreeEl);
-  if(Object.keys(selections).length===0){ alert('Pick at least one class/deck/sub‑deck.'); return; }
-  state.tests[name] = {title, count, selections};
-  save(); renderBuild(); alert('Test saved.');
+  const name=$('#testName').value.trim(); if(!name){ alert('Enter a test name.'); return; }
+  const title=$('#testTitle').value.trim() || name;
+  const count=parseInt($('#testCount').value,10)||30;
+  const selections=selectionsFromTree(chooseTreeEl);
+  if(!Object.keys(selections).length){ alert('Pick some content from the tree.'); return; }
+  state.tests[name] = {title,count,selections};
+  save(); alert('Test saved.');
 });
-
 $('#btnDeleteTest').addEventListener('click', ()=>{
-  const t = $('#testName').value.trim();
-  if(!t || !state.tests[t]){ alert('Pick a test to delete.'); return; }
-  if(confirm(`Delete test "${t}"?`)){ delete state.tests[t]; save(); renderBuild(); }
+  const name=$('#testName').value.trim(); if(!name||!state.tests[name]){ alert('Pick an existing test.'); return; }
+  if(confirm(`Delete test "${name}"?`)){ delete state.tests[name]; save(); renderBuild(); }
 });
-
 $('#btnCopyStudent').addEventListener('click', ()=>{
-  const t = $('#testName').value.trim();
-  if(!t || !state.tests[t]){ alert('Save/select a test first.'); return; }
-  const url = `${location.origin}${location.pathname}?view=quiz&mode=student&test=${encodeURIComponent(t)}`;
-  navigator.clipboard.writeText(url).then(()=> alert('Student link copied to clipboard.'));
+  const name=$('#testName').value.trim(); if(!name||!state.tests[name]){ alert('Save/select a test first.'); return; }
+  const url = `${location.origin}${location.pathname}?view=quiz&mode=student&test=${encodeURIComponent(name)}`;
+  navigator.clipboard.writeText(url).then(()=> alert('Student link copied.'));
 });
 $('#btnOpenStudent').addEventListener('click', ()=>{
-  const t = $('#testName').value.trim();
-  if(!t || !state.tests[t]){ alert('Save/select a test first.'); return; }
-  const url = `${location.origin}${location.pathname}?view=quiz&mode=student&test=${encodeURIComponent(t)}`;
-  window.open(url, '_blank');
+  const name=$('#testName').value.trim(); if(!name||!state.tests[name]){ alert('Save/select a test first.'); return; }
+  const url = `${location.origin}${location.pathname}?view=quiz&mode=student&test=${encodeURIComponent(name)}`;
+  window.open(url,'_blank');
 });
 
-function renderBuild(){
-  // lists
-  fillDatalist('#testList', Object.keys(state.tests).sort());
-  renderBuildTrees();
-
-  // if testName matches existing, load its selections
-  const tname = $('#testName').value.trim();
-  if(state.tests[tname]){
-    $('#testTitle').value = state.tests[tname].title || tname;
-    $('#testCount').value = state.tests[tname].count || 30;
-    // check boxes based on selections
-    const sel = deserializeSelections(state.tests[tname].selections);
-    // clear
-    $$('input[type=checkbox]', chooseTreeEl).forEach(b=>b.checked=false);
-    for(const [cls,dmap] of Object.entries(sel)){
-      if(dmap && Object.keys(dmap).length === Object.keys(state.classes[cls]?.decks||{}).length){
-        // may set class checkbox (visual)
-        const cbox = $(`input[data-level="class"][value="${CSS.escape(cls)}"]`, chooseTreeEl);
-        if(cbox) cbox.checked = false; // leave to per-deck to be explicit
-      }
-      for(const [deck,v] of Object.entries(dmap)){
-        const dbox = $(`input[data-level="deck"][data-class="${CSS.escape(cls)}"][value="${CSS.escape(deck)}"]`, chooseTreeEl);
-        if(dbox){ dbox.checked = (v==='*'); }
-        if(v!=='*' && v instanceof Set === false){
-          // array of subs
-          for(const s of v){
-            const sbox = $(`input[data-level="sub"][data-class="${CSS.escape(cls)}"][data-deck="${CSS.escape(deck)}"][value="${CSS.escape(s)}"]`, chooseTreeEl);
-            if(sbox) sbox.checked = true;
-          }
-        }
-      }
-    }
-  }
-}
-
-/* ---------- Practice view ---------- */
+/* ---------- Practice (flip cards) ---------- */
+let practiceTreeEl;
 function renderPractice(){
-  const tests = Object.keys(state.tests);
+  const tests = Object.keys(state.tests).map(t=>({value:t,label:t}));
   fillSelect('#practiceTest', tests);
-  renderBuildTrees(); // ensure tree is fresh
+  practiceTreeEl = buildTree('#practiceTree', false);
   $('#practiceStage').classList.add('hidden');
 }
-
 $('#btnStartPractice').addEventListener('click', ()=>{
-  const t = $('#practiceTest').value;
-  if(!t){ alert('Select a test first.'); return; }
-  const baseSel = deserializeSelections(state.tests[t].selections);
-  // override with user's hand‑picked items in practiceTree (optional)
+  const t=$('#practiceTest').value; if(!t){ alert('Select a test.'); return; }
+  const base = deserializeSelections(state.tests[t].selections);
   const pick = selectionsFromTree(practiceTreeEl);
-  // merge: if pick empty, use baseSel; else intersect
-  const sel = Object.keys(pick).length? intersectSelections(baseSel, deserializeSelections(pick)) : baseSel;
-  const pool = pickCardsFromSelections(sel);
-  if(pool.length===0){ alert('No cards matched your selection.'); return; }
-  const stage = $('#practiceStage');
-  stage.classList.remove('hidden');
-  runFlashcards(stage, shuffle([...pool]));
+  const use = Object.keys(pick).length ? intersectSel(base,pick) : base;
+  const cards=pickCardsFromSelections(use);
+  if(!cards.length){ alert('No cards match selection.'); return; }
+  startFlashcards(cards);
 });
-
-function intersectSelections(a,b){
-  // returns selections that exist in both
+function intersectSel(a,b){
   const out={};
-  for(const [cls,dmap] of Object.entries(a)){
-    for(const [deck,va] of Object.entries(dmap)){
+  for(const [cls, dmap] of Object.entries(a)){
+    for(const [deck, va] of Object.entries(dmap)){
       const vb = b?.[cls]?.[deck];
       if(!vb) continue;
-      if(va==='*' && vb==='*'){ if(!out[cls]) out[cls]={}; out[cls][deck]='*'; continue; }
-      const setA = (va==='*') ? new Set(Object.keys(state.classes[cls]?.decks?.[deck]?.subdecks||{})) : new Set(va);
-      const setB = (vb==='*') ? new Set(Object.keys(state.classes[cls]?.decks?.[deck]?.subdecks||{})) : new Set(vb);
-      const inter = new Set([...setA].filter(s=>setB.has(s)));
-      if(inter.size){ if(!out[cls]) out[cls]={}; out[cls][deck]=inter; }
+      if(va==='*' && vb==='*'){ out[cls]??={}; out[cls][deck]='*'; continue; }
+      const Sa = va==='*' ? new Set(Object.keys(state.classes[cls].decks[deck].subdecks)) : new Set(va);
+      const Sb = vb==='*' ? new Set(Object.keys(state.classes[cls].decks[deck].subdecks)) : new Set(vb);
+      const inter=[...Sa].filter(x=>Sb.has(x));
+      if(inter.length){ out[cls]??={}; out[cls][deck]=inter; }
     }
   }
   return out;
 }
-
-function runFlashcards(container, cards){
-  let i=0;
-  function render(){
-    if(i>=cards.length){
-      container.innerHTML = `<div class="qcard"><strong>All done.</strong></div>`;
-      return;
-    }
-    const c = cards[i];
-    container.innerHTML = `
-      <div class="qcard">
-        <div class="qtext">Q${i+1}/${cards.length}: ${escapeHtml(c.q)}</div>
-        <button class="primary" id="flip">Show answer</button>
-        <div id="ans" class="hidden" style="margin-top:10px">
-          <div class="opt correct">Answer: ${escapeHtml(c.a)}</div>
-          <div class="muted small">Sub‑deck: ${escapeHtml(c.sub||'—')}</div>
-          <div class="row"><button id="prev">Prev</button><button id="next" class="primary">Next</button></div>
-        </div>
-      </div>`;
-    $('#flip',container).onclick=()=>$('#ans',container).classList.remove('hidden');
-    $('#prev',container).onclick=()=>{ i=Math.max(0,i-1); render(); };
-    $('#next',container).onclick=()=>{ i++; render(); };
-  }
+function startFlashcards(cards){
+  const stage=$('#practiceStage'); stage.classList.remove('hidden');
+  let i=0; cards = shuffle([...cards]);
+  const render=()=>{
+    stage.innerHTML='';
+    const card=$('#tpl-flip').content.firstElementChild.cloneNode(true);
+    $('.qtext',card).textContent = `Q${i+1}/${cards.length}: ${cards[i].q}`;
+    $('.ans',card).textContent = cards[i].a;
+    card.addEventListener('click', ()=> card.classList.toggle('flipped'));
+    const nav=document.createElement('div'); nav.className='row qnav';
+    nav.innerHTML=`<button class="ghost" id="prev">Prev</button>
+                   <div class="muted small">${i+1}/${cards.length}</div>
+                   <button class="ghost" id="shuffle">Shuffle</button>
+                   <button class="primary" id="next">Next</button>`;
+    stage.append(card, nav);
+    $('#prev').onclick=()=>{ i=Math.max(0,i-1); render(); }
+    $('#next').onclick=()=>{ i=Math.min(cards.length-1,i+1); render(); }
+    $('#shuffle').onclick=()=>{ shuffle(cards); i=0; render(); }
+  };
   render();
 }
 
-/* ---------- Quiz view ---------- */
+/* ---------- Quiz (MCQ) ---------- */
 function renderQuiz(){
-  const tests = Object.keys(state.tests);
+  const tests=Object.keys(state.tests).map(t=>({value:t,label:t}));
   fillSelect('#quizTest', tests);
-  $('#studentDate').value = todayISO();
+  $('#studentDate').value=todayISO();
   $('#quizStage').classList.add('hidden');
 }
-
 $('#btnStartQuiz').addEventListener('click', ()=>{
-  const t = $('#quizTest').value;
-  const nm = $('#studentName').value.trim();
-  const loc = $('#studentLoc').value.trim();
-  const dt = $('#studentDate').value;
-  if(!t){ alert('Select a test first.'); return; }
-  if(!nm || !loc){ alert('Name and Location are required.'); return; }
+  const t=$('#quizTest').value, nm=$('#studentName').value.trim(), loc=$('#studentLoc').value.trim(), dt=$('#studentDate').value;
+  if(!t){ alert('Select a test.'); return; }
+  if(!nm || !loc){ alert('Name and Location required.'); return; }
+  const test=state.tests[t]; const pool=pickCardsFromSelections(deserializeSelections(test.selections));
+  if(!pool.length){ alert('This test has no cards.'); return; }
+  const questions = shuffle(pool).slice(0, Math.min(test.count||30, pool.length));
+  startQuiz(t, test.title||t, questions, nm, loc, dt);
+});
 
-  const test = state.tests[t];
-  const pool = pickCardsFromSelections( deserializeSelections(test.selections) );
-  if(!pool.length){ alert('No cards in this test.'); return; }
-  const questions = shuffle(pool).slice(0, Math.min(test.count || 30, pool.length));
-  const stage = $('#quizStage'); stage.classList.remove('hidden');
+function startQuiz(testName, title, questions, name, location, dateISO){
+  const stage=$('#quizStage'); stage.classList.remove('hidden');
+  let idx=0; const answers=new Array(questions.length).fill(null);
 
-  const answers = [];
-  let idx=0;
-
-  function renderQ(){
-    if(idx>=questions.length){ return renderFinish(); }
-    const q = questions[idx];
-    // build options
-    const opts = shuffle([q.a, ...q.wrongs]).slice(0, Math.max(2, Math.min(4, 1+q.wrongs.length)));
-    stage.innerHTML = '';
-    const card = $('#tpl-question').content.firstElementChild.cloneNode(true);
-    $('.qtext',card).textContent = `Q${idx+1}/${questions.length}: ${q.q}`;
-    const box = $('.opts',card);
+  const renderQ=()=>{
+    stage.innerHTML='';
+    const q=questions[idx];
+    const node=$('#tpl-question').content.firstElementChild.cloneNode(true);
+    $('.qtext',node).textContent = `Q${idx+1}/${questions.length}: ${q.q}`;
+    const opts=shuffle([q.a, ...q.wrongs]).slice(0, Math.max(2, Math.min(4, 1+q.wrongs.length)));
+    const box=$('.opts',node);
     opts.forEach(op=>{
-      const b = document.createElement('button');
+      const b=document.createElement('button');
       b.className='opt';
-      b.textContent = op;
-      b.onclick = ()=>{
-        const correct = (op===q.a);
-        answers.push({q:q.q, answer:q.a, choice:op, correct});
-        idx++; renderQ();
+      b.textContent=op;
+      if(answers[idx] && answers[idx].choice===op){
+        b.classList.add(answers[idx].correct?'correct':'incorrect');
+      }
+      b.onclick=()=>{
+        const correct=(op===q.a);
+        answers[idx]={ q:q.q, answer:q.a, choice:op, correct };
+        // show immediate feedback
+        $$('button',box).forEach(x=>x.disabled=true);
+        b.classList.add(correct?'correct':'incorrect');
       };
       box.appendChild(b);
     });
-    stage.appendChild(card);
-  }
+    $('[data-progress]',node).textContent = `${idx+1}/${questions.length}`;
+    $('[data-prev]',node).onclick = ()=>{ idx=Math.max(0,idx-1); renderQ(); };
+    $('[data-next]',node).onclick = ()=>{
+      if(idx<questions.length-1){ idx++; renderQ(); } else { finish(); }
+    };
+    $('[data-shuffle]',node).onclick = ()=>{ shuffle(questions); idx=0; renderQ(); };
+    stage.appendChild(node);
+  };
 
-  function renderFinish(){
-    const score = answers.filter(x=>x.correct).length;
-    const total = answers.length;
-    const rec = { id:uid(), test:t, title:test.title||t, name:nm, location:loc, dateISO:dt, score, total,
-                  items:answers, mode: (getParams().get('mode')==='student')?'student':'admin' };
+  const finish=()=>{
+    const filled = answers.map((a,i)=> a || {q:questions[i].q, answer:questions[i].a, choice:'(blank)', correct:false});
+    const score = filled.filter(x=>x.correct).length;
+    const rec={ id:uid(), test:testName, title, name, location, dateISO, score, total:filled.length, items:filled,
+                mode: (getParams().get('mode')==='student')?'student':'admin' };
     state.results.push(rec); save();
-
     stage.innerHTML = `
       <div class="qcard">
         <h3>Finished!</h3>
-        <p>Thanks, <strong>${escapeHtml(nm)}</strong>! You scored <strong>${Math.round(score/total*100)}%</strong> (${score}/${total}).</p>
+        <p>Thanks, <strong>${esc(name)}</strong>! You scored <strong>${Math.round(score/filled.length*100)}%</strong> (${score}/${filled.length}).</p>
         <div class="row">
-          <button id="btnRestart" class="primary">Restart with fresh questions</button>
+          <button id="btnRestart" class="primary">Restart (fresh shuffle)</button>
           <button id="btnToPractice">Go to Practice</button>
           <button id="btnShowKey" class="success">Your Answers & Key</button>
         </div>
       </div>
-      <div id="ansKey" class="qcard hidden"></div>
-    `;
-    $('#btnRestart').onclick = ()=>{ idx=0; answers.length=0; shuffle(questions); renderQ(); };
+      <div id="ansKey" class="qcard hidden"></div>`;
+    $('#btnRestart').onclick = ()=> startQuiz(testName,title,shuffle([...questions]),name,location,dateISO);
     $('#btnToPractice').onclick = ()=> routeTo('practice');
     $('#btnShowKey').onclick = ()=>{
-      const panel = $('#ansKey');
-      panel.classList.remove('hidden');
-      panel.innerHTML = answers.map((a,i)=>`
+      const key=$('#ansKey'); key.classList.remove('hidden');
+      key.innerHTML = filled.map((a,i)=>`
         <div class="qcard">
-          <div class="qtext">Q${i+1}: ${escapeHtml(a.q)}</div>
-          <div class="opt ${a.correct?'correct':'incorrect'}">Your choice: ${escapeHtml(a.choice)}</div>
-          <div class="opt correct">Correct: ${escapeHtml(a.answer)}</div>
+          <div class="qtext">Q${i+1}: ${esc(a.q)}</div>
+          <div class="opt ${a.correct?'correct':'incorrect'}">Your choice: ${esc(a.choice)}</div>
+          <div class="opt correct">Correct: ${esc(a.answer)}</div>
         </div>`).join('');
     };
-  }
+  };
 
   renderQ();
-});
+}
 
-/* ---------- Reports (admin) & My Results ---------- */
+/* ---------- Reports & My Results ---------- */
 function renderReports(){
-  const tests = Object.keys(state.tests);
-  fillSelect('#repTest', tests);
-  const locSet = new Set(state.results.map(r=>r.location).filter(Boolean));
-  $('#repLocation').innerHTML = `<option value="">All</option>` + [...locSet].sort().map(l=>`<option>${escapeHtml(l)}</option>`).join('');
-  renderRepTable();
-  renderMissed();
+  const tests=Object.keys(state.tests).map(t=>({value:t,label:t}));
+  fillSelect('#repTest', [{value:'',label:'All'},...tests], false);
+  const locSet=[...new Set(state.results.map(r=>r.location).filter(Boolean))].sort();
+  $('#repLocation').innerHTML = `<option value="">All</option>` + locSet.map(l=>`<option>${esc(l)}</option>`).join('');
+  $('#repSort').value='dateDesc';
+  renderRepTable(); renderMissed();
 }
 function renderRepTable(){
-  const t = $('#repTest').value, loc = $('#repLocation').value, sort = $('#repSort').value;
+  const t=$('#repTest').value, loc=$('#repLocation').value, sort=$('#repSort').value;
   let rows = state.results.slice();
   if(t) rows = rows.filter(r=>r.test===t);
   if(loc) rows = rows.filter(r=>r.location===loc);
   rows.sort((a,b)=>{
     if(sort==='dateDesc') return b.dateISO.localeCompare(a.dateISO);
     if(sort==='dateAsc') return a.dateISO.localeCompare(b.dateISO);
-    if(sort==='scoreDesc') return (b.score/b.total) - (a.score/a.total);
-    return (a.score/a.total) - (b.score/b.total);
+    if(sort==='scoreDesc') return (b.score/b.total)-(a.score/a.total);
+    return (a.score/a.total)-(b.score/b.total);
   });
-  const html = `
+  $('#repTable').innerHTML = rows.length? `
     <table class="table">
       <thead><tr><th>Date</th><th>Name</th><th>Location</th><th>Test</th><th>Score</th><th></th></tr></thead>
       <tbody>
-      ${rows.map(r=>`
-        <tr>
-          <td>${escapeHtml(r.dateISO)}</td>
-          <td>${escapeHtml(r.name)}</td>
-          <td>${escapeHtml(r.location)}</td>
-          <td>${escapeHtml(r.title||r.test)}</td>
-          <td>${r.score}/${r.total}</td>
-          <td><button data-open="${r.id}">Open</button></td>
-        </tr>`).join('')}
+        ${rows.map(r=>`
+          <tr>
+            <td>${esc(r.dateISO)}</td>
+            <td>${esc(r.name)}</td>
+            <td>${esc(r.location)}</td>
+            <td>${esc(r.title||r.test)}</td>
+            <td>${r.score}/${r.total}</td>
+            <td><button data-open="${r.id}">Open</button></td>
+          </tr>`).join('')}
       </tbody>
-    </table>`;
-  $('#repTable').innerHTML = html;
-  $$('button[data-open]').forEach(b=> b.onclick = ()=>{
-    const r = state.results.find(x=>x.id===b.dataset.open);
-    openResultModal(r);
-  });
+    </table>` : `<div class="muted">No results yet.</div>`;
+  $$('button[data-open]').forEach(b=> b.onclick = ()=> openResultWindow(state.results.find(x=>x.id===b.dataset.open)));
 }
 function renderMissed(){
-  const t = $('#repTest').value;
+  const t=$('#repTest').value;
   const rows = state.results.filter(r=>!t || r.test===t);
-  const map = new Map(); // q -> [wrongCount, total]
-  for(const r of rows){
-    for(const it of r.items){
-      const m = map.get(it.q) || [0,0];
-      m[1]++; if(!it.correct) m[0]++; map.set(it.q,m);
-    }
-  }
-  const list = [...map.entries()]
-    .map(([q,[w,tot]])=>({q,w,tot,p: tot? (w/tot):0}))
-    .sort((a,b)=>b.p-a.p).slice(0,15);
+  const map=new Map(); // q -> [wrong,total]
+  rows.forEach(r=> r.items.forEach(it=>{
+    const m=map.get(it.q)||[0,0]; m[1]++; if(!it.correct) m[0]++; map.set(it.q,m);
+  }));
+  const list=[...map.entries()].map(([q,[w,tot]])=>({q,w,tot,p:w/tot})).sort((a,b)=>b.p-a.p).slice(0,20);
   $('#repMissed').innerHTML = list.length? `
     <table class="table">
       <thead><tr><th>Question</th><th>Wrong</th><th>Total</th><th>% Missed</th></tr></thead>
-      <tbody>${list.map(x=>`<tr><td>${escapeHtml(x.q)}</td><td>${x.w}</td><td>${x.tot}</td><td>${Math.round(x.p*100)}%</td></tr>`).join('')}</tbody>
+      <tbody>${list.map(x=>`<tr><td>${esc(x.q)}</td><td>${x.w}</td><td>${x.tot}</td><td>${Math.round(x.p*100)}%</td></tr>`).join('')}</tbody>
     </table>` : `<div class="muted">No data yet.</div>`;
 }
 
 /* My results */
 function renderMine(){
-  const nm = (getParams().get('name')||'').trim();
-  const mine = nm ? state.results.filter(r=>r.name.toLowerCase()===nm.toLowerCase()) : state.results.slice(-50);
+  const name = (getParams().get('name')||'').trim();
+  const mine = name ? state.results.filter(r=>r.name.toLowerCase()===name.toLowerCase()) : state.results.slice(-50);
   $('#mineTable').innerHTML = mine.length? `
     <table class="table">
       <thead><tr><th>Date</th><th>Name</th><th>Test</th><th>Score</th><th></th></tr></thead>
       <tbody>${mine.map(r=>`
         <tr>
-          <td>${escapeHtml(r.dateISO)}</td>
-          <td>${escapeHtml(r.name)}</td>
-          <td>${escapeHtml(r.title||r.test)}</td>
+          <td>${esc(r.dateISO)}</td>
+          <td>${esc(r.name)}</td>
+          <td>${esc(r.title||r.test)}</td>
           <td>${r.score}/${r.total}</td>
           <td><button data-open="${r.id}">Open</button></td>
         </tr>`).join('')}</tbody>
     </table>` : `<div class="muted">No results yet.</div>`;
-  $$(`#view-mine button[data-open]`).forEach(b=> b.onclick = ()=>{
-    const r = state.results.find(x=>x.id===b.dataset.open); openResultModal(r);
-  });
+  $$(`#view-mine button[data-open]`).forEach(b=> b.onclick = ()=> openResultWindow(state.results.find(x=>x.id===b.dataset.open)));
 }
 
-function openResultModal(r){
-  if(!r) return;
-  const win = window.open('', '_blank','width=720,height=800');
+function openResultWindow(r){
+  const w=window.open('','_blank','width=760,height=900');
   const rows = r.items.map((it,i)=>`
     <div class="qcard">
-      <div class="qtext">Q${i+1}: ${escapeHtml(it.q)}</div>
-      <div class="opt ${it.correct?'correct':'incorrect'}">Choice: ${escapeHtml(it.choice)}</div>
-      <div class="opt correct">Correct: ${escapeHtml(it.answer)}</div>
+      <div class="qtext">Q${i+1}: ${esc(it.q)}</div>
+      <div class="opt ${it.correct?'correct':'incorrect'}">Your choice: ${esc(it.choice)}</div>
+      <div class="opt correct">Correct: ${esc(it.answer)}</div>
     </div>`).join('');
-  win.document.write(`
-    <title>${escapeHtml(r.title||r.test)} — ${escapeHtml(r.name)}</title>
-    <link rel="stylesheet" href="${location.origin+location.pathname.replace(/[^/]+$/,'')}styles.css">
-    <div class="view">
-      <h2>${escapeHtml(r.title||r.test)}</h2>
+  w.document.write(`
+    <title>${esc(r.title||r.test)} — ${esc(r.name)}</title>
+    <link rel="stylesheet" href="styles.css">
+    <main class="view">
+      <h2>${esc(r.title||r.test)}</h2>
       <div class="card">
         <div class="kv">
-          <div class="muted">Name</div><div>${escapeHtml(r.name)}</div>
-          <div class="muted">Location</div><div>${escapeHtml(r.location)}</div>
-          <div class="muted">Date</div><div>${escapeHtml(r.dateISO)}</div>
+          <div class="muted">Name</div><div>${esc(r.name)}</div>
+          <div class="muted">Location</div><div>${esc(r.location)}</div>
+          <div class="muted">Date</div><div>${esc(r.dateISO)}</div>
           <div class="muted">Score</div><div><strong>${r.score}/${r.total}</strong></div>
         </div>
       </div>
       <section class="card">${rows}</section>
-    </div>`);
-  win.document.close();
+    </main>`);
+  w.document.close();
 }
 
 /* ---------- Export CSV ---------- */
 $('#btnExportCSV').addEventListener('click', ()=>{
-  const fields = ['dateISO','name','location','test','title','score','total'];
-  const lines = [fields.join(',')];
+  const fields=['dateISO','name','location','test','title','score','total'];
+  const lines=[fields.join(',')];
   for(const r of state.results){
-    const row = fields.map(f => `"${String(r[f]??'').replace(/"/g,'""')}"`).join(',');
-    lines.push(row);
+    lines.push(fields.map(f=>`"${String(r[f]??'').replace(/"/g,'""')}"`).join(','));
   }
-  const blob = new Blob([lines.join('\n')],{type:'text/csv'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download='results.csv'; a.click();
-  URL.revokeObjectURL(a.href);
+  const blob=new Blob([lines.join('\n')],{type:'text/csv'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='results.csv'; a.click(); URL.revokeObjectURL(a.href);
 });
 
-/* ---------- Router wiring & restrictions ---------- */
+/* ---------- Navigation ---------- */
 function routeTo(view){
   setParams({view});
-  activateView(view); // also refresh content each time
+  activateView(view);
   if(view==='create') renderCreate();
   if(view==='build') renderBuild();
   if(view==='practice') renderPractice();
@@ -643,42 +561,35 @@ function routeTo(view){
   if(view==='reports') renderReports();
   if(view==='mine') renderMine();
 }
+$$('.tab').forEach(b=> b.addEventListener('click', ()=> routeTo(b.dataset.route)));
 
-// Tabs act as router
-$$('.tab').forEach(btn=> btn.addEventListener('click', ()=> routeTo(btn.dataset.route)));
-
+/* ---------- Boot & Student restrictions ---------- */
 function boot(){
-  renderBuildTrees();
-
-  // Student restriction mode
-  const sp = getParams();
-  const mode = sp.get('mode') || '';
-  const testParam = sp.get('test') || '';
+  const sp=getParams();
+  const mode=sp.get('mode')||'';
+  const test=sp.get('test')||'';
 
   if(mode==='student'){
-    // hide admin tabs, lock to student
-    $('#modeBadge').textContent = 'Student link';
-    // only show Practice/Quiz/My Results
+    $('#modeBadge').textContent='Student link';
+    // Hide admin-only tabs
     $$('.tab').forEach(b=>{
-      const ok = ['practice','quiz','mine'].includes(b.dataset.route);
+      const ok=['practice','quiz','mine'].includes(b.dataset.route);
       b.style.display = ok? '' : 'none';
     });
-    // preselect test in dropdowns
-    requestAnimationFrame(()=>{
-      routeTo(sp.get('view') || 'quiz');
-      if(testParam && state.tests[testParam]){
-        fillSelect('#quizTest', [testParam], false);
-        fillSelect('#practiceTest', [testParam], false);
-      }
-    });
-  } else {
-    $('#modeBadge').textContent = 'Admin';
-    routeTo(sp.get('view') || 'create');
+  }else{
+    $('#modeBadge').textContent='Admin';
   }
 
-  // default date
-  const d = $('#studentDate'); if(d) d.value = todayISO();
+  // First render
+  routeTo(sp.get('view') || (mode==='student'?'quiz':'create'));
+
+  // Pre-select test for student link
+  if(mode==='student' && test && state.tests[test]){
+    fillSelect('#quizTest', [{value:test,label:test}], false);
+    fillSelect('#practiceTest', [{value:test,label:test}], false);
+  }
+
+  // Default date
+  const d=$('#studentDate'); if(d) d.value=todayISO();
 }
 boot();
-
-/* End */ 
