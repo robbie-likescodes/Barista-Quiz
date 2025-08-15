@@ -75,18 +75,8 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 /* Chips */
 .chips{display:flex;flex-wrap:wrap;gap:10px}
 .chip{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--panel2);padding:8px 12px;border-radius:999px}
-
-/* Removable chip “×” button */
-.chip .remove {
-  background:none;
-  border:none;
-  color:var(--muted);
-  cursor:pointer;
-  font-size:14px;
-  line-height:1;
-  padding:0;
-}
-.chip .remove:hover { color: var(--danger); }
+.chip .remove{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:0}
+.chip .remove:hover{color:var(--danger)}
 
 /* Switch */
 .switch{display:flex;align-items:center;gap:8px}
@@ -138,134 +128,39 @@ body.student .tab[data-route="reports"]{display:none}
 .missed .misscount{min-width:60px;text-align:center;border:1px solid var(--line);background:#1a2140;border-radius:10px;padding:6px}
 
 /* --- Utility & A11y --- */
-.sr-only {
-  position: absolute !important;
-  width: 1px; height: 1px;
-  padding: 0; margin: -1px;
-  overflow: hidden; clip: rect(0,0,0,0);
-  white-space: nowrap; border: 0;
-}
-.noscript {
-  background: #ffdede; color: #3a0b0b;
-  padding: 8px 12px; text-align: center;
-  font-weight: 600;
-}
-.micro { font-size: 12px; color: var(--muted); opacity: .9; }
-kbd {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 12px; line-height: 1;
-  display: inline-block;
-  padding: 4px 6px;
-  border: 1px solid var(--line);
-  border-bottom-width: 2px;
-  border-radius: 6px;
-  background: #10172a;
-  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 1px 0 rgba(0,0,0,.4);
-}
-:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--brand) 70%, white 0%);
-  outline-offset: 2px;
-}
-.btn:focus-visible,
-.input:focus-visible,
-select.input:focus-visible,
-.tab:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 2px;
-}
-.tab:hover { filter: brightness(1.06); }
-.tab.active:focus-visible { outline-color: var(--text); }
-#practiceCard { cursor: pointer; }
-#practiceCard:focus-visible .front,
-#practiceCard:focus-visible .back {
-  box-shadow: 0 0 0 2px var(--brand) inset;
-}
-.options .option span kbd { margin-right: 6px; opacity: .9; }
-.option input[type="radio"] { transform: scale(1.1); }
-#newSubdeck { transition: max-height .25s ease, opacity .2s ease; max-height: 120px; }
-#newSubdeck.hidden { max-height: 0; opacity: 0; overflow: hidden; }
-@media (max-width: 720px) {
-  .tabs { gap: 8px; }
-  .tab { padding: 7px 12px; }
-}
-.table th { color: color-mix(in oklab, var(--muted) 85%, white 15%); }
-.select-wrap { isolation: isolate; }
+.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.noscript{background:#ffdede;color:#3a0b0b;padding:8px 12px;text-align:center;font-weight:600}
+.micro{font-size:12px;color:var(--muted);opacity:.9}
+kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:12px;line-height:1;display:inline-block;padding:4px 6px;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;background:#10172a;box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 1px 0 rgba(0,0,0,.4)}
+:focus-visible{outline:2px solid color-mix(in oklab,var(--brand) 70%,white 0%);outline-offset:2px}
+.btn:focus-visible,.input:focus-visible,select.input:focus-visible,.tab:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.tab:hover{filter:brightness(1.06)}
+.tab.active:focus-visible{outline-color:var(--text)}
+#practiceCard{cursor:pointer}
+#practiceCard:focus-visible .front,#practiceCard:focus-visible .back{box-shadow:0 0 0 2px var(--brand) inset}
+.options .option span kbd{margin-right:6px;opacity:.9}
+.option input[type="radio"]{transform:scale(1.1)}
+#newSubdeck{transition:max-height .25s ease,opacity .2s ease;max-height:120px}
+#newSubdeck.hidden{max-height:0;opacity:0;overflow:hidden}
+@media (max-width:720px){.tabs{gap:8px}.tab{padding:7px 12px}}
+.table th{color:color-mix(in oklab,var(--muted) 85%,white 15%)}
+.select-wrap{isolation:isolate}
 
 /* ==== Merged-by-name Deck UI (CREATE) =================================== */
-#deckMeta {
-  display: grid;
-  gap: 6px;
-}
-#deckMetaTitle {
-  display: inline-block;
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel2);
-  font-size: 13px;
-}
-#deckMetaSubs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-#deckMetaSubs .chip,
-#subdeckManagerList .chip {
-  background: var(--chip);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--text);
-}
-/* Removable chips in deck meta and subdeck manager */
-#deckMetaSubs .chip .remove,
-#subdeckManagerList .chip .remove {
-  margin-left: 4px;
-  color: var(--muted);
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-}
-#deckMetaSubs .chip .remove:hover,
-#subdeckManagerList .chip .remove:hover {
-  color: var(--danger);
-}
-#subdeckManager {
-  background: linear-gradient(180deg, #141a2e, #12182b);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px;
-}
-#subdeckManager > summary.card-head { cursor: pointer; }
-#subdeckManagerList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-#subdeckManager .grid.g2 .input {
-  min-width: 0;
-}
-#deckSelect.input {
-  background: linear-gradient(0deg, rgba(255,255,255,0.02), rgba(255,255,255,0.02)), var(--panel2);
-}
-#newClassName, #newDeckName, #newSubdeck, #subdeckNewName {
-  background: linear-gradient(0deg, rgba(255,255,255,0.02), rgba(255,255,255,0.02)), var(--panel2);
-}
-#newSubdeck {
-  transition: max-height .25s ease, opacity .2s ease;
-  max-height: 120px;
-}
-#newSubdeck.hidden {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-}
-#view-create .card .card-head strong { white-space: nowrap; }
-@media (max-width: 800px) {
-  #deckMetaTitle { font-size: 12px; }
-  #deckMetaSubs .chip,
-  #subdeckManagerList .chip { font-size: 11px; padding: 5px 8px; }
+#deckMeta{display:grid;gap:6px}
+#deckMetaTitle{display:inline-block;padding:6px 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);font-size:13px}
+#deckMetaSubs{display:flex;flex-wrap:wrap;gap:8px}
+#deckMetaSubs .chip,#subdeckManagerList .chip{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:12px;color:var(--text)}
+#deckMetaSubs .chip .remove,#subdeckManagerList .chip .remove{margin-left:4px;color:var(--muted);background:none;border:none;cursor:pointer;font-size:14px;line-height:1}
+#deckMetaSubs .chip .remove:hover,#subdeckManagerList .chip .remove:hover{color:var(--danger)}
+#subdeckManager{background:linear-gradient(180deg,#141a2e,#12182b);border:1px solid var(--line);border-radius:12px;padding:12px}
+#subdeckManager>summary.card-head{cursor:pointer}
+#subdeckManagerList{display:flex;flex-wrap:wrap;gap:8px}
+#subdeckManager .grid.g2 .input{min-width:0}
+#deckSelect.input{background:linear-gradient(0deg,rgba(255,255,255,0.02),rgba(255,255,255,0.02)),var(--panel2)}
+#newClassName,#newDeckName,#newSubdeck,#subdeckNewName{background:linear-gradient(0deg,rgba(255,255,255,0.02),rgba(255,255,255,0.02)),var(--panel2)}
+#view-create .card .card-head strong{white-space:nowrap}
+@media (max-width:800px){
+  #deckMetaTitle{font-size:12px}
+  #deckMetaSubs .chip,#subdeckManagerList .chip{font-size:11px;padding:5px 8px}
 }
