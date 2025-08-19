@@ -10,6 +10,12 @@
    - Reports: filters/sorts, view Active/Archived, archive/restore/delete, “Most Missed”
    - Location averages
    - Full backup export/import (Merge or Replace) preserving classes/decks/subdecks/tests/results/archived
+
+   NEW (per your requests):
+   1) Reports: filter by Date Range AND by Test
+   2) Create: filter/show cards by Sub‑deck (view sub‑decks individually)
+   3) Create: after creating a deck, auto-select it in “Pick Existing Deck”
+   4) Create: deleting a card no longer changes deck or scrolls to top
 */
 
 //////////////////// tiny DOM/storage helpers ////////////////////
@@ -50,7 +56,7 @@ let state = {
   archived: store.get(KEYS.archived, []),
   practice: { cards:[], idx:0 },
   quiz    : { items:[], idx:0, n:30, locked:false, testId:'' },
-  ui      : { currentTestId: null }
+  ui      : { currentTestId: null, subFilter: '' } // NEW: subFilter for Create view
 };
 
 //////////////////////////// toasts //////////////////////////////
@@ -234,7 +240,14 @@ function renderCreate(){
   on($('#bulkSummaryBtn'),'click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
   on($('#bulkAddBtn'),'click',bulkAddCards);
   on($('#addCardBtn'),'click',addCard);
-  on($('#deckSelect'),'change',()=>{ renderDeckMeta(); renderSubdeckManager(); renderCardsList(); });
+
+  // Reset sub-filter when changing deck
+  on($('#deckSelect'),'change',()=>{ 
+    state.ui.subFilter=''; 
+    renderDeckMeta(); 
+    renderSubdeckManager(); 
+    renderCardsList(); 
+  });
 }
 
 function renderDeckSelect(){
@@ -243,7 +256,7 @@ function renderDeckSelect(){
   if(arr.length===0){ deckSelect.innerHTML=`<option value="">No decks yet</option>`; return; }
   deckSelect.innerHTML=arr.map(d=>{
     const subs=deckSubTags(d);
-    const subTxt=subs.length?` • ${subs.length} sub-deck${subs.length>1?'s':''}`:'';
+    const subTxt=subs.length?` • ${subs.length} sub-deck${subs.length>1?'s':''}`:''; 
     return `<option value="${d.id}">${esc(d.deckName)} (${d.cards.length}) [${esc(d.className)}${subTxt}]</option>`;
   }).join('');
   deckSelect.style.pointerEvents='auto';
@@ -269,6 +282,15 @@ function renderDeckMeta(){
       renderDeckMeta(); renderSubdeckManager(); renderCardsList();
     });
   });
+
+  // NEW: populate "Show sub-deck" filter if it exists in HTML
+  const subSel = $('#cardsSubFilter');
+  if(subSel){
+    const curr = state.ui.subFilter || '';
+    subSel.innerHTML = `<option value="">All sub-decks</option>` + subs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    if(curr && subs.includes(curr)) subSel.value = curr; else subSel.value = '';
+    subSel.onchange = ()=>{ state.ui.subFilter = subSel.value || ''; renderCardsList(); };
+  }
 }
 function renderSubdeckManager(){
   const list=$('#subdeckManagerList'); if(!list) return;
@@ -294,17 +316,44 @@ function renderCardsList(){
   const id=selectedDeckId();
   if(!id){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
   const d=state.decks[id];
-  if(!d.cards.length){ cardsList.innerHTML='<div class="hint">No cards yet—add your first one above.</div>'; return; }
-  cardsList.innerHTML=d.cards.map(c=>`
+
+  // NEW: filter by selected sub-deck if any
+  const subFilter = ($('#cardsSubFilter')?.value || state.ui.subFilter || '').trim();
+  const list = subFilter ? (d.cards||[]).filter(c => (c.sub||'') === subFilter) : (d.cards||[]);
+
+  if(!list.length){ cardsList.innerHTML='<div class="hint">No cards yet—add your first one above.</div>'; return; }
+  cardsList.innerHTML=list.map(c=>`
     <div class="cardline" data-id="${c.id}">
       <div><strong>Q:</strong> ${esc(c.q)}</div>
       <div><strong>Correct:</strong> ${esc(c.a)}<br><span class="hint">Wrong:</span> ${esc((c.distractors||[]).join(' | '))}${c.sub? `<br><span class="hint">Sub‑deck: ${esc(c.sub)}</span>`:''}</div>
       <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
     </div>`).join('');
+
+  // Delete — NEW: preserve deck selection AND scroll position
   cardsList.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',()=>{
-    const cid=b.closest('.cardline').dataset.id; d.cards=d.cards.filter(c=>c.id!==cid); store.set(KEYS.decks,state.decks); renderDeckMeta(); renderSubdeckManager(); renderCardsList(); renderDeckSelect();
+    const keepDeckId = selectedDeckId(); if(!keepDeckId) return;
+    const y = window.scrollY;
+    const d=state.decks[keepDeckId];
+    const cid=b.closest('.cardline').dataset.id;
+    d.cards=d.cards.filter(c=>c.id!==cid);
+    store.set(KEYS.decks,state.decks);
+
+    // Refresh UI while preserving selection and sub-filter
+    // (renderDeckSelect is optional; if you want dropdown counts to update immediately, keep it.)
+    renderDeckSelect();
+    const deckSelect = $('#deckSelect');
+    if (deckSelect) deckSelect.value = keepDeckId;
+
+    renderDeckMeta();
+    renderSubdeckManager();
+    renderCardsList();
+
+    // restore scroll
+    window.scrollTo(0, y);
     toast('Card deleted');
   }));
+
+  // Edit (unchanged)
   cardsList.querySelectorAll('.btn-edit').forEach(b=>b.addEventListener('click',()=>{
     const cid=b.closest('.cardline').dataset.id; const card=d.cards.find(c=>c.id===cid); if(!card) return;
     const q=prompt('Question:',card.q); if(q===null) return;
@@ -348,10 +397,17 @@ function addDeck(){
   const id=uid('deck');
   state.decks[id]={id,className:cls,deckName:dnm,cards:[],tags:sdn?[sdn]:[],createdAt:Date.now()};
   store.set(KEYS.decks,state.decks);
+
   if($('#newClassName')) $('#newClassName').value='';
   if($('#newDeckName'))  $('#newDeckName').value='';
   if($('#newSubdeck')){ $('#newSubdeck').value=''; $('#newSubdeck').classList.add('hidden'); }
+
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+
+  // NEW: auto-select the newly created deck in the dropdown
+  const deckSelect=$('#deckSelect'); 
+  if (deckSelect){ deckSelect.value = id; }
+
   toast('Deck created');
 }
 function renameDeck(){
@@ -830,38 +886,62 @@ function submitQuiz(){
 
 /////////////////////////// REPORTS //////////////////////////////
 function renderReports(){
-  // Location filter options
+  // Populate Location dropdown (existing behavior)
   const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
-  const keep=$('#repLocation')?.value;
-  if($('#repLocation')) $('#repLocation').innerHTML=`<option value="">All locations</option>`+locs.map(l=>`<option ${keep===l?'selected':''}>${esc(l)}</option>`).join('');
+  const keepLoc=$('#repLocation')?.value;
+  if($('#repLocation')) $('#repLocation').innerHTML=`<option value="">All locations</option>`+locs.map(l=>`<option ${keepLoc===l?'selected':''}>${esc(l)}</option>`).join('');
+
+  // NEW: Populate Test dropdown if present
+  const repTestSel = $('#repTest');
+  if (repTestSel){
+    const keepTest = repTestSel.value || '';
+    const tests = Object.values(state.tests).sort((a,b)=>a.name.localeCompare(b.name));
+    repTestSel.innerHTML = `<option value="">All tests</option>` + tests.map(t=>`<option ${keepTest===t.name?'selected':''}>${esc(t.name)}</option>`).join('');
+  }
 
   drawReports();
 
+  // Existing binds
   on($('#repLocation'),'change',drawReports);
   on($('#repAttemptView'),'change',drawReports);
   on($('#repSort'),'change',drawReports);
   on($('#repView'),'change',drawReports);
+
+  // NEW binds for date range + test
+  on($('#repDateFrom'),'change',drawReports);
+  on($('#repDateTo'),'change',drawReports);
+  on($('#repTest'),'change',drawReports);
 }
 function drawReports(){
-  const view   = ($('#repView')?.value || 'active');
-  const loc    = $('#repLocation')?.value || '';
-  const attempt= $('#repAttemptView')?.value || 'all';
-  const sort   = $('#repSort')?.value || 'date_desc';
+  const view    = ($('#repView')?.value || 'active');
+  const loc     = $('#repLocation')?.value || '';
+  const attempt = $('#repAttemptView')?.value || 'all';
+  const sort    = $('#repSort')?.value || 'date_desc';
+
+  // NEW
+  const fromISO = $('#repDateFrom')?.value || '';
+  const toISO   = $('#repDateTo')?.value   || '';
+  const testNm  = $('#repTest')?.value     || '';
 
   let rows = view==='archived' ? [...state.archived] : [...state.results];
 
-  if(loc) rows=rows.filter(r=>r.location===loc);
+  if(loc)    rows = rows.filter(r=>r.location===loc);
+  if(testNm) rows = rows.filter(r=>r.testName===testNm);
+  if(fromISO) rows = rows.filter(r => (r.date || '') >= fromISO);
+  if(toISO)   rows = rows.filter(r => (r.date || '') <= toISO);
+
   if(attempt!=='all'){
     const map=new Map();
     for(const r of rows){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
     rows=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); rows.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
   }
+
   if(sort==='date_desc') rows.sort((a,b)=>b.time-a.time);
   if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
   if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
   if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
   if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));
-  if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));
+  if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));  
 
   const tb=$('#repTable tbody'); if(!tb) return;
   tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
@@ -906,9 +986,10 @@ function drawReports(){
     }
   }));
 
-  renderLocationAverages(view, loc, attempt);
+  // Recompute location averages with current filters
+  renderLocationAverages(view, loc, attempt, fromISO, toISO, testNm);
 
-  // Most missed — based on ACTIVE results only
+  // Most missed — based on ACTIVE results only (unchanged)
   const baseRows=[...state.results];
   const missMap=new Map();
   for(const r of baseRows){
@@ -968,11 +1049,16 @@ function computeLocationAverages(rows){
   out.sort((a,b)=> a.location.localeCompare(b.location));
   return out;
 }
-function renderLocationAverages(view='active', locFilter='', attempt='all'){
+// UPDATED signature to respect filters
+function renderLocationAverages(view='active', locFilter='', attempt='all', fromISO='', toISO='', testNm=''){
   const box  = $('#locationAverages'); if(!box) return;
   let base = view==='archived' ? [...state.archived] : [...state.results];
 
   if (locFilter) base = base.filter(r => r.location === locFilter);
+  if (testNm)    base = base.filter(r => r.testName === testNm);
+  if (fromISO)   base = base.filter(r => (r.date || '') >= fromISO);
+  if (toISO)     base = base.filter(r => (r.date || '') <= toISO);
+
   if (attempt!=='all'){
     const map=new Map();
     for(const r of base){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
