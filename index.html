@@ -54,7 +54,7 @@
           <button id="exportDeckBtn" class="btn">Export</button>
           <button id="importDeckBtn" class="btn">Import…</button>
           <input id="importDeckInput" type="file" accept=".json,.txt" hidden>
-          <!-- JS will inject: Export All / Import Backup… buttons + hidden file input -->
+          <!-- JS injects: Export All / Import Backup… buttons + hidden backup input -->
         </div>
 
         <div class="grid g2 mt">
@@ -120,6 +120,15 @@
 
       <div class="card">
         <h3>Cards in Deck</h3>
+
+        <!-- NEW: sub-deck viewer filter -->
+        <div class="select-wrap mt-sm">
+          <label class="label" for="cardsSubFilter">Show sub‑deck</label>
+          <select id="cardsSubFilter" class="input" aria-label="Filter cards by sub-deck">
+            <!-- JS populates options; default is “All sub-decks” -->
+          </select>
+        </div>
+
         <div id="cardsList" class="list" aria-live="polite"></div>
       </div>
     </section>
@@ -315,6 +324,25 @@
               <option value="test_desc">Test Z→A</option>
               <option value="loc_asc">Location A→Z</option>
               <option value="loc_desc">Location Z→A</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- NEW: Date range + Test filters -->
+        <div class="grid g3 mt">
+          <div>
+            <label class="label" for="repDateFrom">Date from</label>
+            <input id="repDateFrom" class="input" type="date" aria-label="Filter results from date">
+          </div>
+          <div>
+            <label class="label" for="repDateTo">Date to</label>
+            <input id="repDateTo" class="input" type="date" aria-label="Filter results to date">
+          </div>
+          <div class="select-wrap">
+            <label class="label" for="repTest">Test</label>
+            <select id="repTest" class="input" aria-label="Filter by test name">
+              <option value="">All tests</option>
+              <!-- JS populates test names -->
             </select>
           </div>
         </div>
