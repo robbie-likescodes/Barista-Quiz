@@ -227,8 +227,23 @@
             <select id="quizTestSelect" class="input"></select>
           </div>
           <input id="studentName" class="input" placeholder="Your name (required)" aria-label="Your name">
-          <input id="studentLocation" class="input" placeholder="Location (required)" aria-label="Location">
+          <!-- Location: dropdown + “Other…” -->
+          <div class="select-wrap">
+            <label class="label" for="studentLocationSelect">Location</label>
+            <select id="studentLocationSelect" class="input" aria-label="Location">
+              <option value="" disabled selected>Choose location…</option>
+              <option>Huffman</option>
+              <option>Camelot</option>
+              <option>Muldoon</option>
+              <option>Boniface</option>
+              <option>Lake Otis</option>
+              <option>Office</option>
+              <option value="__OTHER__">Other…</option>
+            </select>
+            <input id="studentLocationOther" class="input mt-sm hidden" placeholder="Type location…" aria-label="Other location">
+          </div>
         </div>
+
         <div class="mt">
           <label class="label" for="studentDate">Date</label>
           <input id="studentDate" class="input" type="date">
@@ -291,6 +306,9 @@
               <option value="date_asc">Oldest first</option>
               <option value="test_asc">Test A→Z</option>
               <option value="test_desc">Test Z→A</option>
+              <!-- Optional location sorts (supported by JS) -->
+              <option value="loc_asc">Location A→Z</option>
+              <option value="loc_desc">Location Z→A</option>
             </select>
           </div>
         </div>
@@ -304,6 +322,12 @@
             </select>
           </div>
         </div>
+      </div>
+
+      <!-- New: Location Averages card -->
+      <div class="card" id="locAvgCard">
+        <h3>Location Averages</h3>
+        <div id="locationAverages" class="missed"></div>
       </div>
 
       <div class="card table-wrap">
