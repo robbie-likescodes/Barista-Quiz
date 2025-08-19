@@ -1,10 +1,11 @@
 /* Barista Flashcards & Quizzes — local-first SPA
-   Updates in this build:
+   This build includes:
    - Mobile menu: open/close + auto-close on item click + outside click close
-   - Toast confirmations for key actions (copy link, save test, import, bulk add, etc.)
+   - Toast confirmations for key actions
    - Reports: Active/Archived view with Archive, Restore, Delete (persistent)
-   - Removed "My Results" feature entirely
-   - Student mode respected via ?mode=student&test=NAME
+   - Removed "My Results"
+   - Student mode via ?mode=student&test=NAME
+   - Build view: robust Save/Rename/Delete using current test ID tracked from datalist
 */
 
 // ---------- tiny DOM helpers ----------
@@ -19,10 +20,10 @@ const store = {
 
 // ---------- keys ----------
 const KEYS = {
-  decks  : 'bq_decks_v6',
-  tests  : 'bq_tests_v6',
-  results: 'bq_results_v6',
-  archived: 'bq_results_archived_v1' // NEW: archived results
+  decks   : 'bq_decks_v6',
+  tests   : 'bq_tests_v6',
+  results : 'bq_results_v6',
+  archived: 'bq_results_archived_v1'
 };
 
 // ---------- utils ----------
@@ -36,12 +37,14 @@ const unique   = xs => Array.from(new Set(xs));
 // ---------- global state ----------
 const ADMIN_VIEWS = new Set(['create','build','reports']);
 let state = {
-  decks  : store.get(KEYS.decks, {}),
-  tests  : store.get(KEYS.tests, {}),
-  results: store.get(KEYS.results, []),
-  archived: store.get(KEYS.archived, []), // NEW
+  decks   : store.get(KEYS.decks, {}),
+  tests   : store.get(KEYS.tests, {}),
+  results : store.get(KEYS.results, []),
+  archived: store.get(KEYS.archived, []),
   practice: { cards:[], idx:0 },
-  quiz    : { items:[], idx:0, n:30, locked:false, testId:'' }
+  quiz    : { items:[], idx:0, n:30, locked:false, testId:'' },
+  // UI cache for Build view
+  ui      : { currentTestId: null }
 };
 
 // ---------- toasts ----------
@@ -64,30 +67,24 @@ function setParams(obj){
 function isStudent(){ return qs().get('mode')==='student'; }
 
 function activate(view){
-  // student cannot access admin views
   if(isStudent() && ADMIN_VIEWS.has(view)){ view='practice'; setParams({view}); }
-  // remove key handlers between views
   window.removeEventListener('keydown', window.__bqPracticeKeys__);
   window.removeEventListener('keydown', window.__bqQuizKeys__);
 
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-'+view));
-
-  // reflect active menu item
   $$('.menu-item').forEach(i => i.classList.toggle('active', i.dataset.route===view));
 
-  // render view
   if(view==='create')   renderCreate();
   if(view==='build')    renderBuild();
   if(view==='practice') renderPracticeScreen();
   if(view==='quiz')     renderQuizScreen();
   if(view==='reports')  renderReports();
 
-  // close menu after navigation
   closeMenu();
 }
 window.addEventListener('popstate', ()=>activate(qs().get('view')||'create'));
 
-// ---------- Mobile menu open/close (+auto-close on item) ----------
+// ---------- Mobile menu open/close ----------
 const menuBtn  = $('#menuBtn');
 const menuList = $('#menuList');
 
@@ -129,7 +126,7 @@ function listUniqueDecks(){
   for(const d of Object.values(state.decks)){
     const k=deckKey(d); if(!seen.has(k)){ seen.add(k); arr.push(d); }
   }
-  arr.sort((a,b)=> (a.className||'').localeCompare(b.className||'') || (a.deckName||'').localeCompare(b.deckName||''));
+  arr.sort((a,b)=> (a.className||'').localeCompare(b.className||'') || (a.deckName||'').localeCompare(b.deckName||'')); 
   return arr;
 }
 function deckSubTags(d){
@@ -379,37 +376,118 @@ $('#addCardBtn')?.addEventListener('click',()=>{
 deckSelect?.addEventListener('change',()=>{ renderDeckMeta(); renderSubdeckManager(); renderCardsList(); });
 
 // ===================================================================
-// BUILD TEST
+// BUILD TEST  (Save/Rename/Delete by ID)
 // ===================================================================
 const testsList=$('#testsList'), testNameInput=$('#testNameInput'), deckPickList=$('#deckPickList');
 const previewToggle=$('#previewToggle'), previewPanel=$('#previewPanel'), previewTitle=$('#previewTitle'), previewMeta=$('#previewMeta');
 
-function renderBuild(){ renderTestsDatalist(); renderDeckPickList(); syncPreview(); }
+function renderBuild(){ 
+  renderTestsDatalist(); 
+  renderDeckPickList(); 
+  bindTestNamePicker();     // NEW: keep currentTestId in sync
+  syncPreview(); 
+}
+
 function renderTestsDatalist(){
   const arr=Object.values(state.tests).sort((a,b)=>a.name.localeCompare(b.name));
   testsList.innerHTML=arr.map(t=>`<option value="${esc(t.name)}"></option>`).join('');
 }
+
+/** Keep state.ui.currentTestId in sync with the datalist input selection/typing */
+function bindTestNamePicker(){
+  // build name -> id map (case-insensitive)
+  function indexByName(){
+    return new Map(Object.entries(state.tests).map(([id,t])=>[t.name.toLowerCase(), id]));
+  }
+  let map = indexByName();
+
+  // refresh map when tests change
+  const refreshMap = () => { map = indexByName(); };
+
+  // when user types/picks a name, try to resolve an id
+  testNameInput.oninput = () => {
+    const typed = testNameInput.value.trim().toLowerCase();
+    state.ui.currentTestId = map.get(typed) || null;
+    if(state.ui.currentTestId){
+      const t = state.tests[state.ui.currentTestId];
+      $('#builderTitle').value = t.title || t.name || '';
+      $('#builderCount').value = t.n || 30;
+      renderDeckPickList();
+    }
+  };
+
+  // also refresh map after we re-render datalist
+  const _render = renderTestsDatalist;
+  renderTestsDatalist = function(){
+    _render();
+    refreshMap();
+  };
+}
+
 $('#saveTestBtn')?.addEventListener('click',()=>{
-  const name=testNameInput.value.trim(); if(!name) return alert('Enter or select a test name.');
-  let t=Object.values(state.tests).find(x=>x.name.toLowerCase()===name.toLowerCase());
-  if(!t){ const id=uid('test'); t=state.tests[id]={id,name,title:name,n:30,selections:[]}; }
-  t.title=$('#builderTitle').value.trim()||t.title||name;
-  t.n=Math.max(1,+$('#builderCount').value||t.n||30);
-  t.selections=dedupeSelections(readSelectionsFromUI());
+  const typedName = testNameInput.value.trim();
+  if(!typedName) return alert('Enter or select a test name.');
+
+  let id = state.ui.currentTestId;
+  let t  = id ? state.tests[id] : null;
+
+  // If no current ID, try name match (back-compat)
+  if(!t){
+    const match = Object.entries(state.tests).find(([,x])=>x.name.toLowerCase()===typedName.toLowerCase());
+    if(match){ id = match[0]; t = state.tests[id]; state.ui.currentTestId = id; }
+  }
+
+  // Create new or rename existing
+  if(!t){
+    id = uid('test');
+    t = state.tests[id] = { id, name: typedName, title: typedName, n: 30, selections: [] };
+    state.ui.currentTestId = id;
+  } else {
+    // RENAME: accept the newly typed name
+    t.name = typedName;
+  }
+
+  // Update other fields
+  t.title = $('#builderTitle').value.trim() || t.title || typedName;
+  t.n = Math.max(1, +$('#builderCount').value || t.n || 30);
+  t.selections = dedupeSelections(readSelectionsFromUI());
+
   store.set(KEYS.tests,state.tests);
-  toast(`Test “${name}” saved`);
   renderTestsDatalist();
+  toast(`Test “${t.name}” saved`);
 });
+
 $('#deleteTestBtn')?.addEventListener('click',()=>{
-  const name=testNameInput.value.trim(); if(!name) return;
-  const entry=Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name.toLowerCase());
-  if(!entry) return alert('Test not found.');
-  if(confirm(`Delete test “${name}”?`)){ delete state.tests[entry[0]]; store.set(KEYS.tests,state.tests); testNameInput.value=''; renderTestsDatalist(); renderDeckPickList(); toast('Test deleted'); }
+  // Prefer current id; fall back to name lookup for back-compat
+  let id = state.ui.currentTestId;
+  if(!id){
+    const name = testNameInput.value.trim().toLowerCase();
+    const entry = Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name);
+    if(entry) id = entry[0];
+  }
+  if(!id) return alert('Select an existing test to delete (pick from the list first).');
+
+  const name = state.tests[id]?.name || 'Test';
+  if(confirm(`Delete test “${name}”?`)){
+    delete state.tests[id];
+    store.set(KEYS.tests,state.tests);
+    // reset UI
+    state.ui.currentTestId = null;
+    testNameInput.value = '';
+    $('#builderTitle').value = '';
+    $('#builderCount').value = 30;
+    renderTestsDatalist();
+    renderDeckPickList();
+    toast('Test deleted');
+  }
 });
 
 function renderDeckPickList(){
   const decks=listUniqueDecks();
-  const selected=Object.values(state.tests).find(t=>t.name.toLowerCase()===testNameInput.value.trim().toLowerCase());
+  const // resolve selection from currentTestId or typed name
+    selected = state.ui.currentTestId ? state.tests[state.ui.currentTestId]
+              : Object.values(state.tests).find(t=>t.name.toLowerCase()===testNameInput.value.trim().toLowerCase());
+
   const selMap=new Map((selected?.selections||[]).map(s=>[s.deckId,s]));
   deckPickList.innerHTML=decks.map(d=>{
     const subs=deckSubTags(d);
@@ -463,10 +541,20 @@ $('#openShareBtn')?.addEventListener('click',()=>{
   toast('Opened student preview');
 });
 function getCurrentTestOrSave(){
-  const name=testNameInput.value.trim(); if(!name) return alert('Enter a test name first.');
-  let t=Object.values(state.tests).find(x=>x.name.toLowerCase()===name.toLowerCase());
-  if(!t){ alert('Save the test first.'); return null; }
-  t.title=$('#builderTitle').value.trim()||t.title||name; t.n=Math.max(1,+$('#builderCount').value||t.n||30); t.selections=dedupeSelections(readSelectionsFromUI()); store.set(KEYS.tests,state.tests); return t;
+  const typedName=testNameInput.value.trim();
+  if(!typedName) return alert('Enter a test name first.');
+  // if current id exists, update that record (rename handled in Save)
+  let t = state.ui.currentTestId ? state.tests[state.ui.currentTestId] : null;
+  if(!t){
+    const match = Object.values(state.tests).find(x=>x.name.toLowerCase()===typedName.toLowerCase());
+    if(!match){ alert('Save the test first.'); return null; }
+    t = match;
+  }
+  t.title=$('#builderTitle').value.trim()||t.title||typedName; 
+  t.n=Math.max(1,+$('#builderCount').value||t.n||30); 
+  t.selections=dedupeSelections(readSelectionsFromUI()); 
+  store.set(KEYS.tests,state.tests); 
+  return t;
 }
 previewToggle?.addEventListener('change',syncPreview);
 function syncPreview(){
@@ -643,7 +731,7 @@ $('#restartQuizBtn')?.addEventListener('click',()=>{ $('#quizFinished').classLis
 $('#finishedPracticeBtn')?.addEventListener('click',()=>{ setParams({view:'practice'}); activate('practice'); });
 
 // ===================================================================
-// REPORTS (with Active/Archived views + actions)
+// REPORTS (Active/Archived + actions)
 // ===================================================================
 function renderReports(){
   const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
@@ -724,7 +812,6 @@ function drawReports(){
     </td>
   </tr>`).join('');
 
-  // open detail popup (same as before)
   tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
     const id=btn.closest('tr').dataset.id; const src = view==='archived'?state.archived:state.results;
     const r=src.find(x=>x.id===id); if(!r) return;
@@ -740,7 +827,6 @@ function drawReports(){
     </body>`);
   }));
 
-  // actions
   tb.querySelectorAll('button[data-act]').forEach(b=>b.addEventListener('click',()=>{
     const id = b.closest('tr').dataset.id;
     const act= b.dataset.act;
@@ -751,7 +837,7 @@ function drawReports(){
     }
   }));
 
-  // Missed Summary from ACTIVE only (archived excluded)
+  // Missed Summary from ACTIVE only
   const baseRows=[...state.results];
   const missMap=new Map();
   for(const r of baseRows){
@@ -792,7 +878,6 @@ function boot(){
   });
   if(!$('#studentDate').value) $('#studentDate').value=todayISO();
 
-  // Default view (student defaults to practice)
   activate(qs().get('view') || (isStudent() ? 'practice' : 'create'));
 }
 boot();
