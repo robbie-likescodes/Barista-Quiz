@@ -51,7 +51,7 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
   .menu-item{background:#18203a}
 }
 
-/* --- Mobile menu fix: make panel a safe-area sheet so it never clips --- */
+/* --- Mobile menu fix: make panel a safe-area sheet and layer ABOVE button --- */
 @media (max-width:820px){
   .menu{position:static}
   .menu-list{
@@ -59,10 +59,12 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
     top:calc(56px + env(safe-area-inset-top));
     left:calc(12px + env(safe-area-inset-left));
     right:calc(12px + env(safe-area-inset-right));
-    min-width:auto; z-index:1000; display:none;
+    min-width:auto;
+    z-index:2000;            /* <-- was below the button; now above */
+    display:none;
   }
   .menu-list.open{display:flex}
-  #menuBtn{position:relative;z-index:1001}
+  #menuBtn{position:relative;z-index:1000}  /* keep clickable, but below sheet */
 }
 
 /* Views */
