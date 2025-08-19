@@ -5,19 +5,22 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
   <meta name="theme-color" content="#111827" />
   <title>Barista Flashcards & Quizzes</title>
-  <link rel="stylesheet" href="styles.css?v=8" />
-  <script defer src="app.js?v=7"></script>
+
+  <!-- Bump versions to bust cache when you update files -->
+  <link rel="stylesheet" href="styles.css?v=12" />
+  <script defer src="app.js?v=12"></script>
 </head>
 <body>
   <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
 
+  <!-- Header / Brand / Mobile menu -->
   <header class="app-header" role="banner">
     <div class="brand">
       <span class="logo" aria-hidden="true">☕</span>
       <h1>Barista Flashcards &amp; Quizzes</h1>
     </div>
 
-    <!-- Top nav: button on mobile, inline on desktop -->
+    <!-- Compact top nav: button on mobile; inline menu on larger screens via CSS -->
     <div class="topnav">
       <div class="menu">
         <button id="menuBtn" class="btn ghost" aria-haspopup="true" aria-expanded="false">Menu ≡</button>
@@ -35,7 +38,7 @@
   <main class="container" role="main">
     <div id="liveRegion" class="sr-only" aria-live="polite"></div>
 
-    <!-- CREATE -->
+    <!-- ========================= CREATE ========================= -->
     <section id="view-create" class="view active" aria-labelledby="create-title">
       <h2 id="create-title">Create &amp; Manage Decks</h2>
 
@@ -43,12 +46,18 @@
         <div class="card-head">
           <strong>Add / Select a Deck (merged by Deck Name)</strong>
           <div class="grow"></div>
+
+          <!-- Deck actions -->
           <button id="renameDeckBtn" class="btn ghost">Rename</button>
           <button id="editDeckMetaBtn" class="btn ghost">Edit Meta</button>
           <button id="deleteDeckBtn" class="btn danger">Delete</button>
           <button id="exportDeckBtn" class="btn">Export</button>
           <button id="importDeckBtn" class="btn">Import…</button>
           <input id="importDeckInput" type="file" accept=".json,.txt" hidden>
+          <!-- JS will auto-inject two more buttons here:
+               - #exportAllBtn (Export All)
+               - #importBackupBtn (Import Backup…)
+               plus a hidden #importBackupInput file input -->
         </div>
 
         <div class="grid g2 mt">
@@ -66,7 +75,7 @@
 
         <div class="grid g2 mt">
           <div class="subcat-wrap">
-            <button id="toggleSubdeckBtn" class="btn ghost small" aria-controls="newSubdeck" aria-expanded="false">+ Sub-deck (optional)</button>
+            <button id="toggleSubdeckBtn" class="btn ghost small" aria-controls="newSubdeck" aria-expanded="false">+ Sub‑deck (optional)</button>
             <input id="newSubdeck" class="input hidden" placeholder="e.g., Latte Art">
           </div>
           <div class="mt-sm"><button id="addDeckBtn" class="btn primary">Create / Select Deck</button></div>
@@ -86,7 +95,7 @@
         <summary class="card-head">Bulk Add (tap for format)</summary>
         <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
         <textarea id="bulkTextarea" class="textarea mt" rows="5"
-          placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)"></textarea>
+          placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub‑deck(optional)"></textarea>
         <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
       </details>
 
@@ -98,16 +107,16 @@
           <input id="aWrong1Input" class="input" placeholder="Wrong answer 1 (required)" aria-label="Wrong answer 1">
           <input id="aWrong2Input" class="input" placeholder="Wrong answer 2 (optional)" aria-label="Wrong answer 2">
           <input id="aWrong3Input" class="input" placeholder="Wrong answer 3 (optional)" aria-label="Wrong answer 3">
-          <input id="cardSubInput" class="input" placeholder="Card sub-deck (optional)" aria-label="Card sub-deck">
+          <input id="cardSubInput" class="input" placeholder="Card sub‑deck (optional)" aria-label="Card sub-deck">
         </div>
         <div class="mt"><button id="addCardBtn" class="btn primary">Save Card</button></div>
 
         <details class="mt card" id="subdeckManager" open>
-          <summary class="card-head">Sub-decks in this Deck</summary>
+          <summary class="card-head">Sub‑decks in this Deck</summary>
           <div id="subdeckManagerList" class="chips mt"></div>
           <div class="grid g2 mt">
-            <input id="subdeckNewName" class="input" placeholder="Add new sub-deck (tag)">
-            <button id="createSubdeckBtn" class="btn">Add Sub-deck</button>
+            <input id="subdeckNewName" class="input" placeholder="Add new sub‑deck (tag)">
+            <button id="createSubdeckBtn" class="btn">Add Sub‑deck</button>
           </div>
         </details>
       </div>
@@ -118,7 +127,7 @@
       </div>
     </section>
 
-    <!-- BUILD -->
+    <!-- ========================= BUILD ========================= -->
     <section id="view-build" class="view" aria-labelledby="build-title">
       <h2 id="build-title">Build Test &amp; Share</h2>
 
@@ -158,7 +167,7 @@
       </div>
 
       <details id="deckChooser" class="card" open>
-        <summary class="card-head">Choose decks (✓ whole deck or expand to pick sub-decks)</summary>
+        <summary class="card-head">Choose decks (✓ whole deck or expand to pick sub‑decks)</summary>
         <div id="deckPickList" class="deck-pick"></div>
       </details>
 
@@ -172,7 +181,7 @@
       </div>
     </section>
 
-    <!-- PRACTICE -->
+    <!-- ========================= PRACTICE ========================= -->
     <section id="view-practice" class="view" aria-labelledby="practice-title">
       <h2 id="practice-title">Practice</h2>
 
@@ -216,7 +225,7 @@
       </div>
     </section>
 
-    <!-- QUIZ -->
+    <!-- ========================= QUIZ ========================= -->
     <section id="view-quiz" class="view" aria-labelledby="quiz-title">
       <h2 id="quiz-title">Quiz</h2>
 
@@ -227,7 +236,8 @@
             <select id="quizTestSelect" class="input"></select>
           </div>
           <input id="studentName" class="input" placeholder="Your name (required)" aria-label="Your name">
-          <!-- Location: dropdown + “Other…” -->
+
+          <!-- Location selection: dropdown + “Other…” text field -->
           <div class="select-wrap">
             <label class="label" for="studentLocationSelect">Location</label>
             <select id="studentLocationSelect" class="input" aria-label="Location">
@@ -279,7 +289,7 @@
       </div>
     </section>
 
-    <!-- REPORTS -->
+    <!-- ========================= REPORTS ========================= -->
     <section id="view-reports" class="view" aria-labelledby="reports-title">
       <h2 id="reports-title">Reports</h2>
 
@@ -306,7 +316,6 @@
               <option value="date_asc">Oldest first</option>
               <option value="test_asc">Test A→Z</option>
               <option value="test_desc">Test Z→A</option>
-              <!-- Optional location sorts (supported by JS) -->
               <option value="loc_asc">Location A→Z</option>
               <option value="loc_desc">Location Z→A</option>
             </select>
@@ -324,7 +333,7 @@
         </div>
       </div>
 
-      <!-- New: Location Averages card -->
+      <!-- Location Averages -->
       <div class="card" id="locAvgCard">
         <h3>Location Averages</h3>
         <div id="locationAverages" class="missed"></div>
@@ -334,7 +343,14 @@
         <table id="repTable" class="table">
           <thead>
             <tr>
-              <th>Date/Time</th><th>Name</th><th>Location</th><th>Test</th><th>Score</th><th>Correct</th><th>View</th><th>Actions</th>
+              <th>Date/Time</th>
+              <th>Name</th>
+              <th>Location</th>
+              <th>Test</th>
+              <th>Score</th>
+              <th>Correct</th>
+              <th>View</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody></tbody>
