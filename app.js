@@ -1,26 +1,25 @@
-/* Barista Flashcards & Quizzes — local-first SPA
-   This build includes:
-   - Mobile menu: open/close + auto-close on item click + outside click close
-   - Toast confirmations for key actions
-   - Reports: Active/Archived view with Archive, Restore, Delete (persistent)
-   - Location Averages panel (respects filters)
-   - Removed "My Results"
-   - Student mode via ?mode=student&test=NAME
-   - Build view: robust Save/Rename/Delete using current test ID tracked from datalist
-   - Quiz: Location dropdown with “Other…” fallback input
+/* Barista Flashcards & Quizzes — local-first SPA with full backup/restore
+   Includes:
+   - Mobile menu (auto-close on select / outside click)
+   - Toast confirmations
+   - Test save / rename / delete by ID (datalist)
+   - Deck create/rename/delete/export/import (line/JSON formats)
+   - Student link copy / preview
+   - Practice & Quiz flows (with Location dropdown + Other…)
+   - Reports (Active/Archived with Archive/Restore/Delete) + Location Averages
+   - NEW: Full Backup Export/Import (Merge or Replace), preserves classes/decks/subdecks/tests/results/archived
 */
 
-// ---------- tiny DOM helpers ----------
+/////////////////////// tiny DOM + storage helpers ///////////////////////
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 
-// ---------- storage helpers ----------
 const store = {
   get(k, f){ try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } },
   set(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
 };
 
-// ---------- keys ----------
+///////////////////////////// constants //////////////////////////////////
 const KEYS = {
   decks   : 'bq_decks_v6',
   tests   : 'bq_tests_v6',
@@ -28,16 +27,18 @@ const KEYS = {
   archived: 'bq_results_archived_v1'
 };
 
-// ---------- utils ----------
+const ADMIN_VIEWS = new Set(['create','build','reports']);
+
+///////////////////////////// utils //////////////////////////////////////
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
 const todayISO = () => new Date().toISOString().slice(0,10);
-const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&gt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const shuffle  = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [x[i],x[j]]=[x[j],x[i]] } return x; };
 const sample   = (a,n) => shuffle(a).slice(0,n);
 const unique   = xs => Array.from(new Set(xs));
+const deepCopy = obj => JSON.parse(JSON.stringify(obj));
 
-// ---------- global state ----------
-const ADMIN_VIEWS = new Set(['create','build','reports']);
+///////////////////////////// global state ////////////////////////////////
 let state = {
   decks   : store.get(KEYS.decks, {}),
   tests   : store.get(KEYS.tests, {}),
@@ -45,11 +46,10 @@ let state = {
   archived: store.get(KEYS.archived, []),
   practice: { cards:[], idx:0 },
   quiz    : { items:[], idx:0, n:30, locked:false, testId:'' },
-  // UI cache for Build view
   ui      : { currentTestId: null }
 };
 
-// ---------- toasts ----------
+///////////////////////////// toasts /////////////////////////////////////
 function toast(msg, ms=1800){
   const t = $('#toast');
   if(!t) { alert(msg); return; }
@@ -59,7 +59,7 @@ function toast(msg, ms=1800){
   window.__toastTimer = setTimeout(()=>t.classList.remove('show'), ms);
 }
 
-// ---------- router & mode ----------
+///////////////////////////// routing ////////////////////////////////////
 const qs = () => new URLSearchParams(location.search);
 function setParams(obj){
   const p = qs();
@@ -86,7 +86,7 @@ function activate(view){
 }
 window.addEventListener('popstate', ()=>activate(qs().get('view')||'create'));
 
-// ---------- Mobile menu open/close ----------
+///////////////////////// mobile menu wiring /////////////////////////////
 const menuBtn  = $('#menuBtn');
 const menuList = $('#menuList');
 
@@ -102,7 +102,7 @@ menuList?.addEventListener('click', (e)=>{
 });
 document.addEventListener('click', (e)=>{ if(!e.target.closest('.menu')) closeMenu(); }, { capture:true });
 
-// ---------- apply student mode ----------
+/////////////////////////// student mode /////////////////////////////////
 function applyStudentMode(){
   const p = qs();
   const student = isStudent();
@@ -118,9 +118,7 @@ function applyStudentMode(){
   }
 }
 
-// ===================================================================
-// Merge helpers (same-name decks => one deck)
-// ===================================================================
+/////////////////////// deck merge helpers ///////////////////////////////
 const deckKey = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName||'').trim().toLowerCase()}`;
 
 function listUniqueDecks(){
@@ -165,12 +163,13 @@ function mergeDecksByName(){
   store.set(KEYS.decks,state.decks);
 }
 
-// ===================================================================
-// CREATE
-// ===================================================================
+//////////////////////////// CREATE view /////////////////////////////////
 const classListEl=$('#classNames'), deckListEl=$('#deckNames'), deckSelect=$('#deckSelect'), cardsList=$('#cardsList');
 
 function renderCreate(){
+  // ensure backup buttons exist in the first Create card header
+  ensureBackupButtons();
+
   renderClassDeckDatalists();
   renderDeckSelect();
   renderDeckMeta();
@@ -377,16 +376,14 @@ $('#addCardBtn')?.addEventListener('click',()=>{
 });
 deckSelect?.addEventListener('change',()=>{ renderDeckMeta(); renderSubdeckManager(); renderCardsList(); });
 
-// ===================================================================
-// BUILD TEST  (Save/Rename/Delete by ID)
-// ===================================================================
+//////////////////////////// BUILD view //////////////////////////////////
 const testsList=$('#testsList'), testNameInput=$('#testNameInput'), deckPickList=$('#deckPickList');
 const previewToggle=$('#previewToggle'), previewPanel=$('#previewPanel'), previewTitle=$('#previewTitle'), previewMeta=$('#previewMeta']);
 
 function renderBuild(){ 
   renderTestsDatalist(); 
   renderDeckPickList(); 
-  bindTestNamePicker();     // keep currentTestId in sync
+  bindTestNamePicker();
   syncPreview(); 
 }
 
@@ -395,18 +392,13 @@ function renderTestsDatalist(){
   testsList.innerHTML=arr.map(t=>`<option value="${esc(t.name)}"></option>`).join('');
 }
 
-/** Keep state.ui.currentTestId in sync with the datalist input selection/typing */
 function bindTestNamePicker(){
-  // build name -> id map (case-insensitive)
   function indexByName(){
     return new Map(Object.entries(state.tests).map(([id,t])=>[t.name.toLowerCase(), id]));
   }
   let map = indexByName();
-
-  // refresh map when tests change
   const refreshMap = () => { map = indexByName(); };
 
-  // when user types/picks a name, try to resolve an id
   testNameInput.oninput = () => {
     const typed = testNameInput.value.trim().toLowerCase();
     state.ui.currentTestId = map.get(typed) || null;
@@ -418,7 +410,6 @@ function bindTestNamePicker(){
     }
   };
 
-  // also refresh map after we re-render datalist
   const _render = renderTestsDatalist;
   renderTestsDatalist = function(){
     _render();
@@ -433,23 +424,19 @@ $('#saveTestBtn')?.addEventListener('click',()=>{
   let id = state.ui.currentTestId;
   let t  = id ? state.tests[id] : null;
 
-  // If no current ID, try name match (back-compat)
   if(!t){
     const match = Object.entries(state.tests).find(([,x])=>x.name.toLowerCase()===typedName.toLowerCase());
     if(match){ id = match[0]; t = state.tests[id]; state.ui.currentTestId = id; }
   }
 
-  // Create new or rename existing
   if(!t){
     id = uid('test');
     t = state.tests[id] = { id, name: typedName, title: typedName, n: 30, selections: [] };
     state.ui.currentTestId = id;
   } else {
-    // RENAME: accept the newly typed name
     t.name = typedName;
   }
 
-  // Update other fields
   t.title = $('#builderTitle').value.trim() || t.title || typedName;
   t.n = Math.max(1, +$('#builderCount').value || t.n || 30);
   t.selections = dedupeSelections(readSelectionsFromUI());
@@ -476,7 +463,6 @@ $('#renameTestBtn')?.addEventListener('click',()=>{
 });
 
 $('#deleteTestBtn')?.addEventListener('click',()=>{
-  // Prefer current id; fall back to name lookup for back-compat
   let id = state.ui.currentTestId;
   if(!id){
     const name = testNameInput.value.trim().toLowerCase();
@@ -489,7 +475,6 @@ $('#deleteTestBtn')?.addEventListener('click',()=>{
   if(confirm(`Delete test “${name}”?`)){
     delete state.tests[id];
     store.set(KEYS.tests,state.tests);
-    // reset UI
     state.ui.currentTestId = null;
     testNameInput.value = '';
     $('#builderTitle').value = '';
@@ -502,8 +487,7 @@ $('#deleteTestBtn')?.addEventListener('click',()=>{
 
 function renderDeckPickList(){
   const decks=listUniqueDecks();
-  const // resolve selection from currentTestId or typed name
-    selected = state.ui.currentTestId ? state.tests[state.ui.currentTestId]
+  const selected = state.ui.currentTestId ? state.tests[state.ui.currentTestId]
               : Object.values(state.tests).find(t=>t.name.toLowerCase()===testNameInput.value.trim().toLowerCase());
 
   const selMap=new Map((selected?.selections||[]).map(s=>[s.deckId,s]));
@@ -561,7 +545,6 @@ $('#openShareBtn')?.addEventListener('click',()=>{
 function getCurrentTestOrSave(){
   const typedName=testNameInput.value.trim();
   if(!typedName) return alert('Enter a test name first.');
-  // if current id exists, update that record (rename handled in Save)
   let t = state.ui.currentTestId ? state.tests[state.ui.currentTestId] : null;
   if(!t){
     const match = Object.values(state.tests).find(x=>x.name.toLowerCase()===typedName.toLowerCase());
@@ -586,7 +569,6 @@ function syncPreview(){
 $('#previewPracticeBtn')?.addEventListener('click',()=>{ setParams({view:'practice'}); activate('practice'); });
 $('#previewQuizBtn')?.addEventListener('click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
 
-/* Helpers */
 function computePoolForTest(t){
   const normalized=dedupeSelections(t.selections||[]);
   const pool=[];
@@ -599,9 +581,7 @@ function computePoolForTest(t){
 }
 const deckLabel=d=>`${d.deckName} — ${d.className}`;
 
-// ===================================================================
-// PRACTICE
-// ===================================================================
+//////////////////////// PRACTICE view ///////////////////////////////////
 const practiceTestSelect=$('#practiceTestSelect'), practiceDeckChecks=$('#practiceDeckChecks'), practiceArea=$('#practiceArea');
 
 function renderPracticeScreen(){
@@ -667,9 +647,7 @@ $('#practicePrev')?.addEventListener('click',()=>{ state.practice.idx=Math.max(0
 $('#practiceNext')?.addEventListener('click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
 $('#practiceShuffle')?.addEventListener('click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
 
-// ===================================================================
-// QUIZ
-// ===================================================================
+/////////////////////////// QUIZ view ////////////////////////////////////
 const quizTestSelect=$('#quizTestSelect'),
       quizOptions=$('#quizOptions'),
       quizQuestion=$('#quizQuestion'),
@@ -683,7 +661,6 @@ function renderQuizScreen(){
   if(last && quizTestSelect.querySelector(`option[value="${last}"]`)) quizTestSelect.value=last;
   if(!$('#studentDate').value) $('#studentDate').value=todayISO();
 
-  // Location “Other” toggle
   studentLocSel?.addEventListener('change', () => {
     const other = studentLocSel.value === '__OTHER__';
     studentLocOther?.classList.toggle('hidden', !other);
@@ -744,7 +721,6 @@ $('#submitQuizBtn')?.addEventListener('click',()=>{
         ? (studentLocOther?.value || '').trim()
         : (studentLocSel.value || '').trim();
   } else {
-    // fallback for older HTML
     loc = ($('#studentLocation')?.value || '').trim();
   }
   const dt=$('#studentDate').value;
@@ -772,9 +748,7 @@ $('#submitQuizBtn')?.addEventListener('click',()=>{
 $('#restartQuizBtn')?.addEventListener('click',()=>{ $('#quizFinished').classList.add('hidden'); $('#quizArea').classList.remove('hidden'); startOrRefreshQuiz(); });
 $('#finishedPracticeBtn')?.addEventListener('click',()=>{ setParams({view:'practice'}); activate('practice'); });
 
-// ===================================================================
-// REPORTS (Active/Archived + actions + Location Averages)
-// ===================================================================
+//////////////////////////// REPORTS view ////////////////////////////////
 function renderReports(){
   const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
   const keep=$('#repLocation').value;
@@ -817,7 +791,6 @@ function deleteForever(id, from='active'){
   }
 }
 
-// ---- Location averages helpers ----
 function computeLocationAverages(rows){
   const map = new Map();
   for (const r of rows) {
@@ -840,7 +813,6 @@ function renderLocationAverages(){
 
   let base = view==='archived' ? [...state.archived] : [...state.results];
 
-  // filters matching drawReports()
   if (loc) base = base.filter(r => r.location === loc);
   if (attempt!=='all'){
     const map=new Map();
@@ -850,7 +822,7 @@ function renderLocationAverages(){
 
   const avgs = computeLocationAverages(base);
   const box  = $('#locationAverages');
-  if(!box) return; // HTML might not be updated yet
+  if(!box) return;
 
   if (!avgs.length){
     box.innerHTML = '<div class="hint">No data yet.</div>';
@@ -871,7 +843,7 @@ function drawReports(){
   const loc    = $('#repLocation').value;
   const attempt= $('#repAttemptView').value;
   const sort   = $('#repSort').value;
-  const view   = ($('#repView')?.value || 'active'); // 'active' or 'archived'
+  const view   = ($('#repView')?.value || 'active');
 
   let rows = view==='archived' ? [...state.archived] : [...state.results];
 
@@ -885,7 +857,6 @@ function drawReports(){
   if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
   if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
   if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
-  // Optional: support Location sort if you add it in HTML
   if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));
   if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));
 
@@ -932,10 +903,9 @@ function drawReports(){
     }
   }));
 
-  // Location averages (respects current filters)
   renderLocationAverages();
 
-  // Missed Summary from ACTIVE only
+  // Missed Summary (based on ACTIVE set)
   const baseRows=[...state.results];
   const missMap=new Map();
   for(const r of baseRows){
@@ -952,9 +922,228 @@ function drawReports(){
     </div>`).join('') : '<div class="hint">No data yet.</div>';
 }
 
-// ===================================================================
-// Normalize & boot
-// ===================================================================
+///////////////////// Full Backup / Restore (Merge/Replace) //////////////
+function ensureBackupButtons(){
+  const hdr = $('#view-create .card .card-head');
+  if(!hdr) return;
+  if(!$('#exportAllBtn')){
+    const ex = document.createElement('button');
+    ex.id='exportAllBtn'; ex.className='btn';
+    ex.textContent='Export All';
+    hdr.appendChild(ex);
+    ex.addEventListener('click', exportAllBackup);
+  }
+  if(!$('#importBackupBtn')){
+    const im = document.createElement('button');
+    im.id='importBackupBtn'; im.className='btn';
+    im.textContent='Import Backup…';
+    hdr.appendChild(im);
+    im.addEventListener('click', importBackupFlow);
+  }
+  if(!$('#importBackupInput')){
+    const fi = document.createElement('input');
+    fi.type='file'; fi.accept='.json,application/json,text/plain';
+    fi.id='importBackupInput'; fi.hidden=true;
+    hdr.appendChild(fi);
+    fi.addEventListener('change', async (e)=>{
+      const f=e.target.files?.[0]; if(!f) return;
+      const txt=await f.text(); e.target.value='';
+      try { const data=JSON.parse(txt); importBackupData(data); } 
+      catch(err){ alert('Invalid backup JSON: '+err.message); }
+    });
+  }
+}
+
+function exportAllBackup(){
+  const backup = {
+    schema : 'bq_backup_v1',
+    exportedAt: Date.now(),
+    decks   : state.decks,
+    tests   : state.tests,
+    results : state.results,
+    archived: state.archived
+  };
+  const json = JSON.stringify(backup, null, 2);
+
+  // Download file
+  const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([json],{type:'application/json'}));
+  a.download = `bq_backup_${stamp}.json`;
+  a.click(); URL.revokeObjectURL(a.href);
+
+  // Try to copy to clipboard too (for easy paste)
+  navigator.clipboard?.writeText(json).then(()=>toast('Backup downloaded & copied'),()=>toast('Backup downloaded'));
+}
+
+function importBackupFlow(){
+  const useFile = confirm('Import from a file?\n\nOK = Choose file\nCancel = Paste JSON');
+  if(useFile){ $('#importBackupInput').click(); return; }
+  const txt = prompt('Paste full backup JSON here:');
+  if(!txt) return;
+  try { const data=JSON.parse(txt); importBackupData(data); }
+  catch(err){ alert('Invalid backup JSON: '+err.message); }
+}
+
+function importBackupData(data){
+  if(!data || data.schema!=='bq_backup_v1'){ 
+    if(!confirm('Schema missing or unknown. Attempt import anyway?')) return;
+  }
+  const modeMerge = confirm('How to apply backup?\n\nOK = MERGE into existing\nCancel = REPLACE (wipe current and restore backup)');
+  if(modeMerge) mergeBackup(data); else replaceBackup(data);
+  // persist and refresh views
+  store.set(KEYS.decks,   state.decks);
+  store.set(KEYS.tests,   state.tests);
+  store.set(KEYS.results, state.results);
+  store.set(KEYS.archived,state.archived);
+  toast(modeMerge ? 'Backup merged' : 'Backup restored (replaced)');
+  // refresh UI if visible
+  renderCreate(); renderBuild(); renderReports();
+}
+
+/* Replace: wipe current and load as-is (with basic normalization) */
+function replaceBackup(data){
+  state.decks    = sanitizeDecksObject(data.decks || {});
+  state.tests    = sanitizeTestsObject(data.tests || {});
+  state.results  = Array.isArray(data.results)  ? data.results  : [];
+  state.archived = Array.isArray(data.archived) ? data.archived : [];
+  // ensure deck-name merges are normalized (legacy duplicates)
+  mergeDecksByName();
+}
+
+/* Merge: combine with current (preserve classes/decks/subdecks)
+   - Decks: merge by (class+deckName), union tags, append cards (dedupe by q|a|sub)
+   - Tests: merge by name; union selections; keep greater n; keep existing title unless backup has and existing empty
+   - Results/Archived: append; ensure unique ids (regenerate if collision)
+*/
+function mergeBackup(data){
+  const incomingDecks = sanitizeDecksObject(data.decks || {});
+  const incomingTests = sanitizeTestsObject(data.tests || {});
+  const incomingResults  = Array.isArray(data.results)  ? data.results  : [];
+  const incomingArchived = Array.isArray(data.archived) ? data.archived : [];
+
+  // Map deckKey -> existing deckId
+  const keyToId = new Map();
+  for(const [id,d] of Object.entries(state.decks)) keyToId.set(deckKey(d), id);
+
+  // 1) Merge decks
+  const importedKeyToExistingId = new Map();
+  for(const [impId, impDeck] of Object.entries(incomingDecks)){
+    const k = deckKey(impDeck);
+    if(!keyToId.has(k)){
+      const newId = uid('deck');
+      state.decks[newId] = deepCopy({...impDeck, id:newId});
+      keyToId.set(k, newId);
+      importedKeyToExistingId.set(impId, newId);
+    } else {
+      const existingId = keyToId.get(k);
+      importedKeyToExistingId.set(impId, existingId);
+      const dst = state.decks[existingId];
+      // union tags
+      dst.tags = unique([...(dst.tags||[]), ...(impDeck.tags||[]), ...(impDeck.subdeck?[impDeck.subdeck]:[])]);
+      // append cards with dedupe
+      const seen = new Set((dst.cards||[]).map(c => cardKey(c)));
+      const incomingCards = (impDeck.cards||[]).map(c => ({
+        id: uid('card'),
+        q: (c.q||'').trim(),
+        a: (c.a||'').trim(),
+        distractors: (c.distractors||[]).map(s=>String(s).trim()).filter(Boolean),
+        sub: (c.sub||'').trim(),
+        createdAt: c.createdAt || Date.now()
+      }));
+      for(const c of incomingCards){
+        const key = cardKey(c);
+        if(!seen.has(key)){ (dst.cards ||= []).push(c); seen.add(key); }
+      }
+    }
+  }
+
+  // 2) Merge tests (by name). Remap imported selections' deckIds to the resolved existing ids.
+  for(const [tid,t] of Object.entries(incomingTests)){
+    // remap selections
+    const remappedSelections = dedupeSelections((t.selections||[]).map(sel=>{
+      // if this deckId came from imported set, map to existing deck id
+      const targetId = importedKeyToExistingId.get(sel.deckId) || sel.deckId;
+      return { deckId: targetId, whole: !!sel.whole, subs: (sel.subs||[]) };
+    }));
+    const match = Object.entries(state.tests).find(([,x])=>x.name.toLowerCase()===String(t.name||'').toLowerCase());
+    if(!match){
+      const newId = uid('test');
+      state.tests[newId] = {
+        id: newId,
+        name: t.name || 'Test',
+        title: t.title || t.name || 'Test',
+        n: Math.max(1, +t.n || 30),
+        selections: remappedSelections
+      };
+    }else{
+      const id = match[0], dst = state.tests[id];
+      // union selections
+      dst.selections = dedupeSelections([...(dst.selections||[]), ...remappedSelections]);
+      // keep larger n
+      dst.n = Math.max(+dst.n||30, +t.n||30);
+      // fill empty title
+      if(!dst.title && t.title) dst.title = t.title;
+    }
+  }
+
+  // 3) Merge results + archived (ensure id uniqueness)
+  const allIds = new Set([...state.results, ...state.archived].map(r=>r.id));
+  for(const r of incomingResults){
+    if(!r || !r.id){ r.id = uid('res'); }
+    if(allIds.has(r.id)) r.id = uid('res');
+    state.results.push(r); allIds.add(r.id);
+  }
+  for(const r of incomingArchived){
+    if(!r || !r.id){ r.id = uid('res'); }
+    if(allIds.has(r.id)) r.id = uid('res');
+    state.archived.push(r); allIds.add(r.id);
+  }
+
+  // Normalize any legacy duplicates
+  mergeDecksByName();
+}
+
+/* helpers for merge/replace */
+function cardKey(c){
+  const norm = s => (s||'').trim().toLowerCase();
+  return `${norm(c.q)}|${norm(c.a)}|${norm(c.sub)}`;
+}
+function sanitizeDecksObject(obj){
+  const out={};
+  for(const [id,d] of Object.entries(obj||{})){
+    if(!d) continue;
+    const _id = d.id && typeof d.id==='string' ? d.id : uid('deck');
+    out[_id] = {
+      id: _id,
+      className: d.className || '',
+      deckName : d.deckName || (d.name||'Deck'),
+      cards    : Array.isArray(d.cards) ? d.cards : [],
+      tags     : Array.isArray(d.tags) ? d.tags : [],
+      createdAt: d.createdAt || Date.now()
+    };
+  }
+  return out;
+}
+function sanitizeTestsObject(obj){
+  // tests stored as object keyed by id in our app
+  if(Array.isArray(obj)){
+    const map={};
+    for(const t of obj){
+      const id = t?.id || uid('test');
+      map[id] = { id, name:t?.name||'Test', title:t?.title||t?.name||'Test', n:Math.max(1,+t?.n||30), selections:Array.isArray(t?.selections)?t.selections:[] };
+    }
+    return map;
+  }
+  const out={};
+  for(const [id,t] of Object.entries(obj||{})){
+    const _id = t?.id || id || uid('test');
+    out[_id] = { id:_id, name:t?.name||'Test', title:t?.title||t?.name||'Test', n:Math.max(1,+t?.n||30), selections:Array.isArray(t?.selections)?t.selections:[] };
+  }
+  return out;
+}
+
+//////////////////////// normalize & boot /////////////////////////////////
 function normalizeTests(){
   let changed=false;
   for(const id of Object.keys(state.tests)){
