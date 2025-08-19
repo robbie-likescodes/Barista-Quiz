@@ -18,7 +18,12 @@ body{
   font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
   -webkit-tap-highlight-color: transparent;
 }
-.container{max-width:1050px;margin:16px auto;padding:0 16px 80px}
+.container{
+  max-width:1050px;margin:16px auto;padding:0 16px 80px;
+  /* iPhone safe-area padding so nothing hugs the edge */
+  padding-left:calc(16px + env(safe-area-inset-left));
+  padding-right:calc(16px + env(safe-area-inset-right));
+}
 
 /* Header */
 .app-header{position:sticky;top:0;z-index:10;background:linear-gradient(90deg,#12182b,#111527);border-bottom:1px solid var(--line)}
@@ -30,16 +35,34 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
 .topnav{display:flex;gap:8px;align-items:center;padding:0 16px 12px}
 #menuBtn{border:1px solid var(--line);background:#18203a;border-radius:var(--radius-sm);padding:8px 12px;cursor:pointer;color:var(--text);font-weight:600}
 .menu{position:relative}
-.menu-list{position:absolute;top:42px;right:0;min-width:220px;display:none;flex-direction:column;gap:6px;
-  background:#12182b;border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.menu-list{
+  position:absolute;top:42px;right:0;min-width:220px;display:none;flex-direction:column;gap:6px;
+  background:#12182b;border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.35)
+}
 .menu-list.open{display:flex}
-.menu-item{border:1px solid var(--line);background:#18203a;color:var(--text);padding:10px 12px;border-radius:var(--radius);text-align:left;cursor:pointer}
+.menu-item{border:1px solid var(--line);background:#202a4b;color:var(--text);padding:10px 12px;border-radius:var(--radius);text-align:left;cursor:pointer}
 .menu-item.active{background:var(--brand);color:#061125;border-color:transparent;font-weight:700}
+
+/* Desktop layout: show inline menu */
 @media (min-width:821px){
   .topnav{gap:14px}
   #menuBtn{display:none}
-  .menu-list{position:static;display:flex;flex-direction:row;background:transparent;border:none;box-shadow:none;padding:0;gap:10px}
+  .menu-list{position:static;display:flex;flex-direction:row;background:transparent;border:none;box-shadow:none;padding:0;gap:10px;min-width:0}
   .menu-item{background:#18203a}
+}
+
+/* --- Mobile menu fix: make panel a safe-area sheet so it never clips --- */
+@media (max-width:820px){
+  .menu{position:static}
+  .menu-list{
+    position:fixed;
+    top:calc(56px + env(safe-area-inset-top));
+    left:calc(12px + env(safe-area-inset-left));
+    right:calc(12px + env(safe-area-inset-right));
+    min-width:auto; z-index:1000; display:none;
+  }
+  .menu-list.open{display:flex}
+  #menuBtn{position:relative;z-index:1001}
 }
 
 /* Views */
@@ -48,12 +71,18 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
 
 /* Cards / Layout */
 .card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:16px;margin:16px 0;box-shadow:var(--elev)}
-.card-head{display:flex;align-items:center;gap:10px}
+.card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap} /* allow wrapping */
 .grow{flex:1}
 .mt{margin-top:14px}.mt-sm{margin-top:8px}
 .lead{font-size:18px}
 .hint{color:var(--muted);font-size:13px}
 .hidden{display:none!important}
+
+/* When header wraps, push buttons below title neatly */
+@media (max-width:540px){
+  .card-head .grow{flex-basis:100%;height:0}
+  .card-head > .btn{margin-top:6px}
+}
 
 .grid{display:grid;gap:12px}
 .grid.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
