@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
   <meta name="theme-color" content="#111827" />
   <title>Barista Flashcards & Quizzes</title>
-  <link rel="stylesheet" href="styles.css?v=7" />
+  <link rel="stylesheet" href="styles.css?v=8" />
   <script defer src="app.js?v=7"></script>
 </head>
 <body>
@@ -17,19 +17,19 @@
       <h1>Barista Flashcards &amp; Quizzes</h1>
     </div>
 
-    <!-- Mobile-first top navigation with dropdown menu -->
-    <nav class="topnav" role="navigation" aria-label="Primary">
+    <!-- Top nav: button on mobile, inline on desktop -->
+    <div class="topnav">
       <div class="menu">
-        <button id="menuBtn" class="tab" aria-haspopup="true" aria-expanded="false" aria-controls="menuList">Menu</button>
-        <div id="menuList" class="menu-list" role="menu">
-          <button class="menu-item active" role="menuitem" data-route="create">Create</button>
-          <button class="menu-item" role="menuitem" data-route="build">Build Test</button>
-          <button class="menu-item" role="menuitem" data-route="practice">Practice</button>
-          <button class="menu-item" role="menuitem" data-route="quiz">Quiz</button>
-          <button class="menu-item" role="menuitem" data-route="reports">Reports</button>
+        <button id="menuBtn" class="btn ghost" aria-haspopup="true" aria-expanded="false">Menu ≡</button>
+        <div id="menuList" class="menu-list" role="menu" aria-label="Primary">
+          <button class="menu-item active" data-route="create" role="menuitem">Create</button>
+          <button class="menu-item" data-route="build" role="menuitem">Build Test</button>
+          <button class="menu-item" data-route="practice" role="menuitem">Practice</button>
+          <button class="menu-item" data-route="quiz" role="menuitem">Quiz</button>
+          <button class="menu-item" data-route="reports" role="menuitem">Reports</button>
         </div>
       </div>
-    </nav>
+    </div>
   </header>
 
   <main class="container" role="main">
@@ -41,7 +41,8 @@
 
       <div class="card">
         <div class="card-head">
-          <strong>Add / Select a Deck (merged by Deck Name)</strong><div class="grow"></div>
+          <strong>Add / Select a Deck (merged by Deck Name)</strong>
+          <div class="grow"></div>
           <button id="renameDeckBtn" class="btn ghost">Rename</button>
           <button id="editDeckMetaBtn" class="btn ghost">Edit Meta</button>
           <button id="deleteDeckBtn" class="btn danger">Delete</button>
@@ -134,6 +135,7 @@
             <datalist id="testsList"></datalist>
             <div class="mt-sm">
               <button id="saveTestBtn" class="btn primary">Save/Select Test</button>
+              <button id="renameTestBtn" class="btn ghost">Rename Test</button>
               <button id="deleteTestBtn" class="btn danger">Delete Test</button>
             </div>
           </div>
@@ -291,13 +293,14 @@
               <option value="test_desc">Test Z→A</option>
             </select>
           </div>
+        </div>
 
-          <!-- New: View filter (Active vs Archived) -->
+        <div class="grid g2 mt">
           <div class="select-wrap">
             <label class="label" for="repView">View</label>
             <select id="repView" class="input">
-              <option value="active">Active</option>
-              <option value="archived">Archived</option>
+              <option value="active">Active results</option>
+              <option value="archived">Archived results</option>
             </select>
           </div>
         </div>
@@ -307,14 +310,7 @@
         <table id="repTable" class="table">
           <thead>
             <tr>
-              <th>Date/Time</th>
-              <th>Name</th>
-              <th>Location</th>
-              <th>Test</th>
-              <th>Score</th>
-              <th>Correct</th>
-              <th>View</th>
-              <th>Actions</th>
+              <th>Date/Time</th><th>Name</th><th>Location</th><th>Test</th><th>Score</th><th>Correct</th><th>View</th><th>Actions</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -329,10 +325,10 @@
   </main>
 
   <footer class="footer" role="contentinfo">
-    <span class="hint">Admin data stays in this browser (localStorage). Share student link to restrict access.</span>
+    <span class="hint">Admin data stays in this browser (localStorage). Share the student link to restrict access.</span>
   </footer>
 
-  <!-- Toast / Snackbar for confirmations -->
-  <div id="toast" class="toast" aria-live="polite"></div>
+  <!-- Toast / Snackbar -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
