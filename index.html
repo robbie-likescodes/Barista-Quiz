@@ -17,27 +17,27 @@
       <h1>Barista Flashcards &amp; Quizzes</h1>
     </div>
 
-    <!-- Compact, iPhone-friendly menu -->
+    <!-- Mobile-first top navigation with dropdown menu -->
     <nav class="topnav" role="navigation" aria-label="Primary">
-      <button id="menuBtn" aria-haspopup="true" aria-expanded="false" aria-controls="menuList">Menu ☰</button>
       <div class="menu">
+        <button id="menuBtn" class="tab" aria-haspopup="true" aria-expanded="false" aria-controls="menuList">Menu</button>
         <div id="menuList" class="menu-list" role="menu">
-          <button class="menu-item active" data-route="create" role="menuitem">Create</button>
-          <button class="menu-item" data-route="build" role="menuitem">Build Test</button>
-          <button class="menu-item" data-route="practice" role="menuitem">Practice</button>
-          <button class="menu-item" data-route="quiz" role="menuitem">Quiz</button>
-          <button class="menu-item" data-route="reports" role="menuitem">Reports</button>
+          <button class="menu-item active" role="menuitem" data-route="create">Create</button>
+          <button class="menu-item" role="menuitem" data-route="build">Build Test</button>
+          <button class="menu-item" role="menuitem" data-route="practice">Practice</button>
+          <button class="menu-item" role="menuitem" data-route="quiz">Quiz</button>
+          <button class="menu-item" role="menuitem" data-route="reports">Reports</button>
         </div>
       </div>
     </nav>
   </header>
 
-  <main class="container" role="main" aria-labelledby="create-title">
+  <main class="container" role="main">
     <div id="liveRegion" class="sr-only" aria-live="polite"></div>
 
     <!-- CREATE -->
     <section id="view-create" class="view active" aria-labelledby="create-title">
-      <h2 id="create-title" tabindex="-1">Create &amp; Manage Decks</h2>
+      <h2 id="create-title">Create &amp; Manage Decks</h2>
 
       <div class="card">
         <div class="card-head">
@@ -118,8 +118,8 @@
     </section>
 
     <!-- BUILD -->
-    <section id="view-build" class="view" aria-labelledby="build-title" hidden>
-      <h2 id="build-title" tabindex="-1">Build Test &amp; Share</h2>
+    <section id="view-build" class="view" aria-labelledby="build-title">
+      <h2 id="build-title">Build Test &amp; Share</h2>
 
       <div class="card">
         <label class="switch">
@@ -149,8 +149,8 @@
 
         <div class="mt">
           <h4>Share</h4>
-          <button id="copyShareBtn" class="btn success" disabled aria-disabled="true">Copy Student Link</button>
-          <button id="openShareBtn" class="btn" disabled aria-disabled="true">Open Student Preview</button>
+          <button id="copyShareBtn" class="btn success">Copy Student Link</button>
+          <button id="openShareBtn" class="btn">Open Student Preview</button>
           <p class="hint mt-sm">Student link is restricted: no Create/Build/Reports; only the shared Test is visible.</p>
         </div>
       </div>
@@ -171,8 +171,8 @@
     </section>
 
     <!-- PRACTICE -->
-    <section id="view-practice" class="view" aria-labelledby="practice-title" hidden>
-      <h2 id="practice-title" tabindex="-1">Practice</h2>
+    <section id="view-practice" class="view" aria-labelledby="practice-title">
+      <h2 id="practice-title">Practice</h2>
 
       <div class="card">
         <div class="grid g2">
@@ -186,7 +186,7 @@
           </div>
         </div>
         <div id="practiceDeckChecks" class="chips mt"></div>
-        <button id="startPracticeBtn" class="btn primary mt" disabled aria-disabled="true">Start Practice</button>
+        <button id="startPracticeBtn" class="btn primary mt">Start Practice</button>
       </div>
 
       <div id="practiceArea" class="card" hidden>
@@ -195,7 +195,7 @@
           <div class="grow"></div>
           <span id="practiceProgress" class="hint" aria-live="polite"></span>
         </div>
-        <div id="practiceCard" class="flip mt" tabindex="0" role="button" aria-pressed="false" aria-label="Flashcard">
+        <div id="practiceCard" class="flip mt" tabindex="0" aria-label="Flashcard">
           <div class="front">
             <div class="fc-title">Question</div>
             <div id="practiceQuestion" class="fc-text"></div>
@@ -215,8 +215,8 @@
     </section>
 
     <!-- QUIZ -->
-    <section id="view-quiz" class="view" aria-labelledby="quiz-title" hidden>
-      <h2 id="quiz-title" tabindex="-1">Quiz</h2>
+    <section id="view-quiz" class="view" aria-labelledby="quiz-title">
+      <h2 id="quiz-title">Quiz</h2>
 
       <div class="card">
         <div class="grid g3">
@@ -224,14 +224,8 @@
             <label class="label" for="quizTestSelect">Select Test</label>
             <select id="quizTestSelect" class="input"></select>
           </div>
-          <div>
-            <input id="studentName" class="input" placeholder="Your name (required)" aria-label="Your name" required aria-describedby="nameHelp">
-            <div id="nameHelp" class="micro hint" hidden>Name is required.</div>
-          </div>
-          <div>
-            <input id="studentLocation" class="input" placeholder="Location (required)" aria-label="Location" required aria-describedby="locHelp">
-            <div id="locHelp" class="micro hint" hidden>Location is required.</div>
-          </div>
+          <input id="studentName" class="input" placeholder="Your name (required)" aria-label="Your name">
+          <input id="studentLocation" class="input" placeholder="Location (required)" aria-label="Location">
         </div>
         <div class="mt">
           <label class="label" for="studentDate">Date</label>
@@ -269,8 +263,8 @@
     </section>
 
     <!-- REPORTS -->
-    <section id="view-reports" class="view" aria-labelledby="reports-title" hidden>
-      <h2 id="reports-title" tabindex="-1">Reports</h2>
+    <section id="view-reports" class="view" aria-labelledby="reports-title">
+      <h2 id="reports-title">Reports</h2>
 
       <div class="card">
         <div class="grid g3">
@@ -297,6 +291,15 @@
               <option value="test_desc">Test Z→A</option>
             </select>
           </div>
+
+          <!-- New: View filter (Active vs Archived) -->
+          <div class="select-wrap">
+            <label class="label" for="repView">View</label>
+            <select id="repView" class="input">
+              <option value="active">Active</option>
+              <option value="archived">Archived</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -304,13 +307,14 @@
         <table id="repTable" class="table">
           <thead>
             <tr>
-              <th scope="col">Date/Time</th>
-              <th scope="col">Name</th>
-              <th scope="col">Location</th>
-              <th scope="col">Test</th>
-              <th scope="col">Score</th>
-              <th scope="col">Correct</th>
-              <th scope="col">View</th>
+              <th>Date/Time</th>
+              <th>Name</th>
+              <th>Location</th>
+              <th>Test</th>
+              <th>Score</th>
+              <th>Correct</th>
+              <th>View</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -327,5 +331,8 @@
   <footer class="footer" role="contentinfo">
     <span class="hint">Admin data stays in this browser (localStorage). Share student link to restrict access.</span>
   </footer>
+
+  <!-- Toast / Snackbar for confirmations -->
+  <div id="toast" class="toast" aria-live="polite"></div>
 </body>
 </html>
