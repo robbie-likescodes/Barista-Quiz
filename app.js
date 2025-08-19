@@ -1,35 +1,38 @@
-/* Barista Flashcards & Quizzes — local-first SPA with full backup/restore
-   Includes:
-   - Mobile menu (auto-close on select / outside click)
-   - Toast confirmations
-   - Test save / rename / delete by ID (datalist)
-   - Deck create/rename/delete/export/import (line/JSON formats)
-   - Student link copy / preview
-   - Practice & Quiz flows (with Location dropdown + Other…)
-   - Reports (Active/Archived with Archive/Restore/Delete) + Location Averages
-   - NEW: Full Backup Export/Import (Merge or Replace), preserves classes/decks/subdecks/tests/results/archived
+/* Barista Flashcards & Quizzes — local-first SPA (audited)
+   What's included:
+   - Mobile menu (auto-close on select/outside)
+   - Toast confirmations for all key actions
+   - Deck create/rename/delete/export/import
+   - Test save/rename/delete + deck/subdeck selection
+   - Student link copy/open; Student mode with view guard
+   - Practice (flip/shuffle/keys) & Quiz (1–4 keys) flows
+   - Quiz location dropdown + “Other…”
+   - Reports: filters/sorts, view Active/Archived, archive/restore/delete, “Most Missed”
+   - Location averages (per selected view/filters)
+   - Full backup export/import (Merge or Replace), preserving classes/decks/subdecks/tests/results/archived
+   - Robust guards to prevent null derefs halting listeners
 */
 
-/////////////////////// tiny DOM + storage helpers ///////////////////////
+//////////////////// tiny DOM/storage helpers ////////////////////
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
+const on = (el, ev, fn, opt) => el && el.addEventListener(ev, fn, opt);
 
 const store = {
   get(k, f){ try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } },
   set(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
 };
 
-///////////////////////////// constants //////////////////////////////////
+//////////////////////////// constants ///////////////////////////
 const KEYS = {
   decks   : 'bq_decks_v6',
   tests   : 'bq_tests_v6',
   results : 'bq_results_v6',
   archived: 'bq_results_archived_v1'
 };
-
 const ADMIN_VIEWS = new Set(['create','build','reports']);
 
-///////////////////////////// utils //////////////////////////////////////
+//////////////////////////// utils ///////////////////////////////
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
 const todayISO = () => new Date().toISOString().slice(0,10);
 const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -37,8 +40,10 @@ const shuffle  = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const 
 const sample   = (a,n) => shuffle(a).slice(0,n);
 const unique   = xs => Array.from(new Set(xs));
 const deepCopy = obj => JSON.parse(JSON.stringify(obj));
+const deckKey  = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName||'').trim().toLowerCase()}`;
+const cardKey  = c => `${(c.q||'').trim().toLowerCase()}|${(c.a||'').trim().toLowerCase()}|${(c.sub||'').trim().toLowerCase()}`;
 
-///////////////////////////// global state ////////////////////////////////
+/////////////////////////// global state /////////////////////////
 let state = {
   decks   : store.get(KEYS.decks, {}),
   tests   : store.get(KEYS.tests, {}),
@@ -49,17 +54,17 @@ let state = {
   ui      : { currentTestId: null }
 };
 
-///////////////////////////// toasts /////////////////////////////////////
+//////////////////////////// toasts //////////////////////////////
 function toast(msg, ms=1800){
   const t = $('#toast');
-  if(!t) { alert(msg); return; }
+  if(!t){ alert(msg); return; }
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(window.__toastTimer);
   window.__toastTimer = setTimeout(()=>t.classList.remove('show'), ms);
 }
 
-///////////////////////////// routing ////////////////////////////////////
+/////////////////////////// routing //////////////////////////////
 const qs = () => new URLSearchParams(location.search);
 function setParams(obj){
   const p = qs();
@@ -86,15 +91,12 @@ function activate(view){
 }
 window.addEventListener('popstate', ()=>activate(qs().get('view')||'create'));
 
-///////////////////////// mobile menu wiring /////////////////////////////
-const menuBtn  = $('#menuBtn');
-const menuList = $('#menuList');
+/////////////////////// mobile menu //////////////////////////////
+function openMenu(){ $('#menuList')?.classList.add('open'); $('#menuBtn')?.setAttribute('aria-expanded','true'); }
+function closeMenu(){ $('#menuList')?.classList.remove('open'); $('#menuBtn')?.setAttribute('aria-expanded','false'); }
 
-function openMenu(){ menuList?.classList.add('open'); menuBtn?.setAttribute('aria-expanded','true'); }
-function closeMenu(){ menuList?.classList.remove('open'); menuBtn?.setAttribute('aria-expanded','false'); }
-
-menuBtn?.addEventListener('click', (e)=>{ e.stopPropagation(); menuList.classList.toggle('open'); menuBtn.setAttribute('aria-expanded', String(menuList.classList.contains('open'))); });
-menuList?.addEventListener('click', (e)=>{
+on($('#menuBtn'), 'click', (e)=>{ e.stopPropagation(); const ml=$('#menuList'); if(!ml) return; ml.classList.toggle('open'); $('#menuBtn')?.setAttribute('aria-expanded', String(ml.classList.contains('open'))); });
+on($('#menuList'), 'click', (e)=>{
   const item = e.target.closest('.menu-item');
   if(!item) return;
   const route = item.dataset.route;
@@ -102,7 +104,7 @@ menuList?.addEventListener('click', (e)=>{
 });
 document.addEventListener('click', (e)=>{ if(!e.target.closest('.menu')) closeMenu(); }, { capture:true });
 
-/////////////////////////// student mode /////////////////////////////////
+/////////////////////// student mode /////////////////////////////
 function applyStudentMode(){
   const p = qs();
   const student = isStudent();
@@ -118,9 +120,7 @@ function applyStudentMode(){
   }
 }
 
-/////////////////////// deck merge helpers ///////////////////////////////
-const deckKey = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName||'').trim().toLowerCase()}`;
-
+/////////////////////// deck merge helpers ///////////////////////
 function listUniqueDecks(){
   const seen=new Set(), arr=[];
   for(const d of Object.values(state.decks)){
@@ -163,27 +163,44 @@ function mergeDecksByName(){
   store.set(KEYS.decks,state.decks);
 }
 
-//////////////////////////// CREATE view /////////////////////////////////
-const classListEl=$('#classNames'), deckListEl=$('#deckNames'), deckSelect=$('#deckSelect'), cardsList=$('#cardsList');
-
+//////////////////////////// CREATE //////////////////////////////
 function renderCreate(){
-  // ensure backup buttons exist in the first Create card header
-  ensureBackupButtons();
+  ensureBackupButtons(); // inject Export All / Import Backup…
 
-  renderClassDeckDatalists();
+  // datalists for Class + Deck
+  const classListEl = $('#classNames');
+  const deckListEl  = $('#deckNames');
+  if (classListEl && deckListEl){
+    const arr=listUniqueDecks();
+    const classes=unique(arr.map(d=>d.className).filter(Boolean)).sort();
+    const decks=unique(arr.map(d=>d.deckName).filter(Boolean)).sort();
+    classListEl.innerHTML=classes.map(v=>`<option value="${esc(v)}"></option>`).join('');
+    deckListEl.innerHTML=decks.map(v=>`<option value="${esc(v)}"></option>`).join('');
+  }
+
   renderDeckSelect();
   renderDeckMeta();
   renderSubdeckManager();
   renderCardsList();
+
+  // Button bindings (safe)
+  on($('#createSubdeckBtn'),'click',createSubdeck);
+  on($('#toggleSubdeckBtn'),'click',toggleNewSubdeck);
+  on($('#addDeckBtn'),'click',addDeck);
+  on($('#renameDeckBtn'),'click',renameDeck);
+  on($('#editDeckMetaBtn'),'click',editDeckMeta);
+  on($('#deleteDeckBtn'),'click',deleteDeck);
+  on($('#exportDeckBtn'),'click',exportDeck);
+  on($('#importDeckBtn'),'click',()=>{ toast('Choose a JSON or TXT file to import…',1400); $('#importDeckInput')?.click(); });
+  on($('#importDeckInput'),'change',importDeckInputChange);
+  on($('#bulkSummaryBtn'),'click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
+  on($('#bulkAddBtn'),'click',bulkAddCards);
+  on($('#addCardBtn'),'click',addCard);
+  on($('#deckSelect'),'change',()=>{ renderDeckMeta(); renderSubdeckManager(); renderCardsList(); });
 }
-function renderClassDeckDatalists(){
-  const arr=listUniqueDecks();
-  const classes=unique(arr.map(d=>d.className).filter(Boolean)).sort();
-  const decks=unique(arr.map(d=>d.deckName).filter(Boolean)).sort();
-  classListEl.innerHTML=classes.map(v=>`<option value="${esc(v)}"></option>`).join('');
-  deckListEl.innerHTML=decks.map(v=>`<option value="${esc(v)}"></option>`).join('');
-}
+
 function renderDeckSelect(){
+  const deckSelect = $('#deckSelect'); if(!deckSelect) return;
   const arr=listUniqueDecks();
   if(arr.length===0){ deckSelect.innerHTML=`<option value="">No decks yet</option>`; return; }
   deckSelect.innerHTML=arr.map(d=>{
@@ -193,10 +210,11 @@ function renderDeckSelect(){
   }).join('');
   deckSelect.style.pointerEvents='auto';
 }
-function selectedDeckId(){const id=deckSelect.value;return state.decks[id]?id:null}
+function selectedDeckId(){const id=$('#deckSelect')?.value;return id&&state.decks[id]?id:null}
 
 function renderDeckMeta(){
-  const id=selectedDeckId(); const titleEl=$('#deckMetaTitle'), subsEl=$('#deckMetaSubs');
+  const titleEl=$('#deckMetaTitle'), subsEl=$('#deckMetaSubs'); if(!titleEl||!subsEl) return;
+  const id=selectedDeckId();
   if(!id){ titleEl.textContent='No deck selected'; subsEl.innerHTML=''; return; }
   const d=state.decks[id]; const subs=deckSubTags(d);
   titleEl.textContent=`${d.deckName} — ${d.className} • ${d.cards.length} card${d.cards.length!==1?'s':''}`;
@@ -215,7 +233,8 @@ function renderDeckMeta(){
   });
 }
 function renderSubdeckManager(){
-  const id=selectedDeckId(); const list=$('#subdeckManagerList');
+  const list=$('#subdeckManagerList'); if(!list) return;
+  const id=selectedDeckId();
   if(!id){ list.innerHTML='<span class="hint">Select a deck first.</span>'; return; }
   const d=state.decks[id]; const subs=deckSubTags(d);
   list.innerHTML=subs.length?subs.map(s=>`
@@ -232,86 +251,109 @@ function renderSubdeckManager(){
     });
   });
 }
-$('#createSubdeckBtn')?.addEventListener('click',()=>{
+function renderCardsList(){
+  const cardsList=$('#cardsList'); if(!cardsList) return;
+  const id=selectedDeckId();
+  if(!id){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
+  const d=state.decks[id];
+  if(!d.cards.length){ cardsList.innerHTML='<div class="hint">No cards yet—add your first one above.</div>'; return; }
+  cardsList.innerHTML=d.cards.map(c=>`
+    <div class="cardline" data-id="${c.id}">
+      <div><strong>Q:</strong> ${esc(c.q)}</div>
+      <div><strong>Correct:</strong> ${esc(c.a)}<br><span class="hint">Wrong:</span> ${esc((c.distractors||[]).join(' | '))}${c.sub? `<br><span class="hint">Sub‑deck: ${esc(c.sub)}</span>`:''}</div>
+      <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
+    </div>`).join('');
+  cardsList.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',()=>{
+    const cid=b.closest('.cardline').dataset.id; d.cards=d.cards.filter(c=>c.id!==cid); store.set(KEYS.decks,state.decks); renderDeckMeta(); renderSubdeckManager(); renderCardsList(); renderDeckSelect();
+    toast('Card deleted');
+  }));
+  cardsList.querySelectorAll('.btn-edit').forEach(b=>b.addEventListener('click',()=>{
+    const cid=b.closest('.cardline').dataset.id; const card=d.cards.find(c=>c.id===cid); if(!card) return;
+    const q=prompt('Question:',card.q); if(q===null) return;
+    const a=prompt('Correct answer:',card.a); if(a===null) return;
+    const wrong=prompt('Wrong answers (separate by |):',(card.distractors||[]).join('|'));
+    const sub=prompt('Card sub‑deck (optional):',card.sub||''); if(sub===null) return;
+    card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
+    if(card.sub){ d.tags=unique([...(d.tags||[]),card.sub]); }
+    store.set(KEYS.decks,state.decks); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    toast('Card updated');
+  }));
+}
+
+// CREATE handlers
+function createSubdeck(){
   const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
-  const name=($('#subdeckNewName').value||'').trim(); if(!name) return;
+  const name=($('#subdeckNewName')?.value||'').trim(); if(!name) return;
   const d=state.decks[id]; d.tags=unique([...(d.tags||[]),name]);
   store.set(KEYS.decks,state.decks); $('#subdeckNewName').value='';
-  renderDeckMeta(); renderSubdeckManager();
-});
-
-$('#toggleSubdeckBtn')?.addEventListener('click',()=>{
-  const el=$('#newSubdeck'); const isHidden=el.classList.toggle('hidden');
-  $('#toggleSubdeckBtn').setAttribute('aria-expanded', String(!isHidden));
-});
-
-$('#addDeckBtn')?.addEventListener('click',()=>{
-  const cls=$('#newClassName').value.trim();
-  const dnm=$('#newDeckName').value.trim();
-  const sdn=$('#newSubdeck').classList.contains('hidden')?'':$('#newSubdeck').value.trim();
+  renderDeckMeta(); renderSubdeckManager(); toast('Sub-deck added');
+}
+function toggleNewSubdeck(){
+  const el=$('#newSubdeck'); if(!el) return;
+  const isHidden=el.classList.toggle('hidden');
+  $('#toggleSubdeckBtn')?.setAttribute('aria-expanded', String(!isHidden));
+}
+function addDeck(){
+  const cls=$('#newClassName')?.value.trim();
+  const dnm=$('#newDeckName')?.value.trim();
+  const sdn=$('#newSubdeck')?.classList.contains('hidden')?'':($('#newSubdeck')?.value.trim()||'');
   if(!cls||!dnm) return alert('Class and Deck are required.');
 
   let existing=Object.values(state.decks).find(d=>(d.className||'').toLowerCase()===cls.toLowerCase()&&(d.deckName||'').toLowerCase()===dnm.toLowerCase());
   if(existing){
-    deckSelect.value=existing.id;
+    const deckSelect=$('#deckSelect'); if(deckSelect) deckSelect.value=existing.id;
     if(sdn){ existing.tags=unique([...(existing.tags||[]),sdn]); store.set(KEYS.decks,state.decks); }
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    renderDeckMeta(); renderSubdeckManager(); renderCardsList(); renderDeckSelect();
     toast('Selected existing deck');
     return;
   }
   const id=uid('deck');
   state.decks[id]={id,className:cls,deckName:dnm,cards:[],tags:sdn?[sdn]:[],createdAt:Date.now()};
   store.set(KEYS.decks,state.decks);
-  $('#newClassName').value=$('#newDeckName').value=$('#newSubdeck').value=''; $('#newSubdeck').classList.add('hidden');
-  renderClassDeckDatalists(); renderDeckSelect(); deckSelect.value=id; renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+  if($('#newClassName')) $('#newClassName').value='';
+  if($('#newDeckName'))  $('#newDeckName').value='';
+  if($('#newSubdeck')){ $('#newSubdeck').value=''; $('#newSubdeck').classList.add('hidden'); }
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast('Deck created');
-});
-
-$('#renameDeckBtn')?.addEventListener('click',()=>{
+}
+function renameDeck(){
   const id=selectedDeckId(); if(!id) return;
   const d=state.decks[id];
   const cls=prompt('Class:',d.className||''); if(cls===null) return;
   const dnk=prompt('Deck (by name):',d.deckName||''); if(dnk===null) return;
   d.className=cls.trim(); d.deckName=dnk.trim();
   store.set(KEYS.decks,state.decks); mergeDecksByName();
-  renderClassDeckDatalists(); renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast('Deck renamed');
-});
-
-$('#editDeckMetaBtn')?.addEventListener('click',()=>{
+}
+function editDeckMeta(){
   const id=selectedDeckId(); if(!id) return;
   const d=state.decks[id];
   const cls=prompt('Edit Class:',d.className||''); if(cls===null) return;
   d.className=cls.trim();
   store.set(KEYS.decks,state.decks); mergeDecksByName();
-  renderClassDeckDatalists(); renderDeckSelect(); renderDeckMeta();
+  renderDeckSelect(); renderDeckMeta();
   toast('Meta updated');
-});
-
-$('#deleteDeckBtn')?.addEventListener('click',()=>{
+}
+function deleteDeck(){
   const id=selectedDeckId(); if(!id) return;
   if(confirm('Delete this deck and its cards?')){
     delete state.decks[id];
     store.set(KEYS.decks,state.decks);
-    renderClassDeckDatalists(); renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
     toast('Deck deleted');
   }
-});
-
-$('#exportDeckBtn')?.addEventListener('click',()=>{
+}
+function exportDeck(){
   const id=selectedDeckId(); if(!id) return;
   const blob=new Blob([JSON.stringify(state.decks[id],null,2)],{type:'application/json'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${(state.decks[id].deckName||'Deck').replace(/\W+/g,'_')}.json`; a.click(); URL.revokeObjectURL(a.href);
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=`${(state.decks[id].deckName||'Deck').replace(/\W+/g,'_')}.json`; a.click(); URL.revokeObjectURL(a.href);
   toast('Deck exported');
-});
-
-$('#importDeckBtn')?.addEventListener('click',()=>{
-  toast('Choose a JSON or TXT file to import…', 1400);
-  $('#importDeckInput').click();
-});
-$('#importDeckInput')?.addEventListener('change', async e=>{
+}
+async function importDeckInputChange(e){
   const f=e.target.files?.[0]; if(!f) return;
-  const txt=await f.text();
+  const txt=await f.text(); e.target.value='';
   try{
     let data=null; try{data=JSON.parse(txt)}catch{}
     const upsertDeck=(cls,dk,cards,declaredTag='')=>{
@@ -330,8 +372,7 @@ $('#importDeckInput')?.addEventListener('change', async e=>{
       })));
       if(declaredTag) ex.tags=unique([...(ex.tags||[]),declaredTag]);
       store.set(KEYS.decks,state.decks);
-      renderClassDeckDatalists(); renderDeckSelect();
-      toast('Deck imported');
+      renderDeckSelect(); toast('Deck imported');
     };
     if(data && data.deckName && Array.isArray(data.cards)){ upsertDeck(data.className||'Class',data.deckName,data.cards,(data.subdeck||'').trim()); }
     else if(Array.isArray(data) && data[0] && (data[0].Question||data[0]['Correct Answer'])){ upsertDeck('Class',f.name.replace(/\.json$/i,'').replace(/_/g,' '),data); }
@@ -344,80 +385,70 @@ $('#importDeckInput')?.addEventListener('change', async e=>{
       });
       upsertDeck('Class',f.name.replace(/\.[^.]+$/,'').replace(/_/g,' '),cards);
     }
-  }catch(err){
-    alert('Import failed: '+err.message);
-  }
-  e.target.value='';
-});
-
-$('#bulkSummaryBtn')?.addEventListener('click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
-$('#bulkAddBtn')?.addEventListener('click',()=>{
+  }catch(err){ alert('Import failed: '+err.message); }
+}
+function bulkAddCards(){
   const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
-  const txt=$('#bulkTextarea').value.trim(); if(!txt) return alert('Paste at least one line.');
+  const txt=$('#bulkTextarea')?.value.trim(); if(!txt) return alert('Paste at least one line.');
   let n=0; for(const line of txt.split(/\r?\n/)){
     const parts=line.split('|').map(s=>s.trim()).filter(Boolean); if(parts.length<3) continue;
     let sub=''; if(parts[parts.length-1].startsWith?.('#')) sub=parts.pop().slice(1);
     const [q,a,...wrongs]=parts; state.decks[id].cards.push({id:uid('card'),q,a,distractors:wrongs,sub,createdAt:Date.now()}); n++;
   }
-  store.set(KEYS.decks,state.decks); $('#bulkTextarea').value=''; renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+  store.set(KEYS.decks,state.decks); if($('#bulkTextarea')) $('#bulkTextarea').value='';
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast(`Added ${n} card(s)`);
-});
-
-$('#addCardBtn')?.addEventListener('click',()=>{
+}
+function addCard(){
   const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
-  const q=$('#qInput').value.trim(), a=$('#aCorrectInput').value.trim(), w1=$('#aWrong1Input').value.trim(), w2=$('#aWrong2Input').value.trim(), w3=$('#aWrong3Input').value.trim(), sub=$('#cardSubInput').value.trim();
+  const q=$('#qInput')?.value.trim(), a=$('#aCorrectInput')?.value.trim(), w1=$('#aWrong1Input')?.value.trim(),
+        w2=$('#aWrong2Input')?.value.trim(), w3=$('#aWrong3Input')?.value.trim(), sub=$('#cardSubInput')?.value.trim();
   if(!q||!a||!w1) return alert('Enter question, correct, and at least one wrong answer.');
   state.decks[id].cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
   if(sub){ const d=state.decks[id]; d.tags=unique([...(d.tags||[]),sub]); }
   store.set(KEYS.decks,state.decks);
-  ['#qInput','#aCorrectInput','#aWrong1Input','#aWrong2Input','#aWrong3Input','#cardSubInput'].forEach(sel=>$(sel).value='');
+  ['#qInput','#aCorrectInput','#aWrong1Input','#aWrong2Input','#aWrong3Input','#cardSubInput'].forEach(sel=>{ if($(sel)) $(sel).value=''; });
   renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast('Card saved');
-});
-deckSelect?.addEventListener('change',()=>{ renderDeckMeta(); renderSubdeckManager(); renderCardsList(); });
+}
 
-//////////////////////////// BUILD view //////////////////////////////////
-const testsList=$('#testsList'), testNameInput=$('#testNameInput'), deckPickList=$('#deckPickList');
-const previewToggle=$('#previewToggle'), previewPanel=$('#previewPanel'), previewTitle=$('#previewTitle'), previewMeta=$('#previewMeta']);
-
+//////////////////////////// BUILD //////////////////////////////
 function renderBuild(){ 
   renderTestsDatalist(); 
   renderDeckPickList(); 
-  bindTestNamePicker();
-  syncPreview(); 
+  bindBuildButtons();
+  syncPreview();
 }
-
 function renderTestsDatalist(){
+  const dl=$('#testsList'); if(!dl) return;
   const arr=Object.values(state.tests).sort((a,b)=>a.name.localeCompare(b.name));
-  testsList.innerHTML=arr.map(t=>`<option value="${esc(t.name)}"></option>`).join('');
+  dl.innerHTML=arr.map(t=>`<option value="${esc(t.name)}"></option>`).join('');
 }
-
-function bindTestNamePicker(){
-  function indexByName(){
-    return new Map(Object.entries(state.tests).map(([id,t])=>[t.name.toLowerCase(), id]));
+function bindBuildButtons(){
+  on($('#saveTestBtn'),'click',saveTest);
+  on($('#renameTestBtn'),'click',renameTest);
+  on($('#deleteTestBtn'),'click',deleteTest);
+  on($('#copyShareBtn'),'click',copyShareLink);
+  on($('#openShareBtn'),'click',openSharePreview);
+  on($('#previewToggle'),'change',syncPreview);
+  on($('#previewPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); });
+  on($('#previewQuizBtn'),'click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
+  on($('#testNameInput'),'input',handleTestNameInput);
+}
+function handleTestNameInput(){
+  const typed = $('#testNameInput')?.value.trim().toLowerCase();
+  if(!typed) { state.ui.currentTestId=null; return; }
+  const entry = Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===typed);
+  state.ui.currentTestId = entry? entry[0] : null;
+  const t = state.tests[state.ui.currentTestId] || null;
+  if(t){
+    if($('#builderTitle')) $('#builderTitle').value = t.title || t.name || '';
+    if($('#builderCount')) $('#builderCount').value = t.n || 30;
+    renderDeckPickList();
   }
-  let map = indexByName();
-  const refreshMap = () => { map = indexByName(); };
-
-  testNameInput.oninput = () => {
-    const typed = testNameInput.value.trim().toLowerCase();
-    state.ui.currentTestId = map.get(typed) || null;
-    if(state.ui.currentTestId){
-      const t = state.tests[state.ui.currentTestId];
-      $('#builderTitle').value = t.title || t.name || '';
-      $('#builderCount').value = t.n || 30;
-      renderDeckPickList();
-    }
-  };
-
-  const _render = renderTestsDatalist;
-  renderTestsDatalist = function(){
-    _render();
-    refreshMap();
-  };
 }
-
-$('#saveTestBtn')?.addEventListener('click',()=>{
+function saveTest(){
+  const testNameInput=$('#testNameInput'); if(!testNameInput) return;
   const typedName = testNameInput.value.trim();
   if(!typedName) return alert('Enter or select a test name.');
 
@@ -437,16 +468,15 @@ $('#saveTestBtn')?.addEventListener('click',()=>{
     t.name = typedName;
   }
 
-  t.title = $('#builderTitle').value.trim() || t.title || typedName;
-  t.n = Math.max(1, +$('#builderCount').value || t.n || 30);
+  t.title = ($('#builderTitle')?.value.trim() || t.title || typedName);
+  t.n = Math.max(1, +($('#builderCount')?.value) || t.n || 30);
   t.selections = dedupeSelections(readSelectionsFromUI());
 
   store.set(KEYS.tests,state.tests);
   renderTestsDatalist();
   toast(`Test “${t.name}” saved`);
-});
-
-$('#renameTestBtn')?.addEventListener('click',()=>{
+}
+function renameTest(){
   const id = state.ui.currentTestId;
   if(!id) return alert('Select an existing test first (pick from the list).');
   const t = state.tests[id];
@@ -455,17 +485,16 @@ $('#renameTestBtn')?.addEventListener('click',()=>{
   const newName = next.trim();
   if(!newName) return alert('Name cannot be empty.');
   t.name = newName;
-  t.title = $('#builderTitle').value.trim() || t.title || newName;
+  t.title = ($('#builderTitle')?.value.trim() || t.title || newName);
   store.set(KEYS.tests, state.tests);
   renderTestsDatalist();
-  testNameInput.value = newName;
+  if($('#testNameInput')) $('#testNameInput').value = newName;
   toast('Test renamed');
-});
-
-$('#deleteTestBtn')?.addEventListener('click',()=>{
+}
+function deleteTest(){
   let id = state.ui.currentTestId;
   if(!id){
-    const name = testNameInput.value.trim().toLowerCase();
+    const name = $('#testNameInput')?.value.trim().toLowerCase();
     const entry = Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name);
     if(entry) id = entry[0];
   }
@@ -476,22 +505,23 @@ $('#deleteTestBtn')?.addEventListener('click',()=>{
     delete state.tests[id];
     store.set(KEYS.tests,state.tests);
     state.ui.currentTestId = null;
-    testNameInput.value = '';
-    $('#builderTitle').value = '';
-    $('#builderCount').value = 30;
+    if($('#testNameInput')) $('#testNameInput').value = '';
+    if($('#builderTitle')) $('#builderTitle').value = '';
+    if($('#builderCount')) $('#builderCount').value = 30;
     renderTestsDatalist();
     renderDeckPickList();
     toast('Test deleted');
   }
-});
-
+}
 function renderDeckPickList(){
+  const wrap = $('#deckPickList'); if(!wrap) return;
   const decks=listUniqueDecks();
+  const typedName=$('#testNameInput')?.value.trim().toLowerCase();
   const selected = state.ui.currentTestId ? state.tests[state.ui.currentTestId]
-              : Object.values(state.tests).find(t=>t.name.toLowerCase()===testNameInput.value.trim().toLowerCase());
+                : Object.values(state.tests).find(t=>t.name.toLowerCase()===typedName);
 
   const selMap=new Map((selected?.selections||[]).map(s=>[s.deckId,s]));
-  deckPickList.innerHTML=decks.map(d=>{
+  wrap.innerHTML=decks.map(d=>{
     const subs=deckSubTags(d);
     const saved=selMap.get(d.id);
     const whole=saved?!!saved.whole:true; const savedSubs=new Set(saved?.subs||[]);
@@ -504,18 +534,20 @@ function renderDeckPickList(){
     </div>`;
   }).join('') || `<div class="hint">No decks yet. Add some in Create.</div>`;
 
-  deckPickList.querySelectorAll('.btn-expand').forEach(b=>b.addEventListener('click',()=>b.closest('.deck-row').querySelector('.subs').classList.toggle('hidden')));
-  deckPickList.querySelectorAll('.ck-sub').forEach(cb=>cb.addEventListener('change',()=>{
+  wrap.querySelectorAll('.btn-expand').forEach(b=>b.addEventListener('click',()=>b.closest('.deck-row').querySelector('.subs').classList.toggle('hidden')));
+  wrap.querySelectorAll('.ck-sub').forEach(cb=>cb.addEventListener('change',()=>{
     const row=cb.closest('.deck-row'); const any=row.querySelectorAll('.ck-sub:checked').length>0; row.querySelector('.ck-whole').checked=!any;
   }));
-  deckPickList.querySelectorAll('.ck-whole').forEach(cb=>cb.addEventListener('change',()=>{ if(cb.checked) cb.closest('.deck-row').querySelectorAll('.ck-sub').forEach(s=>s.checked=false) }));
+  wrap.querySelectorAll('.ck-whole').forEach(cb=>cb.addEventListener('change',()=>{ if(cb.checked) cb.closest('.deck-row').querySelectorAll('.ck-sub').forEach(s=>s.checked=false) }));
 
-  if(selected){ $('#builderTitle').value=selected.title||selected.name; $('#builderCount').value=selected.n||30; }
+  const selectedTest = selected;
+  if(selectedTest){ if($('#builderTitle')) $('#builderTitle').value=selectedTest.title||selectedTest.name; if($('#builderCount')) $('#builderCount').value=selectedTest.n||30; }
 }
 function readSelectionsFromUI(){
-  return [...deckPickList.querySelectorAll('.deck-row')].map(row=>{
+  const rows = $$('#deckPickList .deck-row');
+  return rows.map(row=>{
     const deckId=row.dataset.deck; const subs=[...row.querySelectorAll('.ck-sub:checked')].map(i=>i.value);
-    const whole=subs.length===0 && row.querySelector('.ck-whole').checked; return {deckId,whole,subs};
+    const whole=subs.length===0 && row.querySelector('.ck-whole')?.checked; return {deckId,whole,subs};
   }).filter(s=>s.whole || s.subs.length>0);
 }
 function dedupeSelections(selections){
@@ -524,51 +556,49 @@ function dedupeSelections(selections){
     if(!map.has(s.deckId)) map.set(s.deckId,{deckId:s.deckId,whole:false,subs:new Set()});
     const agg=map.get(s.deckId);
     agg.whole=agg.whole||s.whole;
-    s.subs?.forEach(x=>agg.subs.add(x));
+    (s.subs||[]).forEach(x=>agg.subs.add(x));
   }
   return [...map.values()].map(x=>({deckId:x.deckId,whole:x.whole && x.subs.size===0,subs:[...x.subs]}));
 }
-
-/* Share + Preview */
-$('#copyShareBtn')?.addEventListener('click',()=>{
+function copyShareLink(){
   const t=getCurrentTestOrSave(); if(!t) return;
   const url=new URL(location.href); url.searchParams.set('mode','student'); url.searchParams.set('test',t.name); url.searchParams.set('view','practice');
   navigator.clipboard.writeText(url.toString());
   toast('Student link copied — ready to send!');
-});
-$('#openShareBtn')?.addEventListener('click',()=>{
+}
+function openSharePreview(){
   const t=getCurrentTestOrSave(); if(!t) return;
   const url=new URL(location.href); url.searchParams.set('mode','student'); url.searchParams.set('test',t.name); url.searchParams.set('view','practice');
   open(url.toString(),'_blank');
   toast('Opened student preview');
-});
+}
 function getCurrentTestOrSave(){
+  const testNameInput=$('#testNameInput'); if(!testNameInput) return null;
   const typedName=testNameInput.value.trim();
-  if(!typedName) return alert('Enter a test name first.');
+  if(!typedName) return alert('Enter a test name first.'), null;
   let t = state.ui.currentTestId ? state.tests[state.ui.currentTestId] : null;
   if(!t){
     const match = Object.values(state.tests).find(x=>x.name.toLowerCase()===typedName.toLowerCase());
     if(!match){ alert('Save the test first.'); return null; }
     t = match;
   }
-  t.title=$('#builderTitle').value.trim()||t.title||typedName; 
-  t.n=Math.max(1,+$('#builderCount').value||t.n||30); 
+  t.title=($('#builderTitle')?.value.trim()||t.title||typedName); 
+  t.n=Math.max(1,+($('#builderCount')?.value)||t.n||30); 
   t.selections=dedupeSelections(readSelectionsFromUI()); 
   store.set(KEYS.tests,state.tests); 
   return t;
 }
-previewToggle?.addEventListener('change',syncPreview);
 function syncPreview(){
-  const on=previewToggle.checked; $('#deckChooser').open=!on; $('#previewPanel').classList.toggle('hidden',!on);
+  const on = $('#previewToggle')?.checked;
+  if($('#deckChooser')) $('#deckChooser').open=!on;
+  $('#previewPanel')?.classList.toggle('hidden',!on);
   if(!on) return;
   const t=getCurrentTestOrSave(); if(!t) return;
-  previewTitle.textContent=t.title||t.name;
   const n=computePoolForTest(t).length;
-  previewMeta.textContent=`~${n} eligible questions • ${t.n} will be asked`;
+  const pt=$('#previewTitle'), pm=$('#previewMeta');
+  if(pt) pt.textContent=t.title||t.name;
+  if(pm) pm.textContent=`~${n} eligible questions • ${t.n} will be asked`;
 }
-$('#previewPracticeBtn')?.addEventListener('click',()=>{ setParams({view:'practice'}); activate('practice'); });
-$('#previewQuizBtn')?.addEventListener('click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
-
 function computePoolForTest(t){
   const normalized=dedupeSelections(t.selections||[]);
   const pool=[];
@@ -581,16 +611,22 @@ function computePoolForTest(t){
 }
 const deckLabel=d=>`${d.deckName} — ${d.className}`;
 
-//////////////////////// PRACTICE view ///////////////////////////////////
-const practiceTestSelect=$('#practiceTestSelect'), practiceDeckChecks=$('#practiceDeckChecks'), practiceArea=$('#practiceArea');
-
+//////////////////////// PRACTICE ////////////////////////////////
 function renderPracticeScreen(){
-  fillTestsSelect(practiceTestSelect,true);
+  fillTestsSelect($('#practiceTestSelect'),true);
   const last=store.get('bq_last_test',null);
-  if(last && practiceTestSelect.querySelector(`option[value="${last}"]`)) practiceTestSelect.value=last;
+  const sel=$('#practiceTestSelect');
+  if(last && sel?.querySelector(`option[value="${last}"]`)) sel.value=last;
   buildPracticeDeckChecks();
+
+  on($('#practiceTestSelect'),'change',()=>{ buildPracticeDeckChecks(); store.set('bq_last_test',$('#practiceTestSelect').value); });
+  on($('#startPracticeBtn'),'click',startPractice);
+  on($('#practicePrev'),'click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
+  on($('#practiceNext'),'click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
+  on($('#practiceShuffle'),'click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
 }
 function fillTestsSelect(sel,lockToStudent=false){
+  if(!sel) return;
   const list=Object.entries(state.tests).sort((a,b)=>a[1].name.localeCompare(b[1].name));
   if(state.quiz.locked && state.quiz.testId && lockToStudent){
     const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(t.name)}</option>`:''; sel.value=state.quiz.testId; sel.disabled=true; return;
@@ -598,11 +634,10 @@ function fillTestsSelect(sel,lockToStudent=false){
   sel.disabled=false;
   sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('')||'';
 }
-practiceTestSelect?.addEventListener('change',()=>{ buildPracticeDeckChecks(); store.set('bq_last_test',practiceTestSelect.value); });
-
 function buildPracticeDeckChecks(){
-  const tid=practiceTestSelect.value; const t=state.tests[tid]; practiceDeckChecks.innerHTML='';
-  if(!t){ practiceDeckChecks.innerHTML='<span class="hint">No test selected.</span>'; return; }
+  const container=$('#practiceDeckChecks'); if(!container) return;
+  const tid=$('#practiceTestSelect')?.value; const t=state.tests[tid]; container.innerHTML='';
+  if(!t){ container.innerHTML='<span class="hint">No test selected.</span>'; return; }
   const seen=new Set(), chips=[];
   for(const sel of dedupeSelections(t.selections||[])){
     if(seen.has(sel.deckId)) continue; seen.add(sel.deckId);
@@ -612,12 +647,12 @@ function buildPracticeDeckChecks(){
     const span=document.createElement('span'); span.textContent=deckLabel(d); chip.appendChild(span);
     chips.push(chip);
   }
-  if(chips.length) chips.forEach(c=>practiceDeckChecks.appendChild(c));
-  else practiceDeckChecks.innerHTML='<span class="hint">This test has no decks selected.</span>';
+  if(chips.length) chips.forEach(c=>container.appendChild(c));
+  else container.innerHTML='<span class="hint">This test has no decks selected.</span>';
 }
-$('#startPracticeBtn')?.addEventListener('click',()=>{
-  const tid=practiceTestSelect.value; const t=state.tests[tid]; if(!t) return alert('Pick a test.');
-  const chosen=new Set([...practiceDeckChecks.querySelectorAll('input[type=checkbox]:checked')].map(i=>i.dataset.deck));
+function startPractice(){
+  const tid=$('#practiceTestSelect')?.value; const t=state.tests[tid]; if(!t) return alert('Pick a test.');
+  const chosen=new Set([...$('#practiceDeckChecks')?.querySelectorAll('input[type=checkbox]:checked')||[]].map(i=>i.dataset.deck));
   const pool=[];
   for(const sel of dedupeSelections(t.selections||[])){
     if(!chosen.has(sel.deckId)) continue;
@@ -625,57 +660,63 @@ $('#startPracticeBtn')?.addEventListener('click',()=>{
     if(sel.whole) pool.push(...d.cards); else pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||'')));
   }
   if(!pool.length) return alert('No cards to practice.');
-  state.practice.cards=shuffle(pool); state.practice.idx=0; practiceArea.hidden=false; showPractice();
-});
+  state.practice.cards=shuffle(pool); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
 function showPractice(){
-  const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx];
-  $('#practiceLabel').textContent=`Card ${idx+1} of ${total}`;
-  $('#practiceProgress').textContent=`Tap card to flip. Use ←/→ to navigate.`;
-  $('#practiceQuestion').textContent=c.q; $('#practiceAnswer').textContent=c.a;
-  const card=$('#practiceCard'); card.classList.remove('flipped'); card.onclick=()=>card.classList.toggle('flipped');
+  const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx]; if(!c) return;
+  if($('#practiceLabel')) $('#practiceLabel').textContent=`Card ${idx+1} of ${total}`;
+  if($('#practiceProgress')) $('#practiceProgress').textContent=`Tap card to flip. Use ←/→ to navigate.`;
+  if($('#practiceQuestion')) $('#practiceQuestion').textContent=c.q;
+  if($('#practiceAnswer'))   $('#practiceAnswer').textContent=c.a;
+  const card=$('#practiceCard'); if(!card) return;
+  card.classList.remove('flipped'); card.onclick=()=>card.classList.toggle('flipped');
 
   const handler=(e)=>{
     if(e.key===' '){ e.preventDefault(); card.classList.toggle('flipped'); }
-    if(e.key==='ArrowRight'){ $('#practiceNext').click(); }
-    if(e.key==='ArrowLeft'){ $('#practicePrev').click(); }
+    if(e.key==='ArrowRight'){ $('#practiceNext')?.click(); }
+    if(e.key==='ArrowLeft'){ $('#practicePrev')?.click(); }
   };
   window.removeEventListener('keydown', window.__bqPracticeKeys__);
   window.__bqPracticeKeys__=handler;
   window.addEventListener('keydown', handler);
 }
-$('#practicePrev')?.addEventListener('click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
-$('#practiceNext')?.addEventListener('click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
-$('#practiceShuffle')?.addEventListener('click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
 
-/////////////////////////// QUIZ view ////////////////////////////////////
-const quizTestSelect=$('#quizTestSelect'),
-      quizOptions=$('#quizOptions'),
-      quizQuestion=$('#quizQuestion'),
-      quizProgress=$('#quizProgress'),
-      studentLocSel=$('#studentLocationSelect'),
-      studentLocOther=$('#studentLocationOther');
-
+//////////////////////////// QUIZ //////////////////////////////////
 function renderQuizScreen(){
-  fillTestsSelect(quizTestSelect,true);
+  fillTestsSelect($('#quizTestSelect'),true);
   const last=store.get('bq_last_test',null);
-  if(last && quizTestSelect.querySelector(`option[value="${last}"]`)) quizTestSelect.value=last;
-  if(!$('#studentDate').value) $('#studentDate').value=todayISO();
+  const sel=$('#quizTestSelect');
+  if(last && sel?.querySelector(`option[value="${last}"]`)) sel.value=last;
+  if($('#studentDate') && !$('#studentDate').value) $('#studentDate').value=todayISO();
 
-  studentLocSel?.addEventListener('change', () => {
-    const other = studentLocSel.value === '__OTHER__';
-    studentLocOther?.classList.toggle('hidden', !other);
-    if (other) studentLocOther?.focus();
-  }, { once:true });
+  // location dropdown toggle
+  const studentLocSel=$('#studentLocationSelect');
+  const studentLocOther=$('#studentLocationOther');
+  if(studentLocSel){
+    if(window.__locHandler__) studentLocSel.removeEventListener('change', window.__locHandler__);
+    window.__locHandler__ = () => {
+      const other = studentLocSel.value === '__OTHER__';
+      if(studentLocOther){
+        studentLocOther.classList.toggle('hidden', !other);
+        if (other) studentLocOther.focus();
+      }
+    };
+    studentLocSel.addEventListener('change', window.__locHandler__);
+  }
 
   startOrRefreshQuiz();
-}
-quizTestSelect?.addEventListener('change',()=>{ startOrRefreshQuiz(); store.set('bq_last_test',quizTestSelect.value); });
 
+  on($('#quizTestSelect'),'change',()=>{ startOrRefreshQuiz(); store.set('bq_last_test',$('#quizTestSelect').value); });
+  on($('#quizPrev'),'click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
+  on($('#quizNext'),'click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
+  on($('#submitQuizBtn'),'click',submitQuiz);
+}
 function startOrRefreshQuiz(){
-  const tid=quizTestSelect.value; const t=state.tests[tid];
-  if(!t){ quizOptions.innerHTML=''; quizQuestion.textContent='Select a test above'; return; }
+  const tid=$('#quizTestSelect')?.value; const t=state.tests[tid];
+  const quizOptions=$('#quizOptions'), quizQuestion=$('#quizQuestion');
+  if(!t){ if(quizOptions) quizOptions.innerHTML=''; if(quizQuestion) quizQuestion.textContent='Select a test above'; return; }
   const pool=computePoolForTest(t);
-  if(!pool.length){ quizOptions.innerHTML=''; quizQuestion.textContent='No questions in this test.'; return; }
+  if(!pool.length){ if(quizOptions) quizOptions.innerHTML=''; if(quizQuestion) quizQuestion.textContent='No questions in this test.'; return; }
   const n=Math.min(t.n||30,pool.length);
   state.quiz.items=sample(pool,n).map(q=>{
     const opts=unique([q.a,...(q.distractors||[])].map(s=>(s??'').trim()).filter(Boolean));
@@ -683,12 +724,14 @@ function startOrRefreshQuiz(){
     return {q:q.q,a:q.a,opts:shuffle(opts),picked:null};
   });
   state.quiz.idx=0; state.quiz.n=n;
-  $('#quizArea').classList.remove('hidden'); $('#quizFinished').classList.add('hidden');
+  $('#quizArea')?.classList.remove('hidden'); $('#quizFinished')?.classList.add('hidden');
   drawQuiz();
 }
 function drawQuiz(){
   const i=state.quiz.idx, it=state.quiz.items[i]; if(!it) return;
-  quizQuestion.textContent=it.q; quizProgress.textContent=`${i+1}/${state.quiz.items.length}`;
+  if($('#quizQuestion')) $('#quizQuestion').textContent=it.q;
+  if($('#quizProgress')) $('#quizProgress').textContent=`${i+1}/${state.quiz.items.length}`;
+  const quizOptions=$('#quizOptions'); if(!quizOptions) return;
   quizOptions.innerHTML=it.opts.map((opt,idx)=>`
     <label class="option">
       <input type="radio" name="q${i}" value="${esc(opt)}" ${it.picked===opt?'checked':''}>
@@ -703,18 +746,17 @@ function drawQuiz(){
       const radios=quizOptions.querySelectorAll('input[type=radio]');
       if(radios[n]){ radios[n].checked=true; radios[n].dispatchEvent(new Event('change')); }
     }
-    if(e.key==='ArrowRight'){ $('#quizNext').click(); }
-    if(e.key==='ArrowLeft'){ $('#quizPrev').click(); }
+    if(e.key==='ArrowRight'){ $('#quizNext')?.click(); }
+    if(e.key==='ArrowLeft'){ $('#quizPrev')?.click(); }
   };
   window.removeEventListener('keydown', window.__bqQuizKeys__);
   window.__bqQuizKeys__=handler;
   window.addEventListener('keydown', handler);
 }
-$('#quizPrev')?.addEventListener('click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
-$('#quizNext')?.addEventListener('click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
-
-$('#submitQuizBtn')?.addEventListener('click',()=>{
-  const name=$('#studentName').value.trim();
+function submitQuiz(){
+  const name=$('#studentName')?.value.trim();
+  const studentLocSel=$('#studentLocationSelect');
+  const studentLocOther=$('#studentLocationOther');
   let loc='';
   if (studentLocSel) {
     loc = studentLocSel.value === '__OTHER__'
@@ -723,19 +765,18 @@ $('#submitQuizBtn')?.addEventListener('click',()=>{
   } else {
     loc = ($('#studentLocation')?.value || '').trim();
   }
-  const dt=$('#studentDate').value;
-
+  const dt=$('#studentDate')?.value;
   if(!name||!loc||!dt) return alert('Name, location and date are required.');
-  const tid=quizTestSelect.value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
+  const tid=$('#quizTestSelect')?.value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
   const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
   const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
 
   const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
   state.results.push(row); store.set(KEYS.results,state.results);
 
-  $('#quizArea').classList.add('hidden'); $('#quizFinished').classList.remove('hidden');
-  $('#finishedMsg').innerHTML=`Thanks, <strong>${esc(name)}</strong>! You scored <strong>${score}%</strong> (${correct}/${total}).`;
-  $('#finishedAnswers').innerHTML=answers.map(a=>`
+  $('#quizArea')?.classList.add('hidden'); $('#quizFinished')?.classList.remove('hidden');
+  if($('#finishedMsg')) $('#finishedMsg').innerHTML=`Thanks, <strong>${esc(name)}</strong>! You scored <strong>${score}%</strong> (${correct}/${total}).`;
+  if($('#finishedAnswers')) $('#finishedAnswers').innerHTML=answers.map(a=>`
     <div class="row">
       <div class="q">${esc(a.q)}</div>
       <div class="a">
@@ -744,22 +785,107 @@ $('#submitQuizBtn')?.addEventListener('click',()=>{
       </div>
     </div>`).join('');
   toast('Submission saved');
-});
-$('#restartQuizBtn')?.addEventListener('click',()=>{ $('#quizFinished').classList.add('hidden'); $('#quizArea').classList.remove('hidden'); startOrRefreshQuiz(); });
-$('#finishedPracticeBtn')?.addEventListener('click',()=>{ setParams({view:'practice'}); activate('practice'); });
 
-//////////////////////////// REPORTS view ////////////////////////////////
-function renderReports(){
-  const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
-  const keep=$('#repLocation').value;
-  $('#repLocation').innerHTML=`<option value="">All locations</option>`+locs.map(l=>`<option ${keep===l?'selected':''}>${esc(l)}</option>`).join('');
-  drawReports();
+  on($('#restartQuizBtn'),'click',()=>{ $('#quizFinished')?.classList.add('hidden'); $('#quizArea')?.classList.remove('hidden'); startOrRefreshQuiz(); }, { once:true });
+  on($('#finishedPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); }, { once:true });
 }
-$('#repLocation')?.addEventListener('change',drawReports);
-$('#repAttemptView')?.addEventListener('change',drawReports);
-$('#repSort')?.addEventListener('change',drawReports);
-$('#repView')?.addEventListener('change',drawReports);
 
+/////////////////////////// REPORTS //////////////////////////////
+function renderReports(){
+  // Location filter options
+  const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
+  const keep=$('#repLocation')?.value;
+  if($('#repLocation')) $('#repLocation').innerHTML=`<option value="">All locations</option>`+locs.map(l=>`<option ${keep===l?'selected':''}>${esc(l)}</option>`).join('');
+
+  drawReports();
+
+  on($('#repLocation'),'change',drawReports);
+  on($('#repAttemptView'),'change',drawReports);
+  on($('#repSort'),'change',drawReports);
+  on($('#repView'),'change',drawReports);
+}
+function drawReports(){
+  const view   = ($('#repView')?.value || 'active');
+  const loc    = $('#repLocation')?.value || '';
+  const attempt= $('#repAttemptView')?.value || 'all';
+  const sort   = $('#repSort')?.value || 'date_desc';
+
+  let rows = view==='archived' ? [...state.archived] : [...state.results];
+
+  if(loc) rows=rows.filter(r=>r.location===loc);
+  if(attempt!=='all'){
+    const map=new Map();
+    for(const r of rows){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
+    rows=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); rows.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
+  }
+  if(sort==='date_desc') rows.sort((a,b)=>b.time-a.time);
+  if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
+  if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
+  if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
+  if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));
+  if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));
+
+  const tb=$('#repTable tbody'); if(!tb) return;
+  tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
+    <td>${new Date(r.time).toLocaleString()}</td>
+    <td>${esc(r.name)}</td>
+    <td>${esc(r.location)}</td>
+    <td>${esc(r.testName)}</td>
+    <td>${r.score}%</td>
+    <td>${r.correct}/${r.of}</td>
+    <td><button class="btn ghost view-btn">Open</button></td>
+    <td class="actions">
+      ${view==='archived'
+        ? `<button class="btn small" data-act="restore">Restore</button>
+           <button class="btn danger small" data-act="delete-forever">Delete</button>`
+        : `<button class="btn small" data-act="archive">Archive</button>
+           <button class="btn danger small" data-act="delete-forever">Delete</button>`}
+    </td>
+  </tr>`).join('');
+
+  // bind row actions
+  tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
+    const id=btn.closest('tr').dataset.id; const src = view==='archived'?state.archived:state.results;
+    const r=src.find(x=>x.id===id); if(!r) return;
+    const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
+      <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
+      <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
+      <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
+    </div>`).join('');
+    const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
+    w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
+      <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
+      <div>${rows}</div>
+    </body>`);
+  }));
+  tb.querySelectorAll('button[data-act]').forEach(b=>b.addEventListener('click',()=>{
+    const id = b.closest('tr').dataset.id;
+    const act= b.dataset.act;
+    if (act==='archive')        archiveResult(id);
+    else if (act==='restore')   restoreResult(id);
+    else if (act==='delete-forever'){
+      if (confirm('Delete this result permanently?')) deleteForever(id, view==='archived'?'archived':'active');
+    }
+  }));
+
+  renderLocationAverages(view, loc, attempt);
+
+  // Most missed — based on ACTIVE results only
+  const baseRows=[...state.results];
+  const missMap=new Map();
+  for(const r of baseRows){
+    for(const a of (r.answers||[])){
+      const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
+      const m=missMap.get(k); m.total++; if(a.picked!==a.correct) m.misses++;
+    }
+  }
+  const top=[...missMap.values()].filter(x=>x.total>0).sort((a,b)=>b.misses-a.misses).slice(0,10);
+  if($('#missedSummary')) $('#missedSummary').innerHTML = top.length? top.map(m=>`
+    <div class="missrow">
+      <div class="misscount"><div>${m.misses}/${m.total}</div><div class="hint">missed</div></div>
+      <div class="missq">${esc(m.q)}</div>
+    </div>`).join('') : '<div class="hint">No data yet.</div>';
+}
 function archiveResult(id){
   const i = state.results.findIndex(r=>r.id===id);
   if(i>-1){
@@ -790,7 +916,6 @@ function deleteForever(id, from='active'){
     drawReports(); toast('Result deleted');
   }
 }
-
 function computeLocationAverages(rows){
   const map = new Map();
   for (const r of rows) {
@@ -805,15 +930,11 @@ function computeLocationAverages(rows){
   out.sort((a,b)=> a.location.localeCompare(b.location));
   return out;
 }
-
-function renderLocationAverages(){
-  const view   = ($('#repView')?.value || 'active');
-  const loc    = $('#repLocation').value;
-  const attempt= $('#repAttemptView').value;
-
+function renderLocationAverages(view='active', locFilter='', attempt='all'){
+  const box  = $('#locationAverages'); if(!box) return;
   let base = view==='archived' ? [...state.archived] : [...state.results];
 
-  if (loc) base = base.filter(r => r.location === loc);
+  if (locFilter) base = base.filter(r => r.location === locFilter);
   if (attempt!=='all'){
     const map=new Map();
     for(const r of base){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
@@ -821,14 +942,10 @@ function renderLocationAverages(){
   }
 
   const avgs = computeLocationAverages(base);
-  const box  = $('#locationAverages');
-  if(!box) return;
-
   if (!avgs.length){
     box.innerHTML = '<div class="hint">No data yet.</div>';
     return;
   }
-
   box.innerHTML = avgs.map(x=>`
     <div class="missrow">
       <div class="misscount">
@@ -839,90 +956,7 @@ function renderLocationAverages(){
   `).join('');
 }
 
-function drawReports(){
-  const loc    = $('#repLocation').value;
-  const attempt= $('#repAttemptView').value;
-  const sort   = $('#repSort').value;
-  const view   = ($('#repView')?.value || 'active');
-
-  let rows = view==='archived' ? [...state.archived] : [...state.results];
-
-  if(loc) rows=rows.filter(r=>r.location===loc);
-  if(attempt!=='all'){
-    const map=new Map();
-    for(const r of rows){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
-    rows=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); rows.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
-  }
-  if(sort==='date_desc') rows.sort((a,b)=>b.time-a.time);
-  if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
-  if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
-  if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
-  if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));
-  if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));
-
-  const tb=$('#repTable tbody');
-  tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
-    <td>${new Date(r.time).toLocaleString()}</td>
-    <td>${esc(r.name)}</td>
-    <td>${esc(r.location)}</td>
-    <td>${esc(r.testName)}</td>
-    <td>${r.score}%</td>
-    <td>${r.correct}/${r.of}</td>
-    <td><button class="btn ghost view-btn">Open</button></td>
-    <td class="actions">
-      ${view==='archived'
-        ? `<button class="btn small" data-act="restore">Restore</button>
-           <button class="btn danger small" data-act="delete-forever">Delete</button>`
-        : `<button class="btn small" data-act="archive">Archive</button>
-           <button class="btn danger small" data-act="delete-forever">Delete</button>`}
-    </td>
-  </tr>`).join('');
-
-  tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
-    const id=btn.closest('tr').dataset.id; const src = view==='archived'?state.archived:state.results;
-    const r=src.find(x=>x.id===id); if(!r) return;
-    const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
-      <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
-      <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
-      <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
-    </div>`).join('');
-    const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
-    w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
-      <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
-      <div>${rows}</div>
-    </body>`);
-  }));
-
-  tb.querySelectorAll('button[data-act]').forEach(b=>b.addEventListener('click',()=>{
-    const id = b.closest('tr').dataset.id;
-    const act= b.dataset.act;
-    if (act==='archive')        archiveResult(id);
-    else if (act==='restore')   restoreResult(id);
-    else if (act==='delete-forever'){
-      if (confirm('Delete this result permanently?')) deleteForever(id, view==='archived'?'archived':'active');
-    }
-  }));
-
-  renderLocationAverages();
-
-  // Missed Summary (based on ACTIVE set)
-  const baseRows=[...state.results];
-  const missMap=new Map();
-  for(const r of baseRows){
-    for(const a of (r.answers||[])){
-      const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
-      const m=missMap.get(k); m.total++; if(a.picked!==a.correct) m.misses++;
-    }
-  }
-  const top=[...missMap.values()].filter(x=>x.total>0).sort((a,b)=>b.misses-a.misses).slice(0,10);
-  $('#missedSummary').innerHTML = top.length? top.map(m=>`
-    <div class="missrow">
-      <div class="misscount"><div>${m.misses}/${m.total}</div><div class="hint">missed</div></div>
-      <div class="missq">${esc(m.q)}</div>
-    </div>`).join('') : '<div class="hint">No data yet.</div>';
-}
-
-///////////////////// Full Backup / Restore (Merge/Replace) //////////////
+//////////////////// Full Backup / Restore //////////////////////
 function ensureBackupButtons(){
   const hdr = $('#view-create .card .card-head');
   if(!hdr) return;
@@ -953,7 +987,6 @@ function ensureBackupButtons(){
     });
   }
 }
-
 function exportAllBackup(){
   const backup = {
     schema : 'bq_backup_v1',
@@ -972,142 +1005,30 @@ function exportAllBackup(){
   a.download = `bq_backup_${stamp}.json`;
   a.click(); URL.revokeObjectURL(a.href);
 
-  // Try to copy to clipboard too (for easy paste)
+  // Clipboard (best-effort)
   navigator.clipboard?.writeText(json).then(()=>toast('Backup downloaded & copied'),()=>toast('Backup downloaded'));
 }
-
 function importBackupFlow(){
   const useFile = confirm('Import from a file?\n\nOK = Choose file\nCancel = Paste JSON');
-  if(useFile){ $('#importBackupInput').click(); return; }
+  if(useFile){ $('#importBackupInput')?.click(); return; }
   const txt = prompt('Paste full backup JSON here:');
   if(!txt) return;
   try { const data=JSON.parse(txt); importBackupData(data); }
   catch(err){ alert('Invalid backup JSON: '+err.message); }
 }
-
 function importBackupData(data){
   if(!data || data.schema!=='bq_backup_v1'){ 
     if(!confirm('Schema missing or unknown. Attempt import anyway?')) return;
   }
   const modeMerge = confirm('How to apply backup?\n\nOK = MERGE into existing\nCancel = REPLACE (wipe current and restore backup)');
   if(modeMerge) mergeBackup(data); else replaceBackup(data);
-  // persist and refresh views
+  // persist and refresh
   store.set(KEYS.decks,   state.decks);
   store.set(KEYS.tests,   state.tests);
   store.set(KEYS.results, state.results);
   store.set(KEYS.archived,state.archived);
   toast(modeMerge ? 'Backup merged' : 'Backup restored (replaced)');
-  // refresh UI if visible
   renderCreate(); renderBuild(); renderReports();
-}
-
-/* Replace: wipe current and load as-is (with basic normalization) */
-function replaceBackup(data){
-  state.decks    = sanitizeDecksObject(data.decks || {});
-  state.tests    = sanitizeTestsObject(data.tests || {});
-  state.results  = Array.isArray(data.results)  ? data.results  : [];
-  state.archived = Array.isArray(data.archived) ? data.archived : [];
-  // ensure deck-name merges are normalized (legacy duplicates)
-  mergeDecksByName();
-}
-
-/* Merge: combine with current (preserve classes/decks/subdecks)
-   - Decks: merge by (class+deckName), union tags, append cards (dedupe by q|a|sub)
-   - Tests: merge by name; union selections; keep greater n; keep existing title unless backup has and existing empty
-   - Results/Archived: append; ensure unique ids (regenerate if collision)
-*/
-function mergeBackup(data){
-  const incomingDecks = sanitizeDecksObject(data.decks || {});
-  const incomingTests = sanitizeTestsObject(data.tests || {});
-  const incomingResults  = Array.isArray(data.results)  ? data.results  : [];
-  const incomingArchived = Array.isArray(data.archived) ? data.archived : [];
-
-  // Map deckKey -> existing deckId
-  const keyToId = new Map();
-  for(const [id,d] of Object.entries(state.decks)) keyToId.set(deckKey(d), id);
-
-  // 1) Merge decks
-  const importedKeyToExistingId = new Map();
-  for(const [impId, impDeck] of Object.entries(incomingDecks)){
-    const k = deckKey(impDeck);
-    if(!keyToId.has(k)){
-      const newId = uid('deck');
-      state.decks[newId] = deepCopy({...impDeck, id:newId});
-      keyToId.set(k, newId);
-      importedKeyToExistingId.set(impId, newId);
-    } else {
-      const existingId = keyToId.get(k);
-      importedKeyToExistingId.set(impId, existingId);
-      const dst = state.decks[existingId];
-      // union tags
-      dst.tags = unique([...(dst.tags||[]), ...(impDeck.tags||[]), ...(impDeck.subdeck?[impDeck.subdeck]:[])]);
-      // append cards with dedupe
-      const seen = new Set((dst.cards||[]).map(c => cardKey(c)));
-      const incomingCards = (impDeck.cards||[]).map(c => ({
-        id: uid('card'),
-        q: (c.q||'').trim(),
-        a: (c.a||'').trim(),
-        distractors: (c.distractors||[]).map(s=>String(s).trim()).filter(Boolean),
-        sub: (c.sub||'').trim(),
-        createdAt: c.createdAt || Date.now()
-      }));
-      for(const c of incomingCards){
-        const key = cardKey(c);
-        if(!seen.has(key)){ (dst.cards ||= []).push(c); seen.add(key); }
-      }
-    }
-  }
-
-  // 2) Merge tests (by name). Remap imported selections' deckIds to the resolved existing ids.
-  for(const [tid,t] of Object.entries(incomingTests)){
-    // remap selections
-    const remappedSelections = dedupeSelections((t.selections||[]).map(sel=>{
-      // if this deckId came from imported set, map to existing deck id
-      const targetId = importedKeyToExistingId.get(sel.deckId) || sel.deckId;
-      return { deckId: targetId, whole: !!sel.whole, subs: (sel.subs||[]) };
-    }));
-    const match = Object.entries(state.tests).find(([,x])=>x.name.toLowerCase()===String(t.name||'').toLowerCase());
-    if(!match){
-      const newId = uid('test');
-      state.tests[newId] = {
-        id: newId,
-        name: t.name || 'Test',
-        title: t.title || t.name || 'Test',
-        n: Math.max(1, +t.n || 30),
-        selections: remappedSelections
-      };
-    }else{
-      const id = match[0], dst = state.tests[id];
-      // union selections
-      dst.selections = dedupeSelections([...(dst.selections||[]), ...remappedSelections]);
-      // keep larger n
-      dst.n = Math.max(+dst.n||30, +t.n||30);
-      // fill empty title
-      if(!dst.title && t.title) dst.title = t.title;
-    }
-  }
-
-  // 3) Merge results + archived (ensure id uniqueness)
-  const allIds = new Set([...state.results, ...state.archived].map(r=>r.id));
-  for(const r of incomingResults){
-    if(!r || !r.id){ r.id = uid('res'); }
-    if(allIds.has(r.id)) r.id = uid('res');
-    state.results.push(r); allIds.add(r.id);
-  }
-  for(const r of incomingArchived){
-    if(!r || !r.id){ r.id = uid('res'); }
-    if(allIds.has(r.id)) r.id = uid('res');
-    state.archived.push(r); allIds.add(r.id);
-  }
-
-  // Normalize any legacy duplicates
-  mergeDecksByName();
-}
-
-/* helpers for merge/replace */
-function cardKey(c){
-  const norm = s => (s||'').trim().toLowerCase();
-  return `${norm(c.q)}|${norm(c.a)}|${norm(c.sub)}`;
 }
 function sanitizeDecksObject(obj){
   const out={};
@@ -1126,7 +1047,6 @@ function sanitizeDecksObject(obj){
   return out;
 }
 function sanitizeTestsObject(obj){
-  // tests stored as object keyed by id in our app
   if(Array.isArray(obj)){
     const map={};
     for(const t of obj){
@@ -1142,8 +1062,85 @@ function sanitizeTestsObject(obj){
   }
   return out;
 }
+function replaceBackup(data){
+  state.decks    = sanitizeDecksObject(data.decks || {});
+  state.tests    = sanitizeTestsObject(data.tests || {});
+  state.results  = Array.isArray(data.results)  ? data.results  : [];
+  state.archived = Array.isArray(data.archived) ? data.archived : [];
+  mergeDecksByName();
+}
+function mergeBackup(data){
+  const incomingDecks = sanitizeDecksObject(data.decks || {});
+  const incomingTests = sanitizeTestsObject(data.tests || {});
+  const incomingResults  = Array.isArray(data.results)  ? data.results  : [];
+  const incomingArchived = Array.isArray(data.archived) ? data.archived : [];
 
-//////////////////////// normalize & boot /////////////////////////////////
+  // Decks: merge by class+deckName
+  const keyToId = new Map();
+  for(const [id,d] of Object.entries(state.decks)) keyToId.set(deckKey(d), id);
+  const importedKeyToExistingId = new Map();
+
+  for(const [impId, impDeck] of Object.entries(incomingDecks)){
+    const k = deckKey(impDeck);
+    if(!keyToId.has(k)){
+      const newId = uid('deck');
+      state.decks[newId] = deepCopy({...impDeck, id:newId});
+      keyToId.set(k, newId);
+      importedKeyToExistingId.set(impId, newId);
+    } else {
+      const existingId = keyToId.get(k);
+      importedKeyToExistingId.set(impId, existingId);
+      const dst = state.decks[existingId];
+      dst.tags = unique([...(dst.tags||[]), ...(impDeck.tags||[]), ...(impDeck.subdeck?[impDeck.subdeck]:[])]);
+      const seen = new Set((dst.cards||[]).map(c => cardKey(c)));
+      const incomingCards = (impDeck.cards||[]).map(c => ({
+        id: uid('card'),
+        q: (c.q||'').trim(),
+        a: (c.a||'').trim(),
+        distractors: (c.distractors||[]).map(s=>String(s).trim()).filter(Boolean),
+        sub: (c.sub||'').trim(),
+        createdAt: c.createdAt || Date.now()
+      }));
+      for(const c of incomingCards){
+        const key = cardKey(c);
+        if(!seen.has(key)){ (dst.cards ||= []).push(c); seen.add(key); }
+      }
+    }
+  }
+
+  // Tests: merge by name, remap deckIds
+  for(const [tid,t] of Object.entries(incomingTests)){
+    const remappedSelections = dedupeSelections((t.selections||[]).map(sel=>{
+      const targetId = importedKeyToExistingId.get(sel.deckId) || sel.deckId;
+      return { deckId: targetId, whole: !!sel.whole, subs: (sel.subs||[]) };
+    }));
+    const match = Object.entries(state.tests).find(([,x])=>x.name.toLowerCase()===String(t.name||'').toLowerCase());
+    if(!match){
+      const newId = uid('test');
+      state.tests[newId] = {
+        id: newId,
+        name: t.name || 'Test',
+        title: t.title || t.name || 'Test',
+        n: Math.max(1, +t.n || 30),
+        selections: remappedSelections
+      };
+    }else{
+      const id = match[0], dst = state.tests[id];
+      dst.selections = dedupeSelections([...(dst.selections||[]), ...remappedSelections]);
+      dst.n = Math.max(+dst.n||30, +t.n||30);
+      if(!dst.title && t.title) dst.title = t.title;
+    }
+  }
+
+  // Results/Archived: append with unique ids
+  const allIds = new Set([...state.results, ...state.archived].map(r=>r.id));
+  for(const r of incomingResults){ const x=deepCopy(r||{}); if(!x.id || allIds.has(x.id)) x.id = uid('res'); state.results.push(x); allIds.add(x.id); }
+  for(const r of incomingArchived){ const x=deepCopy(r||{}); if(!x.id || allIds.has(x.id)) x.id = uid('res'); state.archived.push(x); allIds.add(x.id); }
+
+  mergeDecksByName();
+}
+
+//////////////////////// normalize & boot ////////////////////////
 function normalizeTests(){
   let changed=false;
   for(const id of Object.keys(state.tests)){
@@ -1159,12 +1156,15 @@ function boot(){
   normalizeTests();
   applyStudentMode();
 
+  // select touch focus helper
   $$('select').forEach(sel=>{
     sel.style.pointerEvents='auto';
     sel.addEventListener('touchstart',()=>sel.focus(),{passive:true});
   });
-  if(!$('#studentDate').value) $('#studentDate').value=todayISO();
+
+  if($('#studentDate') && !$('#studentDate').value) $('#studentDate').value=todayISO();
 
   activate(qs().get('view') || (isStudent() ? 'practice' : 'create'));
 }
+window.boot = boot; // expose for quick console check
 boot();
