@@ -1,16 +1,15 @@
-/* Barista Flashcards & Quizzes — local-first SPA (audited)
-   What's included:
-   - Mobile menu (auto-close on select/outside)
-   - Toast confirmations for all key actions
+/* Barista Flashcards & Quizzes — local-first SPA (menu-hardened)
+   Features:
+   - Smooth mobile menu (auto-close on item/outside/Escape/resize)
+   - Toast confirmations
    - Deck create/rename/delete/export/import
    - Test save/rename/delete + deck/subdeck selection
-   - Student link copy/open; Student mode with view guard
-   - Practice (flip/shuffle/keys) & Quiz (1–4 keys) flows
+   - Student link copy/open; Student mode guard
+   - Practice & Quiz flows (keys supported)
    - Quiz location dropdown + “Other…”
    - Reports: filters/sorts, view Active/Archived, archive/restore/delete, “Most Missed”
-   - Location averages (per selected view/filters)
-   - Full backup export/import (Merge or Replace), preserving classes/decks/subdecks/tests/results/archived
-   - Robust guards to prevent null derefs halting listeners
+   - Location averages
+   - Full backup export/import (Merge or Replace) preserving classes/decks/subdecks/tests/results/archived
 */
 
 //////////////////// tiny DOM/storage helpers ////////////////////
@@ -87,22 +86,61 @@ function activate(view){
   if(view==='quiz')     renderQuizScreen();
   if(view==='reports')  renderReports();
 
+  // Always close menu after navigation
   closeMenu();
 }
 window.addEventListener('popstate', ()=>activate(qs().get('view')||'create'));
 
-/////////////////////// mobile menu //////////////////////////////
-function openMenu(){ $('#menuList')?.classList.add('open'); $('#menuBtn')?.setAttribute('aria-expanded','true'); }
-function closeMenu(){ $('#menuList')?.classList.remove('open'); $('#menuBtn')?.setAttribute('aria-expanded','false'); }
+/////////////////////// mobile menu (robust) /////////////////////
+function menuEls(){
+  return { btn: document.getElementById('menuBtn'), list: document.getElementById('menuList') };
+}
+function openMenu(){
+  const {btn,list}=menuEls(); if(!btn||!list) return;
+  list.classList.add('open');
+  btn.setAttribute('aria-expanded','true');
+}
+function closeMenu(){
+  const {btn,list}=menuEls(); if(!btn||!list) return;
+  list.classList.remove('open');
+  btn.setAttribute('aria-expanded','false');
+}
+function toggleMenu(e){
+  const {btn,list}=menuEls(); if(!btn||!list) return;
+  e && e.stopPropagation();
+  if(list.classList.contains('open')) closeMenu(); else openMenu();
+}
+// Bind once, safely
+(function bindMenu(){
+  const {btn,list}=menuEls();
+  if(!btn || !list) return; // HTML not ready? boot() will still run; menu just won't bind.
 
-on($('#menuBtn'), 'click', (e)=>{ e.stopPropagation(); const ml=$('#menuList'); if(!ml) return; ml.classList.toggle('open'); $('#menuBtn')?.setAttribute('aria-expanded', String(ml.classList.contains('open'))); });
-on($('#menuList'), 'click', (e)=>{
-  const item = e.target.closest('.menu-item');
-  if(!item) return;
-  const route = item.dataset.route;
-  if(route){ setParams({view:route}); activate(route); }
-});
-document.addEventListener('click', (e)=>{ if(!e.target.closest('.menu')) closeMenu(); }, { capture:true });
+  // Click/tap to open
+  btn.addEventListener('click', toggleMenu);
+
+  // Close when selecting a route + trigger route
+  list.addEventListener('click', (e)=>{
+    const item = e.target.closest('.menu-item');
+    if(!item) return;
+    const route = item.dataset.route;
+    if(route){ setParams({view:route}); activate(route); }
+    closeMenu();
+  });
+
+  // Outside click closes (no capture to avoid pre-closing)
+  document.addEventListener('click', (e)=>{
+    if (!e.target.closest('.menu')) closeMenu();
+  });
+
+  // Escape closes
+  document.addEventListener('keydown', (e)=>{
+    if(e.key === 'Escape') closeMenu();
+  });
+
+  // Orientation/resize closes to prevent misposition
+  window.addEventListener('resize', closeMenu, { passive:true });
+  window.addEventListener('orientationchange', closeMenu, { passive:true });
+})();
 
 /////////////////////// student mode /////////////////////////////
 function applyStudentMode(){
@@ -165,7 +203,7 @@ function mergeDecksByName(){
 
 //////////////////////////// CREATE //////////////////////////////
 function renderCreate(){
-  ensureBackupButtons(); // inject Export All / Import Backup…
+  ensureBackupButtons(); // Export All / Import Backup…
 
   // datalists for Class + Deck
   const classListEl = $('#classNames');
