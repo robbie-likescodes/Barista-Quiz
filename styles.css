@@ -2,7 +2,14 @@
   --bg:#0f1322; --panel:#171c2f; --panel2:#1f2744; --text:#e8eefc; --muted:#9fb0d6;
   --brand:#56b6f7; --primary:#42bdf4; --success:#35d19a; --danger:#e87070;
   --line:rgba(255,255,255,.08); --chip:#2a355b;
+
+  /* utility tokens */
+  --space-1:6px; --space-2:10px; --space-3:12px; --space-4:16px;
+  --radius-sm:10px; --radius:12px; --radius-lg:14px;
+  --elev:0 10px 30px rgba(0,0,0,.25);
+  --dur-fast:.15s; --dur:.25s; --dur-slow:.5s;
 }
+
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
@@ -13,20 +20,34 @@ body{
 }
 .container{max-width:1050px;margin:16px auto;padding:0 16px 80px}
 
-/* Header / Tabs */
+/* Header */
 .app-header{position:sticky;top:0;z-index:10;background:linear-gradient(90deg,#12182b,#111527);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:12px;padding:14px 16px 8px}
 .logo{font-size:22px}
 h1{margin:0;font-size:28px;letter-spacing:.3px}
-.tabs{display:flex;gap:10px;padding:0 16px 14px;flex-wrap:wrap}
-.tab{border:1px solid var(--line);background:#18203a;color:var(--text);padding:8px 14px;border-radius:999px;cursor:pointer}
-.tab.active{background:var(--brand);color:#061125;border-color:transparent;font-weight:600}
+
+/* Compact top menu (mobile-first) */
+.topnav{display:flex;gap:8px;align-items:center;padding:0 16px 12px}
+#menuBtn{border:1px solid var(--line);background:#18203a;border-radius:var(--radius-sm);padding:8px 12px;cursor:pointer;color:var(--text);font-weight:600}
+.menu{position:relative}
+.menu-list{position:absolute;top:42px;right:0;min-width:220px;display:none;flex-direction:column;gap:6px;
+  background:#12182b;border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.menu-list.open{display:flex}
+.menu-item{border:1px solid var(--line);background:#18203a;color:var(--text);padding:10px 12px;border-radius:var(--radius);text-align:left;cursor:pointer}
+.menu-item.active{background:var(--brand);color:#061125;border-color:transparent;font-weight:700}
+@media (min-width:821px){
+  .topnav{gap:14px}
+  #menuBtn{display:none}
+  .menu-list{position:static;display:flex;flex-direction:row;background:transparent;border:none;box-shadow:none;padding:0;gap:10px}
+  .menu-item{background:#18203a}
+}
 
 /* Views */
-.view{display:none}.view.active{display:block}
+.view{display:block}
+.view:not(.active){display:none}
 
 /* Cards / Layout */
-.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin:16px 0;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:16px;margin:16px 0;box-shadow:var(--elev)}
 .card-head{display:flex;align-items:center;gap:10px}
 .grow{flex:1}
 .mt{margin-top:14px}.mt-sm{margin-top:8px}
@@ -41,24 +62,24 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
 
 /* Inputs & selects */
 .input,select{
-  width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
+  width:100%;padding:10px 12px;border-radius:var(--radius);border:1px solid var(--line);
   background:var(--panel2);color:var(--text);
-  line-height:1.2;pointer-events:auto;position:relative;z-index:2;
+  line-height:1.2;position:relative;z-index:2;
 }
-select.input{-webkit-appearance: menulist;appearance: menulist}
+select.input{appearance:auto}
 .input.small{max-width:120px}
-.textarea{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--panel2);color:var(--text)}
+.textarea{width:100%;padding:10px 12px;border-radius:var(--radius-lg);border:1px solid var(--line);background:var(--panel2);color:var(--text)}
 .label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
-.select-wrap{position:relative;z-index:2}
+.select-wrap{position:relative;z-index:2;isolation:isolate}
 
 /* Buttons */
-.btn{border:1px solid transparent;border-radius:12px;padding:10px 14px;background:#26335b;color:var(--text);cursor:pointer;font-weight:600}
+.btn{border:1px solid transparent;border-radius:var(--radius);padding:10px 14px;background:#26335b;color:var(--text);cursor:pointer;font-weight:600}
 .btn:hover{filter:brightness(1.05)}
 .btn.primary{background:var(--primary);color:#041221}
 .btn.success{background:var(--success);color:#062013}
 .btn.danger{background:var(--danger)}
 .btn.ghost{background:transparent;border-color:var(--line)}
-.btn.small{padding:7px 10px;font-size:13px}
+.btn.small{padding:9px 12px;font-size:13px}
 
 /* Lists */
 .list .cardline{display:grid;grid-template-columns:1.3fr 1fr auto;gap:12px;padding:12px;border-radius:10px;background:var(--panel2);margin:10px 0}
@@ -116,14 +137,14 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 /* Footer */
 .footer{text-align:center;padding:30px 0;color:var(--muted)}
 
-/* Student restricted view — hide admin tabs entirely */
-body.student .tab[data-route="create"],
-body.student .tab[data-route="build"],
-body.student .tab[data-route="reports"]{display:none}
+/* Student restricted view — hide admin items entirely */
+body.student [data-route="create"],
+body.student [data-route="build"],
+body.student [data-route="reports"]{display:none}
 
 /* Missed summary chips */
 .missed{display:flex;flex-direction:column;gap:10px}
-.missed .missrow{display:flex;gap:10px;align-items:flex-start}
+.missed .missrow{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
 .missed .missq{flex:1}
 .missed .misscount{min-width:60px;text-align:center;border:1px solid var(--line);background:#1a2140;border-radius:10px;padding:6px}
 
@@ -133,18 +154,14 @@ body.student .tab[data-route="reports"]{display:none}
 .micro{font-size:12px;color:var(--muted);opacity:.9}
 kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:12px;line-height:1;display:inline-block;padding:4px 6px;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;background:#10172a;box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 1px 0 rgba(0,0,0,.4)}
 :focus-visible{outline:2px solid color-mix(in oklab,var(--brand) 70%,white 0%);outline-offset:2px}
-.btn:focus-visible,.input:focus-visible,select.input:focus-visible,.tab:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
-.tab:hover{filter:brightness(1.06)}
-.tab.active:focus-visible{outline-color:var(--text)}
+.btn:focus-visible,.input:focus-visible,select.input:focus-visible,#menuBtn:focus-visible,.menu-item:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 #practiceCard{cursor:pointer}
 #practiceCard:focus-visible .front,#practiceCard:focus-visible .back{box-shadow:0 0 0 2px var(--brand) inset}
 .options .option span kbd{margin-right:6px;opacity:.9}
-.option input[type="radio"]{transform:scale(1.1)}
+.option input[type="radio"]{accent-color:var(--primary)}
 #newSubdeck{transition:max-height .25s ease,opacity .2s ease;max-height:120px}
 #newSubdeck.hidden{max-height:0;opacity:0;overflow:hidden}
-@media (max-width:720px){.tabs{gap:8px}.tab{padding:7px 12px}}
-.table th{color:color-mix(in oklab,var(--muted) 85%,white 15%)}
-.select-wrap{isolation:isolate}
+@media (max-width:720px){.topnav{gap:8px}.menu-item{padding:9px 12px}}
 
 /* ==== Merged-by-name Deck UI (CREATE) =================================== */
 #deckMeta{display:grid;gap:6px}
@@ -160,7 +177,8 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",mon
 #deckSelect.input{background:linear-gradient(0deg,rgba(255,255,255,0.02),rgba(255,255,255,0.02)),var(--panel2)}
 #newClassName,#newDeckName,#newSubdeck,#subdeckNewName{background:linear-gradient(0deg,rgba(255,255,255,0.02),rgba(255,255,255,0.02)),var(--panel2)}
 #view-create .card .card-head strong{white-space:nowrap}
-@media (max-width:800px){
-  #deckMetaTitle{font-size:12px}
-  #deckMetaSubs .chip,#subdeckManagerList .chip{font-size:11px;padding:5px 8px}
+
+/* reduced motion */
+@media (prefers-reduced-motion: reduce){
+  .flip .front,.flip .back{transition:none}
 }
