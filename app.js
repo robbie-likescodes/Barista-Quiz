@@ -3,9 +3,11 @@
    - Mobile menu: open/close + auto-close on item click + outside click close
    - Toast confirmations for key actions
    - Reports: Active/Archived view with Archive, Restore, Delete (persistent)
+   - Location Averages panel (respects filters)
    - Removed "My Results"
    - Student mode via ?mode=student&test=NAME
    - Build view: robust Save/Rename/Delete using current test ID tracked from datalist
+   - Quiz: Location dropdown with “Other…” fallback input
 */
 
 // ---------- tiny DOM helpers ----------
@@ -29,7 +31,7 @@ const KEYS = {
 // ---------- utils ----------
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
 const todayISO = () => new Date().toISOString().slice(0,10);
-const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&gt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const shuffle  = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [x[i],x[j]]=[x[j],x[i]] } return x; };
 const sample   = (a,n) => shuffle(a).slice(0,n);
 const unique   = xs => Array.from(new Set(xs));
@@ -379,12 +381,12 @@ deckSelect?.addEventListener('change',()=>{ renderDeckMeta(); renderSubdeckManag
 // BUILD TEST  (Save/Rename/Delete by ID)
 // ===================================================================
 const testsList=$('#testsList'), testNameInput=$('#testNameInput'), deckPickList=$('#deckPickList');
-const previewToggle=$('#previewToggle'), previewPanel=$('#previewPanel'), previewTitle=$('#previewTitle'), previewMeta=$('#previewMeta');
+const previewToggle=$('#previewToggle'), previewPanel=$('#previewPanel'), previewTitle=$('#previewTitle'), previewMeta=$('#previewMeta']);
 
 function renderBuild(){ 
   renderTestsDatalist(); 
   renderDeckPickList(); 
-  bindTestNamePicker();     // NEW: keep currentTestId in sync
+  bindTestNamePicker();     // keep currentTestId in sync
   syncPreview(); 
 }
 
@@ -455,6 +457,22 @@ $('#saveTestBtn')?.addEventListener('click',()=>{
   store.set(KEYS.tests,state.tests);
   renderTestsDatalist();
   toast(`Test “${t.name}” saved`);
+});
+
+$('#renameTestBtn')?.addEventListener('click',()=>{
+  const id = state.ui.currentTestId;
+  if(!id) return alert('Select an existing test first (pick from the list).');
+  const t = state.tests[id];
+  const next = prompt('New test name:', t.name);
+  if(next==null) return;
+  const newName = next.trim();
+  if(!newName) return alert('Name cannot be empty.');
+  t.name = newName;
+  t.title = $('#builderTitle').value.trim() || t.title || newName;
+  store.set(KEYS.tests, state.tests);
+  renderTestsDatalist();
+  testNameInput.value = newName;
+  toast('Test renamed');
 });
 
 $('#deleteTestBtn')?.addEventListener('click',()=>{
@@ -652,13 +670,26 @@ $('#practiceShuffle')?.addEventListener('click',()=>{ state.practice.cards=shuff
 // ===================================================================
 // QUIZ
 // ===================================================================
-const quizTestSelect=$('#quizTestSelect'), quizOptions=$('#quizOptions'), quizQuestion=$('#quizQuestion'), quizProgress=$('#quizProgress');
+const quizTestSelect=$('#quizTestSelect'),
+      quizOptions=$('#quizOptions'),
+      quizQuestion=$('#quizQuestion'),
+      quizProgress=$('#quizProgress'),
+      studentLocSel=$('#studentLocationSelect'),
+      studentLocOther=$('#studentLocationOther');
 
 function renderQuizScreen(){
   fillTestsSelect(quizTestSelect,true);
   const last=store.get('bq_last_test',null);
   if(last && quizTestSelect.querySelector(`option[value="${last}"]`)) quizTestSelect.value=last;
   if(!$('#studentDate').value) $('#studentDate').value=todayISO();
+
+  // Location “Other” toggle
+  studentLocSel?.addEventListener('change', () => {
+    const other = studentLocSel.value === '__OTHER__';
+    studentLocOther?.classList.toggle('hidden', !other);
+    if (other) studentLocOther?.focus();
+  }, { once:true });
+
   startOrRefreshQuiz();
 }
 quizTestSelect?.addEventListener('change',()=>{ startOrRefreshQuiz(); store.set('bq_last_test',quizTestSelect.value); });
@@ -706,7 +737,18 @@ $('#quizPrev')?.addEventListener('click',()=>{ state.quiz.idx=Math.max(0,state.q
 $('#quizNext')?.addEventListener('click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
 
 $('#submitQuizBtn')?.addEventListener('click',()=>{
-  const name=$('#studentName').value.trim(), loc=$('#studentLocation').value.trim(), dt=$('#studentDate').value;
+  const name=$('#studentName').value.trim();
+  let loc='';
+  if (studentLocSel) {
+    loc = studentLocSel.value === '__OTHER__'
+        ? (studentLocOther?.value || '').trim()
+        : (studentLocSel.value || '').trim();
+  } else {
+    // fallback for older HTML
+    loc = ($('#studentLocation')?.value || '').trim();
+  }
+  const dt=$('#studentDate').value;
+
   if(!name||!loc||!dt) return alert('Name, location and date are required.');
   const tid=quizTestSelect.value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
   const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
@@ -731,7 +773,7 @@ $('#restartQuizBtn')?.addEventListener('click',()=>{ $('#quizFinished').classLis
 $('#finishedPracticeBtn')?.addEventListener('click',()=>{ setParams({view:'practice'}); activate('practice'); });
 
 // ===================================================================
-// REPORTS (Active/Archived + actions)
+// REPORTS (Active/Archived + actions + Location Averages)
 // ===================================================================
 function renderReports(){
   const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
@@ -775,6 +817,56 @@ function deleteForever(id, from='active'){
   }
 }
 
+// ---- Location averages helpers ----
+function computeLocationAverages(rows){
+  const map = new Map();
+  for (const r of rows) {
+    const key = (r.location || 'Unknown').trim();
+    if (!map.has(key)) map.set(key, { sum:0, n:0 });
+    const m = map.get(key);
+    m.sum += (Number(r.score) || 0);
+    m.n += 1;
+  }
+  const out = [];
+  map.forEach((v,k)=> out.push({ location:k, avg: v.n ? (v.sum/v.n) : 0, count: v.n }));
+  out.sort((a,b)=> a.location.localeCompare(b.location));
+  return out;
+}
+
+function renderLocationAverages(){
+  const view   = ($('#repView')?.value || 'active');
+  const loc    = $('#repLocation').value;
+  const attempt= $('#repAttemptView').value;
+
+  let base = view==='archived' ? [...state.archived] : [...state.results];
+
+  // filters matching drawReports()
+  if (loc) base = base.filter(r => r.location === loc);
+  if (attempt!=='all'){
+    const map=new Map();
+    for(const r of base){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
+    base=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); base.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
+  }
+
+  const avgs = computeLocationAverages(base);
+  const box  = $('#locationAverages');
+  if(!box) return; // HTML might not be updated yet
+
+  if (!avgs.length){
+    box.innerHTML = '<div class="hint">No data yet.</div>';
+    return;
+  }
+
+  box.innerHTML = avgs.map(x=>`
+    <div class="missrow">
+      <div class="misscount">
+        <div>${x.count}</div><div class="hint">attempts</div>
+      </div>
+      <div class="missq"><strong>${esc(x.location)}</strong> — avg <strong>${Math.round(x.avg)}%</strong></div>
+    </div>
+  `).join('');
+}
+
 function drawReports(){
   const loc    = $('#repLocation').value;
   const attempt= $('#repAttemptView').value;
@@ -793,6 +885,9 @@ function drawReports(){
   if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
   if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
   if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
+  // Optional: support Location sort if you add it in HTML
+  if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));
+  if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));
 
   const tb=$('#repTable tbody');
   tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
@@ -836,6 +931,9 @@ function drawReports(){
       if (confirm('Delete this result permanently?')) deleteForever(id, view==='archived'?'archived':'active');
     }
   }));
+
+  // Location averages (respects current filters)
+  renderLocationAverages();
 
   // Missed Summary from ACTIVE only
   const baseRows=[...state.results];
