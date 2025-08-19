@@ -1,6 +1,6 @@
 /* =========================================================
    Barista Flashcards & Quizzes — styles.css (mobile-first)
-   - Smooth mobile menu (no click blocking when closed)
+   - Smooth mobile menu (no click-block when closed)
    - Sticky header
    - Responsive cards/grids
    - Accessible focus states
@@ -33,40 +33,61 @@ body{
 .logo{font-size:22px}
 h1{margin:0;font-size:28px;letter-spacing:.3px}
 
-/* Top nav wrapper */
 .topnav{display:flex;align-items:center;justify-content:flex-end;padding:6px 16px 12px}
 
-/* Menu button + panel */
+/* Menu container */
 .menu{position:relative;z-index:1000}
-#menuBtn{
-  border:1px solid var(--line);background:#18203a;color:var(--text);
-  padding:8px 12px;border-radius:10px;font-weight:600;cursor:pointer
-}
-#menuBtn:hover{filter:brightness(1.06)}
-#menuBtn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 
-/* The dropdown panel */
+/* Menu button – big touch target */
+#menuBtn{
+  position:relative;
+  border:1px solid var(--line);
+  background:#18203a;color:var(--text);
+  padding:10px 14px;border-radius:10px;
+  font-weight:700;letter-spacing:.2px;cursor:pointer;
+  transition:transform .12s ease, filter .12s ease;
+  will-change: transform;
+  -webkit-tap-highlight-color: transparent;
+}
+#menuBtn:hover{ filter:brightness(1.06) }
+#menuBtn:active{ transform:translateY(1px) }
+#menuBtn:focus-visible{ outline:2px solid var(--brand); outline-offset:2px }
+
+/* Dropdown panel (animated; doesn’t intercept clicks when closed) */
 .menu-list{
   position:absolute;right:0;top:calc(100% + 8px);
   min-width:220px;max-height:75vh;overflow:auto;
   background:linear-gradient(180deg,#141a2e,#12182b);
-  border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.35);
+  border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 16px 40px rgba(0,0,0,.45);
   padding:8px;
-  /* critical: hidden state must not intercept clicks */
-  opacity:0;pointer-events:none;transform:translateY(-6px);
-  transition:opacity .15s ease,transform .15s ease
+
+  opacity:0;pointer-events:none;transform:translateY(-6px) scale(.98);
+  transform-origin: top right;
+  transition:opacity .16s ease, transform .16s ease;
 }
-.menu-list.open{opacity:1;pointer-events:auto;transform:translateY(0)}
+.menu-list.open{
+  opacity:1;pointer-events:auto;transform:translateY(0) scale(1);
+}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce){
+  .menu-list{ transition:none }
+  #menuBtn{ transition:none }
+}
+
+/* Menu items */
 .menu-item{
   display:block;width:100%;text-align:left;
-  padding:10px 12px;margin:4px 0;border-radius:8px;
-  border:1px solid var(--line);background:#18203a;color:var(--text);cursor:pointer
+  padding:12px;margin:4px 0;border-radius:10px;
+  border:1px solid var(--line);background:#192341;color:var(--text);
+  cursor:pointer;font-weight:600;transition:background .12s ease, filter .12s ease;
 }
-.menu-item.active{background:var(--brand);color:#061125;border-color:transparent;font-weight:700}
-.menu-item:hover{filter:brightness(1.05)}
-.menu-item:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.menu-item:hover{ filter:brightness(1.05) }
+.menu-item.active{ background:var(--brand);color:#061125;border-color:transparent }
+.menu-item:focus-visible{ outline:2px solid var(--brand); outline-offset:2px }
 
-/* Hide admin menu in student mode */
+/* Hide admin routes in student mode */
 body.student .menu-item[data-route="create"],
 body.student .menu-item[data-route="build"],
 body.student .menu-item[data-route="reports"]{display:none}
@@ -88,7 +109,7 @@ body.student .menu-item[data-route="reports"]{display:none}
 .hint{color:var(--muted);font-size:13px}
 .hidden{display:none!important}
 
-/* Make long button rows wrap nicely on mobile */
+/* Make long action rows wrap on small screens */
 .card .card-head .btn{white-space:nowrap}
 .card .card-head{row-gap:8px}
 
@@ -235,10 +256,10 @@ kbd{
 /* Ensure select popups remain tappable on iOS */
 .select-wrap{isolation:isolate}
 
-/* Slightly tighter tabs and buttons on narrow screens */
+/* Slightly tighter headers/buttons on narrow screens */
 @media (max-width:720px){
-  #menuBtn{padding:7px 12px}
-  .menu-item{padding:9px 11px}
+  #menuBtn{padding:9px 12px}
+  .menu-item{padding:10px 12px}
   .brand h1{font-size:22px}
 }
 
