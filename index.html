@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#111827" />
   <title>Barista Flashcards & Quizzes</title>
 
-  <!-- Bump versions to bust cache when you update files -->
+  <!-- Cache-busting versions must match your deployed filenames -->
   <link rel="stylesheet" href="styles.css?v=12" />
   <script defer src="app.js?v=12"></script>
 </head>
@@ -20,7 +20,7 @@
       <h1>Barista Flashcards &amp; Quizzes</h1>
     </div>
 
-    <!-- Compact top nav: button on mobile; inline menu on larger screens via CSS -->
+    <!-- Compact top nav: dropdown menu on mobile; all handled by CSS/JS -->
     <div class="topnav">
       <div class="menu">
         <button id="menuBtn" class="btn ghost" aria-haspopup="true" aria-expanded="false">Menu ≡</button>
@@ -54,10 +54,7 @@
           <button id="exportDeckBtn" class="btn">Export</button>
           <button id="importDeckBtn" class="btn">Import…</button>
           <input id="importDeckInput" type="file" accept=".json,.txt" hidden>
-          <!-- JS will auto-inject two more buttons here:
-               - #exportAllBtn (Export All)
-               - #importBackupBtn (Import Backup…)
-               plus a hidden #importBackupInput file input -->
+          <!-- JS will inject: Export All / Import Backup… buttons + hidden file input -->
         </div>
 
         <div class="grid g2 mt">
@@ -181,7 +178,7 @@
       </div>
     </section>
 
-    <!-- ========================= PRACTICE ========================= -->
+    <!-- ========================= PRACTICE ====================== -->
     <section id="view-practice" class="view" aria-labelledby="practice-title">
       <h2 id="practice-title">Practice</h2>
 
@@ -225,7 +222,7 @@
       </div>
     </section>
 
-    <!-- ========================= QUIZ ========================= -->
+    <!-- =========================== QUIZ ======================== -->
     <section id="view-quiz" class="view" aria-labelledby="quiz-title">
       <h2 id="quiz-title">Quiz</h2>
 
@@ -237,7 +234,7 @@
           </div>
           <input id="studentName" class="input" placeholder="Your name (required)" aria-label="Your name">
 
-          <!-- Location selection: dropdown + “Other…” text field -->
+          <!-- Location: dropdown with "Other…" text field -->
           <div class="select-wrap">
             <label class="label" for="studentLocationSelect">Location</label>
             <select id="studentLocationSelect" class="input" aria-label="Location">
@@ -289,7 +286,7 @@
       </div>
     </section>
 
-    <!-- ========================= REPORTS ========================= -->
+    <!-- ========================= REPORTS ======================= -->
     <section id="view-reports" class="view" aria-labelledby="reports-title">
       <h2 id="reports-title">Reports</h2>
 
