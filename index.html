@@ -1,173 +1,399 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#0f1115">
-  <title>Storyboard</title>
-  <link rel="stylesheet" href="styles.css" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <meta name="theme-color" content="#111827" />
+  <title>Barista Flashcards & Quizzes</title>
+
+  <!-- Cache-busting versions must match your deployed filenames -->
+  <link rel="stylesheet" href="styles.css?v=12" />
+  <script defer src="app.js?v=12"></script>
 </head>
 <body>
-  <!-- ===== Top bar ===== -->
-  <header class="topbar">
-    <div style="display:flex; gap:8px; align-items:center">
-      <button id="homeBtn" class="icon-btn" aria-label="Projects">🏠</button>
-      <button id="menuBtn" class="icon-btn" aria-label="Menu">☰</button>
-    </div>
+  <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
+
+  <!-- Header / Brand / Mobile menu -->
+  <header class="app-header" role="banner">
     <div class="brand">
-      <span class="logo">🎬</span>
-      <span class="title">Storyboard</span>
+      <span class="logo" aria-hidden="true">☕</span>
+      <h1>Barista Flashcards &amp; Quizzes</h1>
     </div>
-    <div class="top-actions">
-      <button id="presentBtn" class="seg">Present ▶</button>
-      <button id="viewToggle" class="seg" aria-haspopup="true">Comic ▾</button>
+
+    <!-- Compact top nav: dropdown menu on mobile; all handled by CSS/JS -->
+    <div class="topnav">
+      <div class="menu">
+        <button id="menuBtn" class="btn ghost" aria-haspopup="true" aria-expanded="false">Menu ≡</button>
+        <div id="menuList" class="menu-list" role="menu" aria-label="Primary">
+          <button class="menu-item active" data-route="create" role="menuitem">Create</button>
+          <button class="menu-item" data-route="build" role="menuitem">Build Test</button>
+          <button class="menu-item" data-route="practice" role="menuitem">Practice</button>
+          <button class="menu-item" data-route="quiz" role="menuitem">Quiz</button>
+          <button class="menu-item" data-route="reports" role="menuitem">Reports</button>
+        </div>
+      </div>
     </div>
   </header>
 
-  <!-- ===== Actions sheet (menu) ===== -->
-  <div id="sheet" class="sheet" aria-hidden="true">
-    <div class="sheet-backdrop"></div>
-    <div class="sheet-body" role="dialog" aria-label="Actions">
-      <div class="sheet-grabber"></div>
-      <h2>Actions</h2>
+  <main class="container" role="main">
+    <div id="liveRegion" class="sr-only" aria-live="polite"></div>
 
-      <div class="sheet-grid">
-        <button id="addSceneBtn" class="sheet-btn">➕ Add Scene</button>
-        <button id="addShotsBtn" class="sheet-btn">📥 Add Shots</button>
-        <button id="renderFilmBtn" class="sheet-btn">⏺ Render Film (MP4)</button>
-        <button id="switchProjectBtn" class="sheet-btn">🏠 Switch Project</button>
-        <button id="exportBtn" class="sheet-btn">⤵ Export JSON</button>
-        <button id="importBtn" class="sheet-btn">⤴ Import JSON</button>
-        <button id="clearBtn" class="sheet-btn danger">🗑 Clear Project</button>
-      </div>
+    <!-- ========================= CREATE ========================= -->
+    <section id="view-create" class="view active" aria-labelledby="create-title">
+      <h2 id="create-title">Create &amp; Manage Decks</h2>
 
-      <label class="field">
-        <span>Project name</span>
-        <input id="projectName" type="text" placeholder="Untitled project" />
-      </label>
+      <div class="card">
+        <div class="card-head">
+          <strong>Add / Select a Deck (merged by Deck Name)</strong>
+          <div class="grow"></div>
 
-      <button id="closeSheet" class="close-btn">Close</button>
-    </div>
-  </div>
+          <!-- Deck actions -->
+          <button id="renameDeckBtn" class="btn ghost">Rename</button>
+          <button id="editDeckMetaBtn" class="btn ghost">Edit Meta</button>
+          <button id="deleteDeckBtn" class="btn danger">Delete</button>
+          <button id="exportDeckBtn" class="btn">Export</button>
+          <button id="importDeckBtn" class="btn">Import…</button>
+          <input id="importDeckInput" type="file" accept=".json,.txt" hidden>
+          <!-- JS injects: Export All / Import Backup… buttons + hidden backup input -->
+        </div>
 
-  <!-- ===== Main content (Comic & Board views) ===== -->
-  <main id="main">
-    <!-- Comic View -->
-    <section id="comicView" class="comic">
-      <div class="comic-head">
-        <p class="hint">Tap an empty box to add a shot. Tap a shot to edit. Long‑press a shot for replace/duplicate/delete.</p>
-      </div>
-      <div id="scenes" class="scenes"></div>
-      <div class="spacer-80"></div>
-    </section>
+        <div class="grid g2 mt">
+          <div>
+            <label class="label" for="newClassName">Class</label>
+            <input id="newClassName" class="input" list="classNames" placeholder="e.g., Barista Training" autocomplete="off" />
+            <datalist id="classNames"></datalist>
+          </div>
+          <div>
+            <label class="label" for="newDeckName">Deck (merged by name)</label>
+            <input id="newDeckName" class="input" list="deckNames" placeholder="e.g., Hot Drinks" autocomplete="off" />
+            <datalist id="deckNames"></datalist>
+          </div>
+        </div>
 
-    <!-- Board View (vertical gallery) -->
-    <section id="boardView" class="board hidden" aria-label="Board view">
-      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Add media">
-        <div class="dz-inner">
-          <strong>Drop images/videos</strong>
-          <small>…or tap here to pick from camera roll</small>
+        <div class="grid g2 mt">
+          <div class="subcat-wrap">
+            <button id="toggleSubdeckBtn" class="btn ghost small" aria-controls="newSubdeck" aria-expanded="false">+ Sub‑deck (optional)</button>
+            <input id="newSubdeck" class="input hidden" placeholder="e.g., Latte Art">
+          </div>
+          <div class="mt-sm"><button id="addDeckBtn" class="btn primary">Create / Select Deck</button></div>
+        </div>
+
+        <div class="mt select-wrap">
+          <label class="label" for="deckSelect">Pick Existing Deck (by Name)</label>
+          <select id="deckSelect" class="input" aria-label="Pick Deck (by Name)"></select>
+          <div id="deckMeta" class="hint mt-sm">
+            <span id="deckMetaTitle"></span>
+            <div id="deckMetaSubs" class="micro"></div>
+          </div>
         </div>
       </div>
-      <div id="gallery" class="gallery"></div>
+
+      <details class="card">
+        <summary class="card-head">Bulk Add (tap for format)</summary>
+        <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
+        <textarea id="bulkTextarea" class="textarea mt" rows="5"
+          placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub‑deck(optional)"></textarea>
+        <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
+      </details>
+
+      <div class="card">
+        <h3>Add / Edit Card</h3>
+        <div class="grid g2 mt">
+          <input id="qInput" class="input" placeholder="Question" aria-label="Question">
+          <input id="aCorrectInput" class="input" placeholder="Correct answer" aria-label="Correct answer">
+          <input id="aWrong1Input" class="input" placeholder="Wrong answer 1 (required)" aria-label="Wrong answer 1">
+          <input id="aWrong2Input" class="input" placeholder="Wrong answer 2 (optional)" aria-label="Wrong answer 2">
+          <input id="aWrong3Input" class="input" placeholder="Wrong answer 3 (optional)" aria-label="Wrong answer 3">
+          <input id="cardSubInput" class="input" placeholder="Card sub‑deck (optional)" aria-label="Card sub-deck">
+        </div>
+        <div class="mt"><button id="addCardBtn" class="btn primary">Save Card</button></div>
+
+        <details class="mt card" id="subdeckManager" open>
+          <summary class="card-head">Sub‑decks in this Deck</summary>
+          <div id="subdeckManagerList" class="chips mt"></div>
+          <div class="grid g2 mt">
+            <input id="subdeckNewName" class="input" placeholder="Add new sub‑deck (tag)">
+            <button id="createSubdeckBtn" class="btn">Add Sub‑deck</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="card">
+        <h3>Cards in Deck</h3>
+
+        <!-- NEW: sub-deck viewer filter -->
+        <div class="select-wrap mt-sm">
+          <label class="label" for="cardsSubFilter">Show sub‑deck</label>
+          <select id="cardsSubFilter" class="input" aria-label="Filter cards by sub-deck">
+            <!-- JS populates options; default is “All sub-decks” -->
+          </select>
+        </div>
+
+        <div id="cardsList" class="list" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- ========================= BUILD ========================= -->
+    <section id="view-build" class="view" aria-labelledby="build-title">
+      <h2 id="build-title">Build Test &amp; Share</h2>
+
+      <div class="card">
+        <label class="switch">
+          <input type="checkbox" id="previewToggle">
+          <span>Preview as Barista</span>
+        </label>
+
+        <div class="grid g3 mt">
+          <div>
+            <label class="label" for="testNameInput">Create or select a Test</label>
+            <input id="testNameInput" class="input" list="testsList" placeholder="Type a new Test name or select" autocomplete="off">
+            <datalist id="testsList"></datalist>
+            <div class="mt-sm">
+              <button id="saveTestBtn" class="btn primary">Save/Select Test</button>
+              <button id="renameTestBtn" class="btn ghost">Rename Test</button>
+              <button id="deleteTestBtn" class="btn danger">Delete Test</button>
+            </div>
+          </div>
+          <div>
+            <label class="label" for="builderTitle">Title shown to barista</label>
+            <input id="builderTitle" class="input" placeholder="e.g., Barista Basics">
+          </div>
+          <div>
+            <label class="label" for="builderCount">Total Questions</label>
+            <input id="builderCount" type="number" min="1" class="input small" value="30">
+          </div>
+        </div>
+
+        <div class="mt">
+          <h4>Share</h4>
+          <button id="copyShareBtn" class="btn success">Copy Student Link</button>
+          <button id="openShareBtn" class="btn">Open Student Preview</button>
+          <p class="hint mt-sm">Student link is restricted: no Create/Build/Reports; only the shared Test is visible.</p>
+        </div>
+      </div>
+
+      <details id="deckChooser" class="card" open>
+        <summary class="card-head">Choose decks (✓ whole deck or expand to pick sub‑decks)</summary>
+        <div id="deckPickList" class="deck-pick"></div>
+      </details>
+
+      <div id="previewPanel" class="card hidden">
+        <h3 id="previewTitle">Preview</h3>
+        <div class="hint" id="previewMeta" aria-live="polite"></div>
+        <div class="mt">
+          <button id="previewPracticeBtn" class="btn">Preview Practice</button>
+          <button id="previewQuizBtn" class="btn primary">Preview Quiz</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================= PRACTICE ====================== -->
+    <section id="view-practice" class="view" aria-labelledby="practice-title">
+      <h2 id="practice-title">Practice</h2>
+
+      <div class="card">
+        <div class="grid g2">
+          <div class="select-wrap">
+            <label class="label" for="practiceTestSelect">Select Test</label>
+            <select id="practiceTestSelect" class="input" aria-label="Select Test for Practice"></select>
+          </div>
+          <div class="hint mt-sm">
+            Pick which decks (from the Test) you want to study
+            <div class="micro mt-xs">Hotkeys: <kbd>Space</kbd> flip • <kbd>←</kbd>/<kbd>→</kbd> prev/next</div>
+          </div>
+        </div>
+        <div id="practiceDeckChecks" class="chips mt"></div>
+        <button id="startPracticeBtn" class="btn primary mt">Start Practice</button>
+      </div>
+
+      <div id="practiceArea" class="card" hidden>
+        <div class="bar">
+          <span id="practiceLabel">Studying…</span>
+          <div class="grow"></div>
+          <span id="practiceProgress" class="hint" aria-live="polite"></span>
+        </div>
+        <div id="practiceCard" class="flip mt" tabindex="0" aria-label="Flashcard">
+          <div class="front">
+            <div class="fc-title">Question</div>
+            <div id="practiceQuestion" class="fc-text"></div>
+            <div class="hint mt-sm">Tap or press <kbd>Space</kbd> to flip</div>
+          </div>
+          <div class="back">
+            <div class="fc-title">Answer</div>
+            <div id="practiceAnswer" class="fc-text"></div>
+          </div>
+        </div>
+        <div class="mt grid g3">
+          <button id="practicePrev" class="btn">Prev</button>
+          <button id="practiceShuffle" class="btn ghost">Shuffle</button>
+          <button id="practiceNext" class="btn">Next</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================== QUIZ ======================== -->
+    <section id="view-quiz" class="view" aria-labelledby="quiz-title">
+      <h2 id="quiz-title">Quiz</h2>
+
+      <div class="card">
+        <div class="grid g3">
+          <div class="select-wrap">
+            <label class="label" for="quizTestSelect">Select Test</label>
+            <select id="quizTestSelect" class="input"></select>
+          </div>
+          <input id="studentName" class="input" placeholder="Your name (required)" aria-label="Your name">
+
+          <!-- Location: dropdown with "Other…" text field -->
+          <div class="select-wrap">
+            <label class="label" for="studentLocationSelect">Location</label>
+            <select id="studentLocationSelect" class="input" aria-label="Location">
+              <option value="" disabled selected>Choose location…</option>
+              <option>Huffman</option>
+              <option>Camelot</option>
+              <option>Muldoon</option>
+              <option>Boniface</option>
+              <option>Lake Otis</option>
+              <option>Office</option>
+              <option value="__OTHER__">Other…</option>
+            </select>
+            <input id="studentLocationOther" class="input mt-sm hidden" placeholder="Type location…" aria-label="Other location">
+          </div>
+        </div>
+
+        <div class="mt">
+          <label class="label" for="studentDate">Date</label>
+          <input id="studentDate" class="input" type="date">
+        </div>
+        <div class="micro hint mt-sm">Hotkeys: <kbd>1</kbd>–<kbd>4</kbd> pick • <kbd>←</kbd>/<kbd>→</kbd> prev/next</div>
+      </div>
+
+      <div id="quizArea" class="card">
+        <div class="bar">
+          <span id="quizQuestion" class="qtxt"></span>
+          <div class="grow"></div>
+          <span id="quizProgress" class="hint" aria-live="polite"></span>
+        </div>
+        <div id="quizOptions" class="options mt" role="group" aria-label="Answer choices"></div>
+        <div class="mt grid g3">
+          <button id="quizPrev" class="btn">Prev</button>
+          <button id="submitQuizBtn" class="btn primary">Submit</button>
+          <button id="quizNext" class="btn">Next</button>
+        </div>
+      </div>
+
+      <div id="quizFinished" class="card hidden">
+        <h3>Finished!</h3>
+        <p id="finishedMsg" class="lead"></p>
+        <details open class="answer-key">
+          <summary class="card-head">Your Answers &amp; Key</summary>
+          <div id="finishedAnswers" class="answers mt"></div>
+        </details>
+        <div class="mt grid g2">
+          <button id="restartQuizBtn" class="btn">Restart with fresh questions</button>
+          <button id="finishedPracticeBtn" class="btn ghost">Go to Practice</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================= REPORTS ======================= -->
+    <section id="view-reports" class="view" aria-labelledby="reports-title">
+      <h2 id="reports-title">Reports</h2>
+
+      <div class="card">
+        <div class="grid g3">
+          <div class="select-wrap">
+            <label class="label" for="repLocation">Location</label>
+            <select id="repLocation" class="input">
+              <option value="">All locations</option>
+            </select>
+          </div>
+          <div class="select-wrap">
+            <label class="label" for="repAttemptView">Attempts</label>
+            <select id="repAttemptView" class="input">
+              <option value="all">All attempts</option>
+              <option value="first">First attempt only</option>
+              <option value="last">Last attempt only</option>
+            </select>
+          </div>
+          <div class="select-wrap">
+            <label class="label" for="repSort">Sort</label>
+            <select id="repSort" class="input">
+              <option value="date_desc">Newest first</option>
+              <option value="date_asc">Oldest first</option>
+              <option value="test_asc">Test A→Z</option>
+              <option value="test_desc">Test Z→A</option>
+              <option value="loc_asc">Location A→Z</option>
+              <option value="loc_desc">Location Z→A</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- NEW: Date range + Test filters -->
+        <div class="grid g3 mt">
+          <div>
+            <label class="label" for="repDateFrom">Date from</label>
+            <input id="repDateFrom" class="input" type="date" aria-label="Filter results from date">
+          </div>
+          <div>
+            <label class="label" for="repDateTo">Date to</label>
+            <input id="repDateTo" class="input" type="date" aria-label="Filter results to date">
+          </div>
+          <div class="select-wrap">
+            <label class="label" for="repTest">Test</label>
+            <select id="repTest" class="input" aria-label="Filter by test name">
+              <option value="">All tests</option>
+              <!-- JS populates test names -->
+            </select>
+          </div>
+        </div>
+
+        <div class="grid g2 mt">
+          <div class="select-wrap">
+            <label class="label" for="repView">View</label>
+            <select id="repView" class="input">
+              <option value="active">Active results</option>
+              <option value="archived">Archived results</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Location Averages -->
+      <div class="card" id="locAvgCard">
+        <h3>Location Averages</h3>
+        <div id="locationAverages" class="missed"></div>
+      </div>
+
+      <div class="card table-wrap">
+        <table id="repTable" class="table">
+          <thead>
+            <tr>
+              <th>Date/Time</th>
+              <th>Name</th>
+              <th>Location</th>
+              <th>Test</th>
+              <th>Score</th>
+              <th>Correct</th>
+              <th>View</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Most Missed Questions</h3>
+        <div id="missedSummary" class="missed"></div>
+      </div>
     </section>
   </main>
 
-  <!-- ===== Shot Editor sheet ===== -->
-  <div id="editor" class="sheet" aria-hidden="true">
-    <div class="sheet-backdrop"></div>
-    <div class="sheet-body" role="dialog" aria-label="Edit shot">
-      <div class="sheet-grabber"></div>
-      <h2 id="editorTitle">Edit Shot</h2>
+  <footer class="footer" role="contentinfo">
+    <span class="hint">Admin data stays in this browser (localStorage). Share the student link to restrict access.</span>
+  </footer>
 
-      <div class="row cols-3">
-        <label class="field"><span>Lens</span>
-          <select id="edLens">
-            <option>18mm</option><option>24mm</option><option>35mm</option>
-            <option selected>50mm</option><option>85mm</option><option>100mm</option>
-          </select>
-        </label>
-        <label class="field"><span>Shot Type</span>
-          <select id="edShotType">
-            <option>WS</option><option selected>MS</option><option>CU</option><option>ECU</option>
-            <option>POV</option><option>OTS</option><option>2S</option><option>Establishing</option>
-          </select>
-        </label>
-        <label class="field"><span>Transition (out)</span>
-          <select id="edTransition">
-            <option>Cut</option><option>Dissolve</option><option>Fade</option>
-            <option>Wipe</option><option>Match Cut</option><option>Whip Pan</option>
-            <option>J-Cut</option><option>L-Cut</option>
-          </select>
-        </label>
-      </div>
-
-      <div class="row">
-        <div class="tags-label muted">Movements</div>
-        <div id="edMoves" class="tags"></div>
-      </div>
-
-      <label class="field"><span>Dialogue / Subtitle</span>
-        <textarea id="edDialogue" rows="2" placeholder="“He stares into the soup…”"></textarea>
-      </label>
-      <label class="field"><span>Description / Notes</span>
-        <textarea id="edNotes" rows="2" placeholder="Lighting, blocking, extras…"></textarea>
-      </label>
-
-      <div class="audio-bar">
-        <button id="recBtn" class="small-btn">🎙 Record</button>
-        <button id="playNoteBtn" class="small-btn" disabled>▶ Play Note</button>
-        <span id="recStatus" class="muted">No voice note</span>
-      </div>
-
-      <!-- New replace/delete controls inside editor -->
-      <div class="audio-bar" style="justify-content:flex-start;gap:8px;margin-top:8px">
-        <button id="edReplace" class="small-btn">↻ Replace media</button>
-        <button id="edDelete" class="small-btn danger">🗑 Delete shot</button>
-      </div>
-
-      <button id="closeEditor" class="close-btn">Done</button>
-    </div>
-  </div>
-
-  <!-- ===== Transition picker ===== -->
-  <div id="transPicker" class="sheet" aria-hidden="true">
-    <div class="sheet-backdrop"></div>
-    <div class="sheet-body" role="dialog" aria-label="Transition">
-      <div class="sheet-grabber"></div>
-      <h2>Choose Transition</h2>
-      <div class="tags" id="transOptions"></div>
-      <button id="closeTrans" class="close-btn">Close</button>
-    </div>
-  </div>
-
-  <!-- ===== Presentation player ===== -->
-  <div id="player" class="player" aria-hidden="true">
-    <div class="player-chrome">
-      <button id="closePlayer" class="icon-btn" title="Close">✕</button>
-      <div class="controls-left">
-        <button id="prevBtn" class="icon-btn" title="Prev">⟵</button>
-        <button id="nextBtn" class="icon-btn" title="Next">⟶</button>
-      </div>
-      <div class="controls-right">
-        <button id="fsBtn" class="icon-btn" title="Fullscreen">⛶</button>
-      </div>
-    </div>
-    <div class="stage">
-      <div class="stage-media"></div>
-      <div class="overlay top-left" id="ovTopLeft"></div>
-      <div class="overlay top-right" id="ovTopRight"></div>
-      <div class="overlay bottom" id="ovBottom"></div>
-    </div>
-  </div>
-
-  <!-- ===== Hidden file inputs ===== -->
-  <input id="fileMulti" type="file" accept="image/*,video/*" multiple hidden />
-  <input id="fileSingle" type="file" accept="image/*,video/*" hidden />
-  <input id="importFile" type="file" accept="application/json" hidden />
-
-  <!-- App JS -->
-  <script src="app.js"></script>
+  <!-- Toast / Snackbar -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
