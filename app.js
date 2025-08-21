@@ -1,1294 +1,875 @@
-/* Barista Flashcards & Quizzes — local-first SPA (menu-hardened)
-   Features:
-   - Smooth mobile menu (auto-close on item/outside/Escape/resize)
-   - Toast confirmations
-   - Deck create/rename/delete/export/import
-   - Test save/rename/delete + deck/subdeck selection
-   - Student link copy/open; Student mode guard
-   - Practice & Quiz flows (keys supported)
-   - Quiz location dropdown + “Other…”
-   - Reports: filters/sorts, view Active/Archived, archive/restore/delete, “Most Missed”
-   - Location averages
-   - Full backup export/import (Merge or Replace) preserving classes/decks/subdecks/tests/results/archived
-
-   NEW (per your requests):
-   1) Reports: filter by Date Range AND by Test
-   2) Create: filter/show cards by Sub‑deck (view sub‑decks individually)
-   3) Create: after creating a deck, auto-select it in “Pick Existing Deck”
-   4) Create: deleting a card no longer changes deck or scrolls to top
+/* Storyboard App — full build
+   - Comic / Board / Presentation
+   - Editor w/ movements, transitions, dialogue, notes, voice notes
+   - Transition chips, trailing add box
+   - Multi-Project (IndexedDB) + Project Picker
+   - Home / Switch Project hooks
+   - Replace / Delete inside Editor and in Board cards
+   - MP4 export with ffmpeg.wasm (+ progress UI + voice-note & clip audio mix)
+   - WebM fallback with progress
 */
 
-//////////////////// tiny DOM/storage helpers ////////////////////
-const $  = s => document.querySelector(s);
-const $$ = s => Array.from(document.querySelectorAll(s));
-const on = (el, ev, fn, opt) => el && el.addEventListener(ev, fn, opt);
+(() => {
+  // =========================
+  // Small helpers
+  // =========================
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+  const on = (el, ev, fn, opts) => el && el.addEventListener(ev, fn, opts);
+  const uid = (p="p_") => p + Math.random().toString(36).slice(2,10);
+  const sanitize = s => String(s||"").replace(/[^\w\-]+/g,'_').slice(0,60);
+  const esc = s => String(s||"").replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
+  const sleep = ms => new Promise(r=>setTimeout(r, ms));
+  const debounce = (fn, ms=350)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
 
-const store = {
-  get(k, f){ try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } },
-  set(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
-};
+  function fileToDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
+  function loadImage(src){ return new Promise((res,rej)=>{ const i=new Image(); i.crossOrigin="anonymous"; i.onload=()=>res(i); i.onerror=rej; i.src=src; }); }
+  function downloadBlob(data, filename, type){
+    const blob = data instanceof Blob ? data : new Blob([data], {type});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url), 1200);
+  }
+  function longPress(el, ms, cb){ let t=null; on(el,"touchstart",()=>{ t=setTimeout(cb,ms); },{passive:true}); on(el,"touchend",()=>clearTimeout(t),{passive:true}); on(el,"touchmove",()=>clearTimeout(t),{passive:true}); on(el,"mousedown",()=>{ t=setTimeout(cb,ms); }); on(el,"mouseup",()=>clearTimeout(t)); on(el,"mouseleave",()=>clearTimeout(t)); }
+  function formatTime(s){ s=Math.round(s); const m=Math.floor(s/60), r=s%60; return `${m}:${String(r).padStart(2,"0")}`; }
 
-//////////////////////////// constants ///////////////////////////
-const KEYS = {
-  decks   : 'bq_decks_v6',
-  tests   : 'bq_tests_v6',
-  results : 'bq_results_v6',
-  archived: 'bq_results_archived_v1'
-};
-const ADMIN_VIEWS = new Set(['create','build','reports']);
-
-//////////////////////////// utils ///////////////////////////////
-const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
-const todayISO = () => new Date().toISOString().slice(0,10);
-const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-const shuffle  = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [x[i],x[j]]=[x[j],x[i]] } return x; };
-const sample   = (a,n) => shuffle(a).slice(0,n);
-const unique   = xs => Array.from(new Set(xs));
-const deepCopy = obj => JSON.parse(JSON.stringify(obj));
-const deckKey  = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName||'').trim().toLowerCase()}`;
-const cardKey  = c => `${(c.q||'').trim().toLowerCase()}|${(c.a||'').trim().toLowerCase()}|${(c.sub||'').trim().toLowerCase()}`;
-
-/////////////////////////// global state /////////////////////////
-let state = {
-  decks   : store.get(KEYS.decks, {}),
-  tests   : store.get(KEYS.tests, {}),
-  results : store.get(KEYS.results, []),
-  archived: store.get(KEYS.archived, []),
-  practice: { cards:[], idx:0 },
-  quiz    : { items:[], idx:0, n:30, locked:false, testId:'' },
-  ui      : { currentTestId: null, subFilter: '' } // NEW: subFilter for Create view
-};
-
-//////////////////////////// toasts //////////////////////////////
-function toast(msg, ms=1800){
-  const t = $('#toast');
-  if(!t){ alert(msg); return; }
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(window.__toastTimer);
-  window.__toastTimer = setTimeout(()=>t.classList.remove('show'), ms);
-}
-
-/////////////////////////// routing //////////////////////////////
-const qs = () => new URLSearchParams(location.search);
-function setParams(obj){
-  const p = qs();
-  for(const [k,v] of Object.entries(obj)){ if(v==null) p.delete(k); else p.set(k,v); }
-  history.pushState(null,'',location.pathname+'?'+p);
-}
-function isStudent(){ return qs().get('mode')==='student'; }
-
-function activate(view){
-  if(isStudent() && ADMIN_VIEWS.has(view)){ view='practice'; setParams({view}); }
-  window.removeEventListener('keydown', window.__bqPracticeKeys__);
-  window.removeEventListener('keydown', window.__bqQuizKeys__);
-
-  $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-'+view));
-  $$('.menu-item').forEach(i => i.classList.toggle('active', i.dataset.route===view));
-
-  if(view==='create')   renderCreate();
-  if(view==='build')    renderBuild();
-  if(view==='practice') renderPracticeScreen();
-  if(view==='quiz')     renderQuizScreen();
-  if(view==='reports')  renderReports();
-
-  // Always close menu after navigation
-  closeMenu();
-}
-window.addEventListener('popstate', ()=>activate(qs().get('view')||'create'));
-
-/////////////////////// mobile menu (robust) /////////////////////
-function menuEls(){
-  return { btn: document.getElementById('menuBtn'), list: document.getElementById('menuList') };
-}
-function openMenu(){
-  const {btn,list}=menuEls(); if(!btn||!list) return;
-  list.classList.add('open');
-  btn.setAttribute('aria-expanded','true');
-}
-function closeMenu(){
-  const {btn,list}=menuEls(); if(!btn||!list) return;
-  list.classList.remove('open');
-  btn.setAttribute('aria-expanded','false');
-}
-function toggleMenu(e){
-  const {btn,list}=menuEls(); if(!btn||!list) return;
-  e && e.stopPropagation();
-  if(list.classList.contains('open')) closeMenu(); else openMenu();
-}
-// Bind once, safely
-(function bindMenu(){
-  const {btn,list}=menuEls();
-  if(!btn || !list) return; // HTML not ready? boot() will still run; menu just won't bind.
-
-  // Click/tap to open
-  btn.addEventListener('click', toggleMenu);
-
-  // Close when selecting a route + trigger route
-  list.addEventListener('click', (e)=>{
-    const item = e.target.closest('.menu-item');
-    if(!item) return;
-    const route = item.dataset.route;
-    if(route){ setParams({view:route}); activate(route); }
-    closeMenu();
-  });
-
-  // Outside click closes (no capture to avoid pre-closing)
-  document.addEventListener('click', (e)=>{
-    if (!e.target.closest('.menu')) closeMenu();
-  });
-
-  // Escape closes
-  document.addEventListener('keydown', (e)=>{
-    if(e.key === 'Escape') closeMenu();
-  });
-
-  // Orientation/resize closes to prevent misposition
-  window.addEventListener('resize', closeMenu, { passive:true });
-  window.addEventListener('orientationchange', closeMenu, { passive:true });
-})();
-
-/////////////////////// student mode /////////////////////////////
-function applyStudentMode(){
-  const p = qs();
-  const student = isStudent();
-  document.body.classList.toggle('student', student);
-  if(student){
-    const name = p.get('test')||'';
-    if(name){
-      const entry = Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name.toLowerCase());
-      if(entry){ state.quiz.locked=true; state.quiz.testId=entry[0]; }
+  // =========================
+  // Toasts & Progress modal
+  // =========================
+  function toast(msg, ms=2000){
+    let host = document.getElementById("toasts");
+    if(!host){
+      host = document.createElement("div");
+      host.id = "toasts";
+      host.style.cssText = "position:fixed;left:50%;transform:translateX(-50%);bottom:20px;display:grid;gap:8px;z-index:22000";
+      document.body.appendChild(host);
     }
-    const next = p.get('view') && !ADMIN_VIEWS.has(p.get('view')) ? p.get('view') : 'practice';
-    setParams({view:next});
-  }
-}
-
-/////////////////////// deck merge helpers ///////////////////////
-function listUniqueDecks(){
-  const seen=new Set(), arr=[];
-  for(const d of Object.values(state.decks)){
-    const k=deckKey(d); if(!seen.has(k)){ seen.add(k); arr.push(d); }
-  }
-  arr.sort((a,b)=> (a.className||'').localeCompare(b.className||'') || (a.deckName||'').localeCompare(b.deckName||'')); 
-  return arr;
-}
-function deckSubTags(d){
-  const fromCards=(d.cards||[]).map(c=>c.sub||'').filter(Boolean);
-  const declared=(d.tags||[]);
-  const legacy=d.subdeck?[d.subdeck]:[];
-  return unique([...fromCards,...declared,...legacy]).sort((a,b)=>a.localeCompare(b));
-}
-function mergeDecksByName(){
-  const mapByKey=new Map(), idRemap=new Map();
-  for(const [id,d] of Object.entries(state.decks)){
-    d.cards=Array.isArray(d.cards)?d.cards:[]; d.tags=Array.isArray(d.tags)?d.tags:[];
-    const k=deckKey(d);
-    if(!mapByKey.has(k)){
-      mapByKey.set(k,id);
-      if(d.subdeck) d.tags=unique([...(d.tags||[]),d.subdeck]);
-      continue;
-    }
-    const primaryId=mapByKey.get(k), P=state.decks[primaryId];
-    P.cards=[...(P.cards||[]),...(d.cards||[])];
-    P.tags=unique([...(P.tags||[]),...(d.tags||[]),...(d.subdeck?[d.subdeck]:[])]);
-    idRemap.set(id,primaryId);
-    delete state.decks[id];
-  }
-  let changed=false;
-  for(const t of Object.values(state.tests)){
-    if(!t.selections) continue;
-    for(const sel of t.selections){
-      if(idRemap.has(sel.deckId)){ sel.deckId=idRemap.get(sel.deckId); changed=true; }
-    }
-    t.selections=dedupeSelections(t.selections||[]);
-  }
-  if(changed) store.set(KEYS.tests,state.tests);
-  store.set(KEYS.decks,state.decks);
-}
-
-//////////////////////////// CREATE //////////////////////////////
-function renderCreate(){
-  ensureBackupButtons(); // Export All / Import Backup…
-
-  // datalists for Class + Deck
-  const classListEl = $('#classNames');
-  const deckListEl  = $('#deckNames');
-  if (classListEl && deckListEl){
-    const arr=listUniqueDecks();
-    const classes=unique(arr.map(d=>d.className).filter(Boolean)).sort();
-    const decks=unique(arr.map(d=>d.deckName).filter(Boolean)).sort();
-    classListEl.innerHTML=classes.map(v=>`<option value="${esc(v)}"></option>`).join('');
-    deckListEl.innerHTML=decks.map(v=>`<option value="${esc(v)}"></option>`).join('');
+    const t = document.createElement("div");
+    t.textContent = msg;
+    t.style.cssText = "background:#111826cc;border:1px solid #2a3243;color:#e8ecf3;padding:10px 12px;border-radius:10px;backdrop-filter:blur(8px);";
+    host.appendChild(t);
+    setTimeout(()=>{ t.style.opacity="0"; t.style.transition="opacity .25s"; setTimeout(()=>host.removeChild(t), 250); }, ms);
   }
 
-  renderDeckSelect();
-  renderDeckMeta();
-  renderSubdeckManager();
-  renderCardsList();
+  let progEl = null;
+  function progressOpen(title="Exporting…"){
+    if(progEl) return;
+    progEl = document.createElement("div");
+    progEl.innerHTML = `
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:21000;display:grid;place-items:center">
+        <div style="width:min(520px,92vw);background:#151a22;border:1px solid #2a3243;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.35);padding:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <strong style="font-size:16px">${title}</strong>
+            <button id="xProg" style="border:1px solid #2a3243;background:#0f1420;color:#e8ecf3;border-radius:10px;padding:6px 10px">Hide</button>
+          </div>
+          <div id="progStep" style="color:#9aa6bd;margin-bottom:8px">Preparing…</div>
+          <div style="height:10px;background:#0f1420;border:1px solid #2a3243;border-radius:999px;overflow:hidden">
+            <div id="progBar" style="height:100%;width:0%;background:linear-gradient(90deg,#6aa1ff,#87b4ff)"></div>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(progEl);
+    $("#xProg").onclick = ()=> { progEl.style.display="none"; };
+  }
+  function progressUpdate(step, ratio){
+    if(!progEl) return;
+    const s = progEl.querySelector("#progStep");
+    const b = progEl.querySelector("#progBar");
+    if(s) s.textContent = step;
+    if(b && typeof ratio==="number") b.style.width = Math.round(ratio*100)+"%";
+  }
+  function progressClose(){ if(!progEl) return; progEl.remove(); progEl=null; }
 
-  // Button bindings (safe)
-  on($('#createSubdeckBtn'),'click',createSubdeck);
-  on($('#toggleSubdeckBtn'),'click',toggleNewSubdeck);
-  on($('#addDeckBtn'),'click',addDeck);
-  on($('#renameDeckBtn'),'click',renameDeck);
-  on($('#editDeckMetaBtn'),'click',editDeckMeta);
-  on($('#deleteDeckBtn'),'click',deleteDeck);
-  on($('#exportDeckBtn'),'click',exportDeck);
-  on($('#importDeckBtn'),'click',()=>{ toast('Choose a JSON or TXT file to import…',1400); $('#importDeckInput')?.click(); });
-  on($('#importDeckInput'),'change',importDeckInputChange);
-  on($('#bulkSummaryBtn'),'click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
-  on($('#bulkAddBtn'),'click',bulkAddCards);
-  on($('#addCardBtn'),'click',addCard);
-
-  // Reset sub-filter when changing deck
-  on($('#deckSelect'),'change',()=>{ 
-    state.ui.subFilter=''; 
-    renderDeckMeta(); 
-    renderSubdeckManager(); 
-    renderCardsList(); 
+  // =========================
+  // State & Models
+  // =========================
+  const defaultMeta = () => ({
+    lens: "50mm",
+    shotType: "MS",
+    movements: [],
+    transition: "Cut",
+    dialogue: "",
+    notes: "",
+    voiceNote: null // { dataUrl, duration, mime }
   });
-}
+  const makeShot = ({ type="image", src="", filename="shot", meta } = {}) =>
+    ({ id: uid("s_"), type, src, filename, meta: meta || defaultMeta() });
 
-function renderDeckSelect(){
-  const deckSelect = $('#deckSelect'); if(!deckSelect) return;
-  const arr=listUniqueDecks();
-  if(arr.length===0){ deckSelect.innerHTML=`<option value="">No decks yet</option>`; return; }
-  deckSelect.innerHTML=arr.map(d=>{
-    const subs=deckSubTags(d);
-    const subTxt=subs.length?` • ${subs.length} sub-deck${subs.length>1?'s':''}`:''; 
-    return `<option value="${d.id}">${esc(d.deckName)} (${d.cards.length}) [${esc(d.className)}${subTxt}]</option>`;
-  }).join('');
-  deckSelect.style.pointerEvents='auto';
-}
-function selectedDeckId(){const id=$('#deckSelect')?.value;return id&&state.decks[id]?id:null}
-
-function renderDeckMeta(){
-  const titleEl=$('#deckMetaTitle'), subsEl=$('#deckMetaSubs'); if(!titleEl||!subsEl) return;
-  const id=selectedDeckId();
-  if(!id){ titleEl.textContent='No deck selected'; subsEl.innerHTML=''; return; }
-  const d=state.decks[id]; const subs=deckSubTags(d);
-  titleEl.textContent=`${d.deckName} — ${d.className} • ${d.cards.length} card${d.cards.length!==1?'s':''}`;
-  subsEl.innerHTML=subs.length?subs.map(s=>`
-    <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
-  `).join(''):`<span class="hint">No sub-decks yet</span>`;
-  subsEl.querySelectorAll('.remove').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const tag=btn.dataset.sub;
-      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-      d.tags=(d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-      store.set(KEYS.decks,state.decks);
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    });
-  });
-
-  // NEW: populate "Show sub-deck" filter if it exists in HTML
-  const subSel = $('#cardsSubFilter');
-  if(subSel){
-    const curr = state.ui.subFilter || '';
-    subSel.innerHTML = `<option value="">All sub-decks</option>` + subs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
-    if(curr && subs.includes(curr)) subSel.value = curr; else subSel.value = '';
-    subSel.onchange = ()=>{ state.ui.subFilter = subSel.value || ''; renderCardsList(); };
-  }
-}
-function renderSubdeckManager(){
-  const list=$('#subdeckManagerList'); if(!list) return;
-  const id=selectedDeckId();
-  if(!id){ list.innerHTML='<span class="hint">Select a deck first.</span>'; return; }
-  const d=state.decks[id]; const subs=deckSubTags(d);
-  list.innerHTML=subs.length?subs.map(s=>`
-    <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
-  `).join(''):`<span class="hint">No sub-decks yet</span>`;
-  list.querySelectorAll('.remove').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const tag=btn.dataset.sub;
-      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-      d.tags=(d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-      store.set(KEYS.decks,state.decks);
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    });
-  });
-}
-function renderCardsList(){
-  const cardsList=$('#cardsList'); if(!cardsList) return;
-  const id=selectedDeckId();
-  if(!id){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
-  const d=state.decks[id];
-
-  // NEW: filter by selected sub-deck if any
-  const subFilter = ($('#cardsSubFilter')?.value || state.ui.subFilter || '').trim();
-  const list = subFilter ? (d.cards||[]).filter(c => (c.sub||'') === subFilter) : (d.cards||[]);
-
-  if(!list.length){ cardsList.innerHTML='<div class="hint">No cards yet—add your first one above.</div>'; return; }
-  cardsList.innerHTML=list.map(c=>`
-    <div class="cardline" data-id="${c.id}">
-      <div><strong>Q:</strong> ${esc(c.q)}</div>
-      <div><strong>Correct:</strong> ${esc(c.a)}<br><span class="hint">Wrong:</span> ${esc((c.distractors||[]).join(' | '))}${c.sub? `<br><span class="hint">Sub‑deck: ${esc(c.sub)}</span>`:''}</div>
-      <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
-    </div>`).join('');
-
-  // Delete — NEW: preserve deck selection AND scroll position
-  cardsList.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',()=>{
-    const keepDeckId = selectedDeckId(); if(!keepDeckId) return;
-    const y = window.scrollY;
-    const d=state.decks[keepDeckId];
-    const cid=b.closest('.cardline').dataset.id;
-    d.cards=d.cards.filter(c=>c.id!==cid);
-    store.set(KEYS.decks,state.decks);
-
-    // Refresh UI while preserving selection and sub-filter
-    // (renderDeckSelect is optional; if you want dropdown counts to update immediately, keep it.)
-    renderDeckSelect();
-    const deckSelect = $('#deckSelect');
-    if (deckSelect) deckSelect.value = keepDeckId;
-
-    renderDeckMeta();
-    renderSubdeckManager();
-    renderCardsList();
-
-    // restore scroll
-    window.scrollTo(0, y);
-    toast('Card deleted');
-  }));
-
-  // Edit (unchanged)
-  cardsList.querySelectorAll('.btn-edit').forEach(b=>b.addEventListener('click',()=>{
-    const cid=b.closest('.cardline').dataset.id; const card=d.cards.find(c=>c.id===cid); if(!card) return;
-    const q=prompt('Question:',card.q); if(q===null) return;
-    const a=prompt('Correct answer:',card.a); if(a===null) return;
-    const wrong=prompt('Wrong answers (separate by |):',(card.distractors||[]).join('|'));
-    const sub=prompt('Card sub‑deck (optional):',card.sub||''); if(sub===null) return;
-    card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
-    if(card.sub){ d.tags=unique([...(d.tags||[]),card.sub]); }
-    store.set(KEYS.decks,state.decks); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    toast('Card updated');
-  }));
-}
-
-// CREATE handlers
-function createSubdeck(){
-  const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
-  const name=($('#subdeckNewName')?.value||'').trim(); if(!name) return;
-  const d=state.decks[id]; d.tags=unique([...(d.tags||[]),name]);
-  store.set(KEYS.decks,state.decks); $('#subdeckNewName').value='';
-  renderDeckMeta(); renderSubdeckManager(); toast('Sub-deck added');
-}
-function toggleNewSubdeck(){
-  const el=$('#newSubdeck'); if(!el) return;
-  const isHidden=el.classList.toggle('hidden');
-  $('#toggleSubdeckBtn')?.setAttribute('aria-expanded', String(!isHidden));
-}
-function addDeck(){
-  const cls=$('#newClassName')?.value.trim();
-  const dnm=$('#newDeckName')?.value.trim();
-  const sdn=$('#newSubdeck')?.classList.contains('hidden')?'':($('#newSubdeck')?.value.trim()||'');
-  if(!cls||!dnm) return alert('Class and Deck are required.');
-
-  let existing=Object.values(state.decks).find(d=>(d.className||'').toLowerCase()===cls.toLowerCase()&&(d.deckName||'').toLowerCase()===dnm.toLowerCase());
-  if(existing){
-    const deckSelect=$('#deckSelect'); if(deckSelect) deckSelect.value=existing.id;
-    if(sdn){ existing.tags=unique([...(existing.tags||[]),sdn]); store.set(KEYS.decks,state.decks); }
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList(); renderDeckSelect();
-    toast('Selected existing deck');
-    return;
-  }
-  const id=uid('deck');
-  state.decks[id]={id,className:cls,deckName:dnm,cards:[],tags:sdn?[sdn]:[],createdAt:Date.now()};
-  store.set(KEYS.decks,state.decks);
-
-  if($('#newClassName')) $('#newClassName').value='';
-  if($('#newDeckName'))  $('#newDeckName').value='';
-  if($('#newSubdeck')){ $('#newSubdeck').value=''; $('#newSubdeck').classList.add('hidden'); }
-
-  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-
-  // NEW: auto-select the newly created deck in the dropdown
-  const deckSelect=$('#deckSelect'); 
-  if (deckSelect){ deckSelect.value = id; }
-
-  toast('Deck created');
-}
-function renameDeck(){
-  const id=selectedDeckId(); if(!id) return;
-  const d=state.decks[id];
-  const cls=prompt('Class:',d.className||''); if(cls===null) return;
-  const dnk=prompt('Deck (by name):',d.deckName||''); if(dnk===null) return;
-  d.className=cls.trim(); d.deckName=dnk.trim();
-  store.set(KEYS.decks,state.decks); mergeDecksByName();
-  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-  toast('Deck renamed');
-}
-function editDeckMeta(){
-  const id=selectedDeckId(); if(!id) return;
-  const d=state.decks[id];
-  const cls=prompt('Edit Class:',d.className||''); if(cls===null) return;
-  d.className=cls.trim();
-  store.set(KEYS.decks,state.decks); mergeDecksByName();
-  renderDeckSelect(); renderDeckMeta();
-  toast('Meta updated');
-}
-function deleteDeck(){
-  const id=selectedDeckId(); if(!id) return;
-  if(confirm('Delete this deck and its cards?')){
-    delete state.decks[id];
-    store.set(KEYS.decks,state.decks);
-    renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    toast('Deck deleted');
-  }
-}
-function exportDeck(){
-  const id=selectedDeckId(); if(!id) return;
-  const blob=new Blob([JSON.stringify(state.decks[id],null,2)],{type:'application/json'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-  a.download=`${(state.decks[id].deckName||'Deck').replace(/\W+/g,'_')}.json`; a.click(); URL.revokeObjectURL(a.href);
-  toast('Deck exported');
-}
-async function importDeckInputChange(e){
-  const f=e.target.files?.[0]; if(!f) return;
-  const txt=await f.text(); e.target.value='';
-  try{
-    let data=null; try{data=JSON.parse(txt)}catch{}
-    const upsertDeck=(cls,dk,cards,declaredTag='')=>{
-      let ex=Object.values(state.decks).find(d=>(d.className||'').toLowerCase()===cls.toLowerCase()&&(d.deckName||'').toLowerCase()===dk.toLowerCase());
-      if(!ex){
-        const id=uid('deck');
-        ex=state.decks[id]={id,className:cls||'Class',deckName:dk||f.name.replace(/\.[^.]+$/,''),cards:[],tags:[],createdAt:Date.now()};
-      }
-      ex.cards.push(...cards.map(c=>({
-        id:uid('card'),
-        q:(c.q||c.Question||'').trim(),
-        a:(c.a||c['Correct Answer']||'').trim(),
-        distractors:(c.distractors||[c['Wrong Answer 1'],c['Wrong Answer 2'],c['Wrong Answer 3']]).filter(Boolean).map(s=>String(s).trim()),
-        sub:(c.sub||c.Subdeck||'').trim(),
-        createdAt:Date.now()
-      })));
-      if(declaredTag) ex.tags=unique([...(ex.tags||[]),declaredTag]);
-      store.set(KEYS.decks,state.decks);
-      renderDeckSelect(); toast('Deck imported');
-    };
-    if(data && data.deckName && Array.isArray(data.cards)){ upsertDeck(data.className||'Class',data.deckName,data.cards,(data.subdeck||'').trim()); }
-    else if(Array.isArray(data) && data[0] && (data[0].Question||data[0]['Correct Answer'])){ upsertDeck('Class',f.name.replace(/\.json$/i,'').replace(/_/g,' '),data); }
-    else{
-      const lines=txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-      const cards=lines.map(line=>{
-        const parts=line.split('|').map(s=>s.trim()); if(parts.length<3) throw new Error('Each line needs at least: Question | Correct | Wrong1');
-        const tag=parts[parts.length-1]?.startsWith('#')?parts.pop().slice(1):'';
-        const [q,a,...wrongs]=parts; return {q,a,distractors:wrongs,sub:tag};
-      });
-      upsertDeck('Class',f.name.replace(/\.[^.]+$/,'').replace(/_/g,' '),cards);
-    }
-  }catch(err){ alert('Import failed: '+err.message); }
-}
-function bulkAddCards(){
-  const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
-  const txt=$('#bulkTextarea')?.value.trim(); if(!txt) return alert('Paste at least one line.');
-  let n=0; for(const line of txt.split(/\r?\n/)){
-    const parts=line.split('|').map(s=>s.trim()).filter(Boolean); if(parts.length<3) continue;
-    let sub=''; if(parts[parts.length-1].startsWith?.('#')) sub=parts.pop().slice(1);
-    const [q,a,...wrongs]=parts; state.decks[id].cards.push({id:uid('card'),q,a,distractors:wrongs,sub,createdAt:Date.now()}); n++;
-  }
-  store.set(KEYS.decks,state.decks); if($('#bulkTextarea')) $('#bulkTextarea').value='';
-  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-  toast(`Added ${n} card(s)`);
-}
-function addCard(){
-  const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
-  const q=$('#qInput')?.value.trim(), a=$('#aCorrectInput')?.value.trim(), w1=$('#aWrong1Input')?.value.trim(),
-        w2=$('#aWrong2Input')?.value.trim(), w3=$('#aWrong3Input')?.value.trim(), sub=$('#cardSubInput')?.value.trim();
-  if(!q||!a||!w1) return alert('Enter question, correct, and at least one wrong answer.');
-  state.decks[id].cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
-  if(sub){ const d=state.decks[id]; d.tags=unique([...(d.tags||[]),sub]); }
-  store.set(KEYS.decks,state.decks);
-  ['#qInput','#aCorrectInput','#aWrong1Input','#aWrong2Input','#aWrong3Input','#cardSubInput'].forEach(sel=>{ if($(sel)) $(sel).value=''; });
-  renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-  toast('Card saved');
-}
-
-//////////////////////////// BUILD //////////////////////////////
-function renderBuild(){ 
-  renderTestsDatalist(); 
-  renderDeckPickList(); 
-  bindBuildButtons();
-  syncPreview();
-}
-function renderTestsDatalist(){
-  const dl=$('#testsList'); if(!dl) return;
-  const arr=Object.values(state.tests).sort((a,b)=>a.name.localeCompare(b.name));
-  dl.innerHTML=arr.map(t=>`<option value="${esc(t.name)}"></option>`).join('');
-}
-function bindBuildButtons(){
-  on($('#saveTestBtn'),'click',saveTest);
-  on($('#renameTestBtn'),'click',renameTest);
-  on($('#deleteTestBtn'),'click',deleteTest);
-  on($('#copyShareBtn'),'click',copyShareLink);
-  on($('#openShareBtn'),'click',openSharePreview);
-  on($('#previewToggle'),'change',syncPreview);
-  on($('#previewPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); });
-  on($('#previewQuizBtn'),'click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
-  on($('#testNameInput'),'input',handleTestNameInput);
-}
-function handleTestNameInput(){
-  const typed = $('#testNameInput')?.value.trim().toLowerCase();
-  if(!typed) { state.ui.currentTestId=null; return; }
-  const entry = Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===typed);
-  state.ui.currentTestId = entry? entry[0] : null;
-  const t = state.tests[state.ui.currentTestId] || null;
-  if(t){
-    if($('#builderTitle')) $('#builderTitle').value = t.title || t.name || '';
-    if($('#builderCount')) $('#builderCount').value = t.n || 30;
-    renderDeckPickList();
-  }
-}
-function saveTest(){
-  const testNameInput=$('#testNameInput'); if(!testNameInput) return;
-  const typedName = testNameInput.value.trim();
-  if(!typedName) return alert('Enter or select a test name.');
-
-  let id = state.ui.currentTestId;
-  let t  = id ? state.tests[id] : null;
-
-  if(!t){
-    const match = Object.entries(state.tests).find(([,x])=>x.name.toLowerCase()===typedName.toLowerCase());
-    if(match){ id = match[0]; t = state.tests[id]; state.ui.currentTestId = id; }
-  }
-
-  if(!t){
-    id = uid('test');
-    t = state.tests[id] = { id, name: typedName, title: typedName, n: 30, selections: [] };
-    state.ui.currentTestId = id;
-  } else {
-    t.name = typedName;
-  }
-
-  t.title = ($('#builderTitle')?.value.trim() || t.title || typedName);
-  t.n = Math.max(1, +($('#builderCount')?.value) || t.n || 30);
-  t.selections = dedupeSelections(readSelectionsFromUI());
-
-  store.set(KEYS.tests,state.tests);
-  renderTestsDatalist();
-  toast(`Test “${t.name}” saved`);
-}
-function renameTest(){
-  const id = state.ui.currentTestId;
-  if(!id) return alert('Select an existing test first (pick from the list).');
-  const t = state.tests[id];
-  const next = prompt('New test name:', t.name);
-  if(next==null) return;
-  const newName = next.trim();
-  if(!newName) return alert('Name cannot be empty.');
-  t.name = newName;
-  t.title = ($('#builderTitle')?.value.trim() || t.title || newName);
-  store.set(KEYS.tests, state.tests);
-  renderTestsDatalist();
-  if($('#testNameInput')) $('#testNameInput').value = newName;
-  toast('Test renamed');
-}
-function deleteTest(){
-  let id = state.ui.currentTestId;
-  if(!id){
-    const name = $('#testNameInput')?.value.trim().toLowerCase();
-    const entry = Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name);
-    if(entry) id = entry[0];
-  }
-  if(!id) return alert('Select an existing test to delete (pick from the list first).');
-
-  const name = state.tests[id]?.name || 'Test';
-  if(confirm(`Delete test “${name}”?`)){
-    delete state.tests[id];
-    store.set(KEYS.tests,state.tests);
-    state.ui.currentTestId = null;
-    if($('#testNameInput')) $('#testNameInput').value = '';
-    if($('#builderTitle')) $('#builderTitle').value = '';
-    if($('#builderCount')) $('#builderCount').value = 30;
-    renderTestsDatalist();
-    renderDeckPickList();
-    toast('Test deleted');
-  }
-}
-function renderDeckPickList(){
-  const wrap = $('#deckPickList'); if(!wrap) return;
-  const decks=listUniqueDecks();
-  const typedName=$('#testNameInput')?.value.trim().toLowerCase();
-  const selected = state.ui.currentTestId ? state.tests[state.ui.currentTestId]
-                : Object.values(state.tests).find(t=>t.name.toLowerCase()===typedName);
-
-  const selMap=new Map((selected?.selections||[]).map(s=>[s.deckId,s]));
-  wrap.innerHTML=decks.map(d=>{
-    const subs=deckSubTags(d);
-    const saved=selMap.get(d.id);
-    const whole=saved?!!saved.whole:true; const savedSubs=new Set(saved?.subs||[]);
-    return `<div class="deck-row" data-deck="${d.id}">
-      <div class="top">
-        <label class="wrap"><input type="checkbox" class="ck-whole" ${whole?'checked':''}><strong>${esc(d.deckName)}</strong><span class="hint">[Class: ${esc(d.className)}]</span></label>
-        ${subs.length?`<button type="button" class="btn ghost btn-expand">Sub-decks</button>`:`<span class="hint">No sub-decks</span>`}
-      </div>
-      <div class="subs hidden">${subs.map(s=>`<label class="subchip"><input type="checkbox" class="ck-sub" value="${esc(s)}" ${savedSubs.has(s)?'checked':''}><span>${esc(s)}</span></label>`).join('')}</div>
-    </div>`;
-  }).join('') || `<div class="hint">No decks yet. Add some in Create.</div>`;
-
-  wrap.querySelectorAll('.btn-expand').forEach(b=>b.addEventListener('click',()=>b.closest('.deck-row').querySelector('.subs').classList.toggle('hidden')));
-  wrap.querySelectorAll('.ck-sub').forEach(cb=>cb.addEventListener('change',()=>{
-    const row=cb.closest('.deck-row'); const any=row.querySelectorAll('.ck-sub:checked').length>0; row.querySelector('.ck-whole').checked=!any;
-  }));
-  wrap.querySelectorAll('.ck-whole').forEach(cb=>cb.addEventListener('change',()=>{ if(cb.checked) cb.closest('.deck-row').querySelectorAll('.ck-sub').forEach(s=>s.checked=false) }));
-
-  const selectedTest = selected;
-  if(selectedTest){ if($('#builderTitle')) $('#builderTitle').value=selectedTest.title||selectedTest.name; if($('#builderCount')) $('#builderCount').value=selectedTest.n||30; }
-}
-function readSelectionsFromUI(){
-  const rows = $$('#deckPickList .deck-row');
-  return rows.map(row=>{
-    const deckId=row.dataset.deck; const subs=[...row.querySelectorAll('.ck-sub:checked')].map(i=>i.value);
-    const whole=subs.length===0 && row.querySelector('.ck-whole')?.checked; return {deckId,whole,subs};
-  }).filter(s=>s.whole || s.subs.length>0);
-}
-function dedupeSelections(selections){
-  const map=new Map();
-  for(const s of selections){
-    if(!map.has(s.deckId)) map.set(s.deckId,{deckId:s.deckId,whole:false,subs:new Set()});
-    const agg=map.get(s.deckId);
-    agg.whole=agg.whole||s.whole;
-    (s.subs||[]).forEach(x=>agg.subs.add(x));
-  }
-  return [...map.values()].map(x=>({deckId:x.deckId,whole:x.whole && x.subs.size===0,subs:[...x.subs]}));
-}
-function copyShareLink(){
-  const t=getCurrentTestOrSave(); if(!t) return;
-  const url=new URL(location.href); url.searchParams.set('mode','student'); url.searchParams.set('test',t.name); url.searchParams.set('view','practice');
-  navigator.clipboard.writeText(url.toString());
-  toast('Student link copied — ready to send!');
-}
-function openSharePreview(){
-  const t=getCurrentTestOrSave(); if(!t) return;
-  const url=new URL(location.href); url.searchParams.set('mode','student'); url.searchParams.set('test',t.name); url.searchParams.set('view','practice');
-  open(url.toString(),'_blank');
-  toast('Opened student preview');
-}
-function getCurrentTestOrSave(){
-  const testNameInput=$('#testNameInput'); if(!testNameInput) return null;
-  const typedName=testNameInput.value.trim();
-  if(!typedName) return alert('Enter a test name first.'), null;
-  let t = state.ui.currentTestId ? state.tests[state.ui.currentTestId] : null;
-  if(!t){
-    const match = Object.values(state.tests).find(x=>x.name.toLowerCase()===typedName.toLowerCase());
-    if(!match){ alert('Save the test first.'); return null; }
-    t = match;
-  }
-  t.title=($('#builderTitle')?.value.trim()||t.title||typedName); 
-  t.n=Math.max(1,+($('#builderCount')?.value)||t.n||30); 
-  t.selections=dedupeSelections(readSelectionsFromUI()); 
-  store.set(KEYS.tests,state.tests); 
-  return t;
-}
-function syncPreview(){
-  const on = $('#previewToggle')?.checked;
-  if($('#deckChooser')) $('#deckChooser').open=!on;
-  $('#previewPanel')?.classList.toggle('hidden',!on);
-  if(!on) return;
-  const t=getCurrentTestOrSave(); if(!t) return;
-  const n=computePoolForTest(t).length;
-  const pt=$('#previewTitle'), pm=$('#previewMeta');
-  if(pt) pt.textContent=t.title||t.name;
-  if(pm) pm.textContent=`~${n} eligible questions • ${t.n} will be asked`;
-}
-function computePoolForTest(t){
-  const normalized=dedupeSelections(t.selections||[]);
-  const pool=[];
-  for(const sel of normalized){
-    const d=state.decks[sel.deckId]; if(!d) continue;
-    if(sel.whole){ pool.push(...d.cards); }
-    else if(sel.subs?.length){ pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||''))); }
-  }
-  return pool;
-}
-const deckLabel=d=>`${d.deckName} — ${d.className}`;
-
-//////////////////////// PRACTICE ////////////////////////////////
-function renderPracticeScreen(){
-  fillTestsSelect($('#practiceTestSelect'),true);
-  const last=store.get('bq_last_test',null);
-  const sel=$('#practiceTestSelect');
-  if(last && sel?.querySelector(`option[value="${last}"]`)) sel.value=last;
-  buildPracticeDeckChecks();
-
-  on($('#practiceTestSelect'),'change',()=>{ buildPracticeDeckChecks(); store.set('bq_last_test',$('#practiceTestSelect').value); });
-  on($('#startPracticeBtn'),'click',startPractice);
-  on($('#practicePrev'),'click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
-  on($('#practiceNext'),'click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
-  on($('#practiceShuffle'),'click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
-}
-function fillTestsSelect(sel,lockToStudent=false){
-  if(!sel) return;
-  const list=Object.entries(state.tests).sort((a,b)=>a[1].name.localeCompare(b[1].name));
-  if(state.quiz.locked && state.quiz.testId && lockToStudent){
-    const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(t.name)}</option>`:''; sel.value=state.quiz.testId; sel.disabled=true; return;
-  }
-  sel.disabled=false;
-  sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('')||'';
-}
-function buildPracticeDeckChecks(){
-  const container=$('#practiceDeckChecks'); if(!container) return;
-  const tid=$('#practiceTestSelect')?.value; const t=state.tests[tid]; container.innerHTML='';
-  if(!t){ container.innerHTML='<span class="hint">No test selected.</span>'; return; }
-  const seen=new Set(), chips=[];
-  for(const sel of dedupeSelections(t.selections||[])){
-    if(seen.has(sel.deckId)) continue; seen.add(sel.deckId);
-    const d=state.decks[sel.deckId]; if(!d) continue;
-    const chip=document.createElement('label'); chip.className='chip';
-    const ck=document.createElement('input'); ck.type='checkbox'; ck.dataset.deck=sel.deckId; ck.checked=true; chip.appendChild(ck);
-    const span=document.createElement('span'); span.textContent=deckLabel(d); chip.appendChild(span);
-    chips.push(chip);
-  }
-  if(chips.length) chips.forEach(c=>container.appendChild(c));
-  else container.innerHTML='<span class="hint">This test has no decks selected.</span>';
-}
-function startPractice(){
-  const tid=$('#practiceTestSelect')?.value; const t=state.tests[tid]; if(!t) return alert('Pick a test.');
-  const chosen=new Set([...$('#practiceDeckChecks')?.querySelectorAll('input[type=checkbox]:checked')||[]].map(i=>i.dataset.deck));
-  const pool=[];
-  for(const sel of dedupeSelections(t.selections||[])){
-    if(!chosen.has(sel.deckId)) continue;
-    const d=state.decks[sel.deckId]; if(!d) continue;
-    if(sel.whole) pool.push(...d.cards); else pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||'')));
-  }
-  if(!pool.length) return alert('No cards to practice.');
-  state.practice.cards=shuffle(pool); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
-}
-function showPractice(){
-  const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx]; if(!c) return;
-  if($('#practiceLabel')) $('#practiceLabel').textContent=`Card ${idx+1} of ${total}`;
-  if($('#practiceProgress')) $('#practiceProgress').textContent=`Tap card to flip. Use ←/→ to navigate.`;
-  if($('#practiceQuestion')) $('#practiceQuestion').textContent=c.q;
-  if($('#practiceAnswer'))   $('#practiceAnswer').textContent=c.a;
-  const card=$('#practiceCard'); if(!card) return;
-  card.classList.remove('flipped'); card.onclick=()=>card.classList.toggle('flipped');
-
-  const handler=(e)=>{
-    if(e.key===' '){ e.preventDefault(); card.classList.toggle('flipped'); }
-    if(e.key==='ArrowRight'){ $('#practiceNext')?.click(); }
-    if(e.key==='ArrowLeft'){ $('#practicePrev')?.click(); }
+  const state = {
+    projectName: "",
+    scenes: [],                  // [{id, name, shots:[Shot|null]}]
+    currentProjectId: null,
+    editRef: null,               // {sceneId, shotId}
+    pendingReplace: null,        // {sceneId, shotId|"__empty__"}
+    flatIndex: []
   };
-  window.removeEventListener('keydown', window.__bqPracticeKeys__);
-  window.__bqPracticeKeys__=handler;
-  window.addEventListener('keydown', handler);
-}
 
-//////////////////////////// QUIZ //////////////////////////////////
-function renderQuizScreen(){
-  fillTestsSelect($('#quizTestSelect'),true);
-  const last=store.get('bq_last_test',null);
-  const sel=$('#quizTestSelect');
-  if(last && sel?.querySelector(`option[value="${last}"]`)) sel.value=last;
-  if($('#studentDate') && !$('#studentDate').value) $('#studentDate').value=todayISO();
+  // =========================
+  // IndexedDB Projects
+  // =========================
+  const DB_NAME="sb_vault", DB_VER=1, STORE="projects";
 
-  // location dropdown toggle
-  const studentLocSel=$('#studentLocationSelect');
-  const studentLocOther=$('#studentLocationOther');
-  if(studentLocSel){
-    if(window.__locHandler__) studentLocSel.removeEventListener('change', window.__locHandler__);
-    window.__locHandler__ = () => {
-      const other = studentLocSel.value === '__OTHER__';
-      if(studentLocOther){
-        studentLocOther.classList.toggle('hidden', !other);
-        if (other) studentLocOther.focus();
-      }
-    };
-    studentLocSel.addEventListener('change', window.__locHandler__);
-  }
-
-  startOrRefreshQuiz();
-
-  on($('#quizTestSelect'),'change',()=>{ startOrRefreshQuiz(); store.set('bq_last_test',$('#quizTestSelect').value); });
-  on($('#quizPrev'),'click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
-  on($('#quizNext'),'click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
-  on($('#submitQuizBtn'),'click',submitQuiz);
-}
-function startOrRefreshQuiz(){
-  const tid=$('#quizTestSelect')?.value; const t=state.tests[tid];
-  const quizOptions=$('#quizOptions'), quizQuestion=$('#quizQuestion');
-  if(!t){ if(quizOptions) quizOptions.innerHTML=''; if(quizQuestion) quizQuestion.textContent='Select a test above'; return; }
-  const pool=computePoolForTest(t);
-  if(!pool.length){ if(quizOptions) quizOptions.innerHTML=''; if(quizQuestion) quizQuestion.textContent='No questions in this test.'; return; }
-  const n=Math.min(t.n||30,pool.length);
-  state.quiz.items=sample(pool,n).map(q=>{
-    const opts=unique([q.a,...(q.distractors||[])].map(s=>(s??'').trim()).filter(Boolean));
-    if(opts.length<2) opts.push('—');
-    return {q:q.q,a:q.a,opts:shuffle(opts),picked:null};
-  });
-  state.quiz.idx=0; state.quiz.n=n;
-  $('#quizArea')?.classList.remove('hidden'); $('#quizFinished')?.classList.add('hidden');
-  drawQuiz();
-}
-function drawQuiz(){
-  const i=state.quiz.idx, it=state.quiz.items[i]; if(!it) return;
-  if($('#quizQuestion')) $('#quizQuestion').textContent=it.q;
-  if($('#quizProgress')) $('#quizProgress').textContent=`${i+1}/${state.quiz.items.length}`;
-  const quizOptions=$('#quizOptions'); if(!quizOptions) return;
-  quizOptions.innerHTML=it.opts.map((opt,idx)=>`
-    <label class="option">
-      <input type="radio" name="q${i}" value="${esc(opt)}" ${it.picked===opt?'checked':''}>
-      <span><kbd>${idx+1}</kbd> ${esc(opt)}</span>
-    </label>
-  `).join('');
-  quizOptions.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',()=>{ it.picked=r.value; }));
-  const handler=(e)=>{
-    if(e.target.tagName==='INPUT') return;
-    const n=e.keyCode-49;
-    if(n>=0 && n<it.opts.length){
-      const radios=quizOptions.querySelectorAll('input[type=radio]');
-      if(radios[n]){ radios[n].checked=true; radios[n].dispatchEvent(new Event('change')); }
-    }
-    if(e.key==='ArrowRight'){ $('#quizNext')?.click(); }
-    if(e.key==='ArrowLeft'){ $('#quizPrev')?.click(); }
-  };
-  window.removeEventListener('keydown', window.__bqQuizKeys__);
-  window.__bqQuizKeys__=handler;
-  window.addEventListener('keydown', handler);
-}
-function submitQuiz(){
-  const name=$('#studentName')?.value.trim();
-  const studentLocSel=$('#studentLocationSelect');
-  const studentLocOther=$('#studentLocationOther');
-  let loc='';
-  if (studentLocSel) {
-    loc = studentLocSel.value === '__OTHER__'
-        ? (studentLocOther?.value || '').trim()
-        : (studentLocSel.value || '').trim();
-  } else {
-    loc = ($('#studentLocation')?.value || '').trim();
-  }
-  const dt=$('#studentDate')?.value;
-  if(!name||!loc||!dt) return alert('Name, location and date are required.');
-  const tid=$('#quizTestSelect')?.value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
-  const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
-  const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
-
-  const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
-  state.results.push(row); store.set(KEYS.results,state.results);
-
-  $('#quizArea')?.classList.add('hidden'); $('#quizFinished')?.classList.remove('hidden');
-  if($('#finishedMsg')) $('#finishedMsg').innerHTML=`Thanks, <strong>${esc(name)}</strong>! You scored <strong>${score}%</strong> (${correct}/${total}).`;
-  if($('#finishedAnswers')) $('#finishedAnswers').innerHTML=answers.map(a=>`
-    <div class="row">
-      <div class="q">${esc(a.q)}</div>
-      <div class="a">
-        <span class="tag ${a.picked===a.correct?'good':'bad'}">Your: ${esc(a.picked??'—')}</span>
-        <span class="tag good">Correct: ${esc(a.correct)}</span>
-      </div>
-    </div>`).join('');
-  toast('Submission saved');
-
-  on($('#restartQuizBtn'),'click',()=>{ $('#quizFinished')?.classList.add('hidden'); $('#quizArea')?.classList.remove('hidden'); startOrRefreshQuiz(); }, { once:true });
-  on($('#finishedPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); }, { once:true });
-}
-
-/////////////////////////// REPORTS //////////////////////////////
-function renderReports(){
-  // Populate Location dropdown (existing behavior)
-  const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
-  const keepLoc=$('#repLocation')?.value;
-  if($('#repLocation')) $('#repLocation').innerHTML=`<option value="">All locations</option>`+locs.map(l=>`<option ${keepLoc===l?'selected':''}>${esc(l)}</option>`).join('');
-
-  // NEW: Populate Test dropdown if present
-  const repTestSel = $('#repTest');
-  if (repTestSel){
-    const keepTest = repTestSel.value || '';
-    const tests = Object.values(state.tests).sort((a,b)=>a.name.localeCompare(b.name));
-    repTestSel.innerHTML = `<option value="">All tests</option>` + tests.map(t=>`<option ${keepTest===t.name?'selected':''}>${esc(t.name)}</option>`).join('');
-  }
-
-  drawReports();
-
-  // Existing binds
-  on($('#repLocation'),'change',drawReports);
-  on($('#repAttemptView'),'change',drawReports);
-  on($('#repSort'),'change',drawReports);
-  on($('#repView'),'change',drawReports);
-
-  // NEW binds for date range + test
-  on($('#repDateFrom'),'change',drawReports);
-  on($('#repDateTo'),'change',drawReports);
-  on($('#repTest'),'change',drawReports);
-}
-function drawReports(){
-  const view    = ($('#repView')?.value || 'active');
-  const loc     = $('#repLocation')?.value || '';
-  const attempt = $('#repAttemptView')?.value || 'all';
-  const sort    = $('#repSort')?.value || 'date_desc';
-
-  // NEW
-  const fromISO = $('#repDateFrom')?.value || '';
-  const toISO   = $('#repDateTo')?.value   || '';
-  const testNm  = $('#repTest')?.value     || '';
-
-  let rows = view==='archived' ? [...state.archived] : [...state.results];
-
-  if(loc)    rows = rows.filter(r=>r.location===loc);
-  if(testNm) rows = rows.filter(r=>r.testName===testNm);
-  if(fromISO) rows = rows.filter(r => (r.date || '') >= fromISO);
-  if(toISO)   rows = rows.filter(r => (r.date || '') <= toISO);
-
-  if(attempt!=='all'){
-    const map=new Map();
-    for(const r of rows){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
-    rows=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); rows.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
-  }
-
-  if(sort==='date_desc') rows.sort((a,b)=>b.time-a.time);
-  if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
-  if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
-  if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
-  if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));
-  if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));  
-
-  const tb=$('#repTable tbody'); if(!tb) return;
-  tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
-    <td>${new Date(r.time).toLocaleString()}</td>
-    <td>${esc(r.name)}</td>
-    <td>${esc(r.location)}</td>
-    <td>${esc(r.testName)}</td>
-    <td>${r.score}%</td>
-    <td>${r.correct}/${r.of}</td>
-    <td><button class="btn ghost view-btn">Open</button></td>
-    <td class="actions">
-      ${view==='archived'
-        ? `<button class="btn small" data-act="restore">Restore</button>
-           <button class="btn danger small" data-act="delete-forever">Delete</button>`
-        : `<button class="btn small" data-act="archive">Archive</button>
-           <button class="btn danger small" data-act="delete-forever">Delete</button>`}
-    </td>
-  </tr>`).join('');
-
-  // bind row actions
-  tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
-    const id=btn.closest('tr').dataset.id; const src = view==='archived'?state.archived:state.results;
-    const r=src.find(x=>x.id===id); if(!r) return;
-    const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
-      <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
-      <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
-      <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
-    </div>`).join('');
-    const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
-    w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
-      <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
-      <div>${rows}</div>
-    </body>`);
-  }));
-  tb.querySelectorAll('button[data-act]').forEach(b=>b.addEventListener('click',()=>{
-    const id = b.closest('tr').dataset.id;
-    const act= b.dataset.act;
-    if (act==='archive')        archiveResult(id);
-    else if (act==='restore')   restoreResult(id);
-    else if (act==='delete-forever'){
-      if (confirm('Delete this result permanently?')) deleteForever(id, view==='archived'?'archived':'active');
-    }
-  }));
-
-  // Recompute location averages with current filters
-  renderLocationAverages(view, loc, attempt, fromISO, toISO, testNm);
-
-  // Most missed — based on ACTIVE results only (unchanged)
-  const baseRows=[...state.results];
-  const missMap=new Map();
-  for(const r of baseRows){
-    for(const a of (r.answers||[])){
-      const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
-      const m=missMap.get(k); m.total++; if(a.picked!==a.correct) m.misses++;
-    }
-  }
-  const top=[...missMap.values()].filter(x=>x.total>0).sort((a,b)=>b.misses-a.misses).slice(0,10);
-  if($('#missedSummary')) $('#missedSummary').innerHTML = top.length? top.map(m=>`
-    <div class="missrow">
-      <div class="misscount"><div>${m.misses}/${m.total}</div><div class="hint">missed</div></div>
-      <div class="missq">${esc(m.q)}</div>
-    </div>`).join('') : '<div class="hint">No data yet.</div>';
-}
-function archiveResult(id){
-  const i = state.results.findIndex(r=>r.id===id);
-  if(i>-1){
-    const [row]=state.results.splice(i,1);
-    state.archived.push(row);
-    store.set(KEYS.results,state.results);
-    store.set(KEYS.archived,state.archived);
-    drawReports(); toast('Result archived');
-  }
-}
-function restoreResult(id){
-  const i = state.archived.findIndex(r=>r.id===id);
-  if(i>-1){
-    const [row]=state.archived.splice(i,1);
-    state.results.push(row);
-    store.set(KEYS.results,state.results);
-    store.set(KEYS.archived,state.archived);
-    drawReports(); toast('Result restored');
-  }
-}
-function deleteForever(id, from='active'){
-  const list = from==='archived' ? state.archived : state.results;
-  const i = list.findIndex(r=>r.id===id);
-  if(i>-1){
-    list.splice(i,1);
-    store.set(KEYS.results,state.results);
-    store.set(KEYS.archived,state.archived);
-    drawReports(); toast('Result deleted');
-  }
-}
-function computeLocationAverages(rows){
-  const map = new Map();
-  for (const r of rows) {
-    const key = (r.location || 'Unknown').trim();
-    if (!map.has(key)) map.set(key, { sum:0, n:0 });
-    const m = map.get(key);
-    m.sum += (Number(r.score) || 0);
-    m.n += 1;
-  }
-  const out = [];
-  map.forEach((v,k)=> out.push({ location:k, avg: v.n ? (v.sum/v.n) : 0, count: v.n }));
-  out.sort((a,b)=> a.location.localeCompare(b.location));
-  return out;
-}
-// UPDATED signature to respect filters
-function renderLocationAverages(view='active', locFilter='', attempt='all', fromISO='', toISO='', testNm=''){
-  const box  = $('#locationAverages'); if(!box) return;
-  let base = view==='archived' ? [...state.archived] : [...state.results];
-
-  if (locFilter) base = base.filter(r => r.location === locFilter);
-  if (testNm)    base = base.filter(r => r.testName === testNm);
-  if (fromISO)   base = base.filter(r => (r.date || '') >= fromISO);
-  if (toISO)     base = base.filter(r => (r.date || '') <= toISO);
-
-  if (attempt!=='all'){
-    const map=new Map();
-    for(const r of base){ const k=r.name+'|'+r.testName; (map.get(k)||map.set(k,[]).get(k)).push(r); }
-    base=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); base.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
-  }
-
-  const avgs = computeLocationAverages(base);
-  if (!avgs.length){
-    box.innerHTML = '<div class="hint">No data yet.</div>';
-    return;
-  }
-  box.innerHTML = avgs.map(x=>`
-    <div class="missrow">
-      <div class="misscount">
-        <div>${x.count}</div><div class="hint">attempts</div>
-      </div>
-      <div class="missq"><strong>${esc(x.location)}</strong> — avg <strong>${Math.round(x.avg)}%</strong></div>
-    </div>
-  `).join('');
-}
-
-//////////////////// Full Backup / Restore //////////////////////
-function ensureBackupButtons(){
-  const hdr = $('#view-create .card .card-head');
-  if(!hdr) return;
-  if(!$('#exportAllBtn')){
-    const ex = document.createElement('button');
-    ex.id='exportAllBtn'; ex.className='btn';
-    ex.textContent='Export All';
-    hdr.appendChild(ex);
-    ex.addEventListener('click', exportAllBackup);
-  }
-  if(!$('#importBackupBtn')){
-    const im = document.createElement('button');
-    im.id='importBackupBtn'; im.className='btn';
-    im.textContent='Import Backup…';
-    hdr.appendChild(im);
-    im.addEventListener('click', importBackupFlow);
-  }
-  if(!$('#importBackupInput')){
-    const fi = document.createElement('input');
-    fi.type='file'; fi.accept='.json,application/json,text/plain';
-    fi.id='importBackupInput'; fi.hidden=true;
-    hdr.appendChild(fi);
-    fi.addEventListener('change', async (e)=>{
-      const f=e.target.files?.[0]; if(!f) return;
-      const txt=await f.text(); e.target.value='';
-      try { const data=JSON.parse(txt); importBackupData(data); } 
-      catch(err){ alert('Invalid backup JSON: '+err.message); }
-    });
-  }
-}
-function exportAllBackup(){
-  const backup = {
-    schema : 'bq_backup_v1',
-    exportedAt: Date.now(),
-    decks   : state.decks,
-    tests   : state.tests,
-    results : state.results,
-    archived: state.archived
-  };
-  const json = JSON.stringify(backup, null, 2);
-
-  // Download file
-  const stamp = new Date().toISOString().replace(/[:.]/g,'-');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([json],{type:'application/json'}));
-  a.download = `bq_backup_${stamp}.json`;
-  a.click(); URL.revokeObjectURL(a.href);
-
-  // Clipboard (best-effort)
-  navigator.clipboard?.writeText(json).then(()=>toast('Backup downloaded & copied'),()=>toast('Backup downloaded'));
-}
-function importBackupFlow(){
-  const useFile = confirm('Import from a file?\n\nOK = Choose file\nCancel = Paste JSON');
-  if(useFile){ $('#importBackupInput')?.click(); return; }
-  const txt = prompt('Paste full backup JSON here:');
-  if(!txt) return;
-  try { const data=JSON.parse(txt); importBackupData(data); }
-  catch(err){ alert('Invalid backup JSON: '+err.message); }
-}
-function importBackupData(data){
-  if(!data || data.schema!=='bq_backup_v1'){ 
-    if(!confirm('Schema missing or unknown. Attempt import anyway?')) return;
-  }
-  const modeMerge = confirm('How to apply backup?\n\nOK = MERGE into existing\nCancel = REPLACE (wipe current and restore backup)');
-  if(modeMerge) mergeBackup(data); else replaceBackup(data);
-  // persist and refresh
-  store.set(KEYS.decks,   state.decks);
-  store.set(KEYS.tests,   state.tests);
-  store.set(KEYS.results, state.results);
-  store.set(KEYS.archived,state.archived);
-  toast(modeMerge ? 'Backup merged' : 'Backup restored (replaced)');
-  renderCreate(); renderBuild(); renderReports();
-}
-function sanitizeDecksObject(obj){
-  const out={};
-  for(const [id,d] of Object.entries(obj||{})){
-    if(!d) continue;
-    const _id = d.id && typeof d.id==='string' ? d.id : uid('deck');
-    out[_id] = {
-      id: _id,
-      className: d.className || '',
-      deckName : d.deckName || (d.name||'Deck'),
-      cards    : Array.isArray(d.cards) ? d.cards : [],
-      tags     : Array.isArray(d.tags) ? d.tags : [],
-      createdAt: d.createdAt || Date.now()
-    };
-  }
-  return out;
-}
-function sanitizeTestsObject(obj){
-  if(Array.isArray(obj)){
-    const map={};
-    for(const t of obj){
-      const id = t?.id || uid('test');
-      map[id] = { id, name:t?.name||'Test', title:t?.title||t?.name||'Test', n:Math.max(1,+t?.n||30), selections:Array.isArray(t?.selections)?t.selections:[] };
-    }
-    return map;
-  }
-  const out={};
-  for(const [id,t] of Object.entries(obj||{})){
-    const _id = t?.id || id || uid('test');
-    out[_id] = { id:_id, name:t?.name||'Test', title:t?.title||t?.name||'Test', n:Math.max(1,+t?.n||30), selections:Array.isArray(t?.selections)?t.selections:[] };
-  }
-  return out;
-}
-function replaceBackup(data){
-  state.decks    = sanitizeDecksObject(data.decks || {});
-  state.tests    = sanitizeTestsObject(data.tests || {});
-  state.results  = Array.isArray(data.results)  ? data.results  : [];
-  state.archived = Array.isArray(data.archived) ? data.archived : [];
-  mergeDecksByName();
-}
-function mergeBackup(data){
-  const incomingDecks = sanitizeDecksObject(data.decks || {});
-  const incomingTests = sanitizeTestsObject(data.tests || {});
-  const incomingResults  = Array.isArray(data.results)  ? data.results  : [];
-  const incomingArchived = Array.isArray(data.archived) ? data.archived : [];
-
-  // Decks: merge by class+deckName
-  const keyToId = new Map();
-  for(const [id,d] of Object.entries(state.decks)) keyToId.set(deckKey(d), id);
-  const importedKeyToExistingId = new Map();
-
-  for(const [impId, impDeck] of Object.entries(incomingDecks)){
-    const k = deckKey(impDeck);
-    if(!keyToId.has(k)){
-      const newId = uid('deck');
-      state.decks[newId] = deepCopy({...impDeck, id:newId});
-      keyToId.set(k, newId);
-      importedKeyToExistingId.set(impId, newId);
-    } else {
-      const existingId = keyToId.get(k);
-      importedKeyToExistingId.set(impId, existingId);
-      const dst = state.decks[existingId];
-      dst.tags = unique([...(dst.tags||[]), ...(impDeck.tags||[]), ...(impDeck.subdeck?[impDeck.subdeck]:[])]);
-      const seen = new Set((dst.cards||[]).map(c => cardKey(c)));
-      const incomingCards = (impDeck.cards||[]).map(c => ({
-        id: uid('card'),
-        q: (c.q||'').trim(),
-        a: (c.a||'').trim(),
-        distractors: (c.distractors||[]).map(s=>String(s).trim()).filter(Boolean),
-        sub: (c.sub||'').trim(),
-        createdAt: c.createdAt || Date.now()
-      }));
-      for(const c of incomingCards){
-        const key = cardKey(c);
-        if(!seen.has(key)){ (dst.cards ||= []).push(c); seen.add(key); }
-      }
-    }
-  }
-
-  // Tests: merge by name, remap deckIds
-  for(const [tid,t] of Object.entries(incomingTests)){
-    const remappedSelections = dedupeSelections((t.selections||[]).map(sel=>{
-      const targetId = importedKeyToExistingId.get(sel.deckId) || sel.deckId;
-      return { deckId: targetId, whole: !!sel.whole, subs: (sel.subs||[]) };
-    }));
-    const match = Object.entries(state.tests).find(([,x])=>x.name.toLowerCase()===String(t.name||'').toLowerCase());
-    if(!match){
-      const newId = uid('test');
-      state.tests[newId] = {
-        id: newId,
-        name: t.name || 'Test',
-        title: t.title || t.name || 'Test',
-        n: Math.max(1, +t.n || 30),
-        selections: remappedSelections
+  function openDB(){
+    return new Promise((res,rej)=>{
+      const r = indexedDB.open(DB_NAME, DB_VER);
+      r.onupgradeneeded = ()=> {
+        const db = r.result;
+        if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: "id" });
       };
+      r.onsuccess = ()=> res(r.result); r.onerror = ()=> rej(r.error);
+    });
+  }
+  async function dbPut(rec){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(rec); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
+  async function dbGet(id){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).get(id); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
+  async function dbList(){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).getAll(); q.onsuccess=()=>{ const arr=q.result||[]; arr.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)); res(arr); }; q.onerror=()=>rej(q.error); }); }
+  async function dbDelete(id){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).delete(id); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); }
+  function emptyProjectRecord(id,name){ return { id, name, createdAt:Date.now(), updatedAt:Date.now(), cover:null, data:{ projectName:name, scenes:[] } }; }
+  function firstCoverFrom(data){ for(const s of (data.scenes||[])){ for(const sh of s.shots||[]){ if(sh){ return sh.src; } } } return null; }
+
+  // =========================
+  // Elements
+  // =========================
+  const homeBtn         = $("#homeBtn");
+  const menuBtn         = $("#menuBtn");
+  const sheet           = $("#sheet");
+  const closeSheetBtn   = $("#closeSheet");
+  const addSceneBtn     = $("#addSceneBtn");
+  const addShotsBtn     = $("#addShotsBtn");
+  const switchProjectBtn= $("#switchProjectBtn");
+  const renderFilmBtn   = $("#renderFilmBtn");
+  const importBtn       = $("#importBtn");
+  const exportBtn       = $("#exportBtn");
+  const clearBtn        = $("#clearBtn");
+  const projectNameInp  = $("#projectName");
+
+  const presentBtn      = $("#presentBtn");
+  const viewToggle      = $("#viewToggle");
+  const comicView       = $("#comicView");
+  const scenesWrap      = $("#scenes");
+  const boardView       = $("#boardView");
+  const dropzone        = $("#dropzone");
+  const gallery         = $("#gallery");
+
+  const editor          = $("#editor");
+  const editorTitle     = $("#editorTitle");
+  const closeEditor     = $("#closeEditor");
+  const edLens          = $("#edLens");
+  const edShotType      = $("#edShotType");
+  const edTransition    = $("#edTransition");
+  const edMoves         = $("#edMoves");
+  const edDialogue      = $("#edDialogue");
+  const edNotes         = $("#edNotes");
+  const recBtn          = $("#recBtn");
+  const playNoteBtn     = $("#playNoteBtn");
+  const recStatus       = $("#recStatus");
+  const edReplace       = $("#edReplace");
+  const edDelete        = $("#edDelete");
+
+  const transPicker     = $("#transPicker");
+  const transOptions    = $("#transOptions");
+  const closeTrans      = $("#closeTrans");
+
+  const player          = $("#player");
+  const stage           = player?.querySelector(".stage");
+  const stageMedia      = player?.querySelector(".stage-media");
+  const ovTL            = $("#ovTopLeft");
+  const ovTR            = $("#ovTopRight");
+  const ovB             = $("#ovBottom");
+  const prevBtn         = $("#prevBtn");
+  const nextBtn         = $("#nextBtn");
+  const fsBtn           = $("#fsBtn");
+  const closePlayer     = $("#closePlayer");
+
+  const fileMulti       = $("#fileMulti");
+  const fileSingle      = $("#fileSingle");
+  const importFile      = $("#importFile");
+
+  // Project picker overlay (injected by earlier code or HTML); define refs if present
+  let picker = $("#picker");
+  if(!picker){
+    picker = document.createElement("div");
+    picker.id="picker";
+    picker.style.cssText="position:fixed;inset:0;background:#0f1115;display:none;z-index:15000;color:#e8ecf3";
+    picker.innerHTML = `
+      <div style="position:sticky;top:0;padding:12px 14px;background:rgba(12,16,22,.9);border-bottom:1px solid #2a3243;backdrop-filter:blur(10px);display:flex;justify-content:space-between;align-items:center">
+        <strong>Projects</strong>
+        <div>
+          <button id="newProjBtn" class="seg">New</button>
+          <button id="importProjBtn" class="seg">Import JSON</button>
+        </div>
+      </div>
+      <div id="pickerGrid" style="padding:12px;display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))"></div>
+      <input id="pickerImport" type="file" accept="application/json" hidden />
+    `;
+    document.body.appendChild(picker);
+  }
+  const pickerGrid = $("#pickerGrid", picker);
+  const newProjBtn = $("#newProjBtn", picker);
+  const importProjBtn = $("#importProjBtn", picker);
+  const pickerImport = $("#pickerImport", picker);
+
+  // =========================
+  // Init
+  // =========================
+  bindUI();
+  boot();
+
+  // =========================
+  // Bindings
+  // =========================
+  function bindUI(){
+    // Home/Projects
+    on(homeBtn, "click", showPicker);
+    on(switchProjectBtn, "click", ()=>{ closeSheet(sheet); showPicker(); });
+
+    // Menu sheet
+    on(menuBtn, "click", ()=> openSheet(sheet));
+    on(sheet, "click", e=> { if(e.target.classList.contains("sheet-backdrop")) closeSheet(sheet); });
+    on(closeSheetBtn, "click", ()=> closeSheet(sheet));
+
+    on(addSceneBtn, "click", ()=>{ addScene(); renderAll(); persistDebounced(); closeSheet(sheet); });
+    on(addShotsBtn, "click", ()=>{ state.pendingReplace=null; fileMulti?.click(); });
+    on(renderFilmBtn, "click", async ()=>{ closeSheet(sheet); await exportFilmSmart(); });
+    on(importBtn, "click", ()=> importFile?.click());
+    on(exportBtn, "click", exportJSONCurrent);
+    on(clearBtn, "click", clearAll);
+    on(projectNameInp, "input", ()=>{ state.projectName = projectNameInp.value.trim(); persistDebounced(); });
+
+    // Views
+    on(viewToggle, "click", ()=>{
+      const comic = !comicView.classList.contains("hidden");
+      if(comic){ comicView.classList.add("hidden"); boardView.classList.remove("hidden"); viewToggle.textContent="Board ▾"; buildGallery(); }
+      else { boardView.classList.add("hidden"); comicView.classList.remove("hidden"); viewToggle.textContent="Comic ▾"; }
+    });
+
+    // Dropzone
+    on(dropzone,"click", ()=>{ state.pendingReplace=null; fileMulti?.click(); });
+    on(dropzone,"keydown", e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); dropzone.click(); }});
+    ["dragenter","dragover"].forEach(ev=> on(dropzone,ev,e=>{ e.preventDefault(); dropzone.classList.add("dragover"); }));
+    ["dragleave","drop"].forEach(ev=> on(dropzone,ev,e=>{ e.preventDefault(); dropzone.classList.remove("dragover"); }));
+    on(dropzone,"drop", e=>{ const dt=e.dataTransfer; if(dt?.files?.length) addFilesToScene(dt.files); });
+
+    // Files
+    on(fileMulti, "change", e=> addFilesToScene(e.target.files));
+    on(fileSingle,"change", e=> replaceSingle(e.target.files?.[0]||null));
+    on(importFile,"change", e=> importProjectJSON(e.target.files?.[0]||null));
+
+    // Editor
+    on(editor, "click", e=> { if(e.target.classList.contains("sheet-backdrop")) closeSheet(editor); });
+    on(closeEditor,"click", ()=> closeSheet(editor));
+    on(edLens, "change", saveEditor);
+    on(edShotType,"change", saveEditor);
+    on(edTransition,"change", saveEditor);
+    on(edDialogue,"input", saveEditor);
+    on(edNotes,"input", saveEditor);
+
+    if(edMoves && !edMoves.dataset._init){
+      ["Pan","Tilt","Zoom","Dolly","Truck","Pedestal","Handheld","Static","Rack Focus"].forEach(m=>{
+        const b=document.createElement("button"); b.type="button"; b.className="tag"; b.textContent=m; b.dataset.mov=m;
+        b.onclick = ()=>{ b.classList.toggle("active"); saveEditor(); };
+        edMoves.appendChild(b);
+      });
+      edMoves.dataset._init="1";
+    }
+
+    // Editor Replace/Delete
+    on(edReplace,"click", ()=>{
+      if(!state.editRef) return;
+      state.pendingReplace = { sceneId: state.editRef.sceneId, shotId: state.editRef.shotId };
+      fileSingle?.click();
+    });
+    on(edDelete,"click", ()=>{
+      if(!state.editRef) return;
+      const {sceneId, shotId} = state.editRef;
+      deleteShot(sceneId, shotId); closeSheet(editor); toast("Shot deleted");
+    });
+
+    // Voice notes
+    on(recBtn,"click", toggleRecord);
+    on(playNoteBtn,"click", playVoiceNote);
+
+    // Transition picker
+    on(transPicker,"click", e=>{ if(e.target.classList.contains("sheet-backdrop")) closeSheet(transPicker); });
+    on(closeTrans,"click", ()=> closeSheet(transPicker));
+    if(transOptions && !transOptions.dataset._init){
+      ["Cut","Dissolve","Fade","Wipe","Match Cut","Whip Pan","J-Cut","L-Cut"].forEach(t=>{
+        const b=document.createElement("button"); b.className="tag"; b.textContent=t;
+        b.onclick = ()=>{ if(_transTarget) setShotMeta(_transTarget,{transition:t}); closeSheet(transPicker); };
+        transOptions.appendChild(b);
+      });
+      transOptions.dataset._init="1";
+    }
+
+    // Presentation
+    on(presentBtn,"click", openPresentation);
+    on(prevBtn,"click", ()=> showAt(curIdx-1));
+    on(nextBtn,"click", ()=> showAt(curIdx+1));
+    on(fsBtn,"click", ()=>{ if(!document.fullscreenElement) player?.requestFullscreen?.(); else document.exitFullscreen?.(); });
+    on(closePlayer,"click", closePresentation);
+    on(stage,"click", ()=>{
+      const v = stageMedia?.firstElementChild;
+      if(v && v.tagName==="VIDEO" && !v.controls){ if(v.paused) v.play().catch(()=>{}); else v.pause(); }
+    });
+    document.addEventListener("keydown", e=>{
+      if(!player?.classList.contains("open")) return;
+      if(e.key==="ArrowRight") showAt(curIdx+1);
+      if(e.key==="ArrowLeft")  showAt(curIdx-1);
+      if(e.key==="Escape")     closePresentation();
+    });
+
+    // Picker
+    on(newProjBtn,"click", async ()=>{
+      const id = uid("p_"); const rec = emptyProjectRecord(id,"Untitled");
+      await dbPut(rec); await openProject(id); hidePicker();
+    });
+    on(importProjBtn,"click", ()=> pickerImport.click());
+    on(pickerImport,"change", async e=>{
+      const file=e.target.files?.[0]; if(!file) return;
+      try{
+        const data=JSON.parse(await file.text());
+        if(!Array.isArray(data.scenes)) throw new Error("Invalid JSON");
+        const id=uid("p_"); const name=data.projectName||"Imported";
+        const rec={ id, name, createdAt:Date.now(), updatedAt:Date.now(), cover:firstCoverFrom(data)||null, data };
+        await dbPut(rec); await openProject(id); hidePicker();
+      }catch(err){ alert("Import failed: "+err.message); }
+      pickerImport.value="";
+    });
+  }
+
+  // =========================
+  // Boot / Picker
+  // =========================
+  async function boot(){
+    const m = location.hash.match(/#p\/([\w\-]+)/);
+    if(m && await dbGet(m[1])){ await openProject(m[1]); return; }
+    await showPicker();
+  }
+  async function showPicker(){
+    const items=await dbList();
+    pickerGrid.innerHTML = items.length? "" : `<div class="muted">No projects yet — tap “New”.</div>`;
+    for(const it of items){
+      const card=document.createElement("div");
+      card.style.cssText="border:1px solid #2a3243;border-radius:14px;overflow:hidden;background:#151a22";
+      card.innerHTML=`
+        <div style="background:#0b0e13;aspect-ratio:16/9;display:grid;place-items:center;overflow:hidden">
+          ${ it.cover ? `<img src="${it.cover}" style="width:100%;height:100%;object-fit:cover">` : `<div class="muted">No cover</div>` }
+        </div>
+        <div style="padding:10px 12px;display:grid;gap:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <strong style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name)}</strong>
+            <button class="small-btn open">Open</button>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <button class="small-btn rename">Rename</button>
+            <button class="small-btn dup">Duplicate</button>
+            <button class="small-btn export">Export JSON</button>
+            <button class="small-btn danger del">Delete</button>
+          </div>
+        </div>`;
+      pickerGrid.appendChild(card);
+      card.querySelector(".open").onclick   = async ()=>{ await openProject(it.id); hidePicker(); };
+      card.querySelector(".rename").onclick = async ()=>{ const nn=prompt("Rename project:", it.name); if(!nn) return; it.name=nn; it.updatedAt=Date.now(); await dbPut(it); showPicker(); };
+      card.querySelector(".dup").onclick    = async ()=>{ const id2=uid("p_"); const rec=JSON.parse(JSON.stringify(it)); rec.id=id2; rec.name=it.name+" (copy)"; rec.createdAt=Date.now(); rec.updatedAt=Date.now(); await dbPut(rec); showPicker(); };
+      card.querySelector(".export").onclick = ()=> downloadBlob(JSON.stringify(it.data,null,2), sanitize(it.name)+".json", "application/json");
+      card.querySelector(".del").onclick    = async ()=>{ if(confirm(`Delete “${it.name}”?`)){ await dbDelete(it.id); showPicker(); } };
+    }
+    picker.style.display="block"; document.body.classList.add("sheet-open");
+  }
+  function hidePicker(){ picker.style.display="none"; document.body.classList.remove("sheet-open"); }
+
+  async function openProject(id){
+    const rec = await dbGet(id);
+    if(!rec){ alert("Project not found"); return; }
+    state.currentProjectId = id;
+    state.projectName = rec.data.projectName || rec.name || "Untitled";
+    state.scenes = Array.isArray(rec.data.scenes) ? rec.data.scenes : [];
+    location.hash = "#p/"+id;
+    renderAll();
+  }
+
+  async function persistProject(){
+    if(!state.currentProjectId) return;
+    const id=state.currentProjectId;
+    const cur = await dbGet(id) || emptyProjectRecord(id, state.projectName||"Untitled");
+    cur.name = state.projectName || cur.name;
+    cur.updatedAt = Date.now();
+    cur.data = { projectName: state.projectName, scenes: state.scenes };
+    cur.cover = firstCoverFrom(cur.data) || cur.cover || null;
+    await dbPut(cur);
+  }
+  const persistDebounced = debounce(persistProject, 500);
+
+  // =========================
+  // Scene / Shot ops
+  // =========================
+  function addScene(){ const idx=state.scenes.length+1; state.scenes.push({ id:uid("sc_"), name:`Scene ${idx}`, shots:[] }); }
+  function ensureTrailingEmpty(scene){ if(scene.shots.length===0 || scene.shots[scene.shots.length-1]!==null){ scene.shots.push(null); } }
+  function getScene(id){ return state.scenes.find(s=> s.id===id); }
+  function getShot(sceneId, shotId){ return getScene(sceneId)?.shots.find(s=> s && s.id===shotId) || null; }
+
+  async function addFilesToScene(fileList){
+    const files=[...fileList].filter(f=>/^image\/|^video\//.test(f.type));
+    if(files.length===0) return;
+    const target = state.pendingReplace ? getScene(state.pendingReplace.sceneId) : state.scenes[state.scenes.length-1] || (addScene(), state.scenes[0]);
+    for(const f of files){
+      const dataUrl = await fileToDataURL(f);
+      const shot = makeShot({ type:f.type.startsWith("video")?"video":"image", src:dataUrl, filename:f.name||"shot" });
+      const emptyIdx = target.shots.findIndex(s=> s===null);
+      if(emptyIdx>=0) target.shots[emptyIdx]=shot; else target.shots.push(shot);
+      ensureTrailingEmpty(target);
+    }
+    state.pendingReplace=null; renderAll(); persistDebounced(); if(fileMulti) fileMulti.value="";
+  }
+
+  async function replaceSingle(file){
+    if(!file){ if(fileSingle) fileSingle.value=""; return; }
+    const dataUrl = await fileToDataURL(file);
+    if(state.pendingReplace && state.pendingReplace.shotId && state.pendingReplace.shotId!=="__empty__"){
+      const {sceneId, shotId} = state.pendingReplace;
+      const sc=getScene(sceneId);
+      const idx=sc?.shots.findIndex(s=> s && s.id===shotId);
+      if(idx>=0){
+        sc.shots[idx]=makeShot({ type:file.type.startsWith("video")?"video":"image", src:dataUrl, filename:file.name||"shot" });
+        ensureTrailingEmpty(sc);
+      }
     }else{
-      const id = match[0], dst = state.tests[id];
-      dst.selections = dedupeSelections([...(dst.selections||[]), ...remappedSelections]);
-      dst.n = Math.max(+dst.n||30, +t.n||30);
-      if(!dst.title && t.title) dst.title = t.title;
+      await addFilesToScene([file]);
+    }
+    state.pendingReplace=null; renderAll(); persistDebounced(); if(fileSingle) fileSingle.value="";
+  }
+
+  function deleteShot(sceneId, shotId){
+    const sc=getScene(sceneId); if(!sc) return;
+    const idx=sc.shots.findIndex(s=> s && s.id===shotId);
+    if(idx>=0) sc.shots.splice(idx,1);
+    ensureTrailingEmpty(sc); renderAll(); persistDebounced();
+  }
+
+  // =========================
+  // Render — Comic
+  // =========================
+  function renderAll(){
+    scenesWrap.innerHTML="";
+    state.scenes.forEach(scene=>{
+      ensureTrailingEmpty(scene);
+      scenesWrap.appendChild(renderScene(scene));
+    });
+    projectNameInp.value = state.projectName || "";
+    if(!boardView.classList.contains("hidden")) buildGallery();
+  }
+
+  let _transTarget=null;
+  function renderScene(scene){
+    const wrap = div("scene");
+
+    const head = div("scene-head");
+    const title = div("scene-title", scene.name);
+    title.contentEditable="true"; title.spellcheck=false;
+    on(title,"input", debounce(()=>{ scene.name=(title.textContent||"").trim()||scene.name; persistDebounced(); },250));
+    head.appendChild(title);
+    const actions = div("scene-actions");
+    actions.appendChild(smallBtn("📥 Shots", ()=>{ state.pendingReplace=null; fileMulti?.click(); }));
+    head.appendChild(actions);
+    wrap.appendChild(head);
+
+    const strip = div("strip");
+    scene.shots.forEach((shot, idx)=>{
+      if(shot){
+        strip.appendChild(renderShot(scene, shot));
+        if(idx < scene.shots.length-1){
+          const chip=div("trans-chip");
+          const b=document.createElement("button"); b.textContent=shot.meta?.transition||"Cut";
+          b.onclick=()=>{ _transTarget=shot.id; openSheet(transPicker); };
+          chip.appendChild(b); strip.appendChild(chip);
+        }
+      }else{
+        const card=div("shot empty");
+        card.innerHTML=`<div class="thumb"><div class="add-box"><div class="plus">＋</div><div>Tap to add</div></div></div><div class="meta">Empty</div>`;
+        card.onclick=()=>{ state.pendingReplace={sceneId:scene.id, shotId:"__empty__"}; fileSingle?.click(); };
+        strip.appendChild(card);
+      }
+    });
+    on(strip,"dragover", e=> e.preventDefault());
+    wrap.appendChild(strip);
+    return wrap;
+  }
+
+  function renderShot(scene, shot){
+    const card=div("shot"); card.draggable=true;
+
+    const t=div("thumb");
+    if(shot.type==="image"){ const img=new Image(); img.src=shot.src; img.alt=shot.filename; t.appendChild(img); }
+    else{
+      const v=document.createElement("video");
+      v.src=shot.src; v.playsInline=true; v.muted=true; v.controls=false;
+      on(v,"mouseenter",()=>v.play().catch(()=>{})); on(v,"mouseleave",()=>v.pause());
+      t.appendChild(v);
+    }
+    const badge=div("badge", shot.type.toUpperCase()); t.appendChild(badge);
+
+    const meta=div("meta"); meta.innerHTML=`<strong>${esc(scene.name)}</strong><br><span>${esc(shot.meta.lens)} · ${esc(shot.meta.shotType)}</span>`;
+    const overlay=div("overlay-info"); overlay.textContent=shot.meta.dialogue||shot.meta.notes||`${shot.meta.lens} · ${shot.meta.shotType}`;
+
+    card.appendChild(t); card.appendChild(meta); card.appendChild(overlay);
+
+    card.onclick=(e)=>{ if(e.target.closest(".meta")){ card.classList.toggle("show-info"); return; } openEditor(scene.id, shot.id); };
+
+    longPress(card, 450, async ()=>{
+      const opt = await mobilePrompt(["Replace","Duplicate","Delete","Cancel"]);
+      if(opt==="Replace"){ state.pendingReplace={sceneId:scene.id, shotId:shot.id}; fileSingle?.click(); }
+      else if(opt==="Duplicate"){ const sc=getScene(scene.id); const idx=sc.shots.findIndex(s=>s&&s.id===shot.id); sc.shots.splice(idx+1,0, JSON.parse(JSON.stringify(shot))); ensureTrailingEmpty(sc); renderAll(); persistDebounced(); }
+      else if(opt==="Delete"){ deleteShot(scene.id, shot.id); }
+    });
+
+    // DnD within scene
+    card.addEventListener("dragstart", e=>{
+      e.dataTransfer.setData("text/plain", JSON.stringify({sceneId:scene.id, shotId:shot.id}));
+      setTimeout(()=> card.classList.add("dragging"),0);
+    });
+    card.addEventListener("dragend", ()=> card.classList.remove("dragging"));
+    card.addEventListener("drop", e=>{
+      e.preventDefault();
+      const data = JSON.parse(e.dataTransfer.getData("text/plain")||"{}");
+      if(data.sceneId!==scene.id) return;
+      const arr=scene.shots.filter(s=>s!==null);
+      const from=arr.findIndex(s=>s.id===data.shotId);
+      const to=arr.findIndex(s=>s.id===shot.id);
+      if(from<0||to<0) return;
+      const [item]=arr.splice(from,1); arr.splice(to,0,item);
+      const newShots=[], iter=[...arr]; scene.shots.forEach(s=> newShots.push(s===null?null:iter.shift()));
+      scene.shots=newShots; renderAll(); persistDebounced();
+    });
+
+    return card;
+  }
+
+  // =========================
+  // Board View
+  // =========================
+  function buildGallery(){
+    gallery.innerHTML="";
+    state.scenes.forEach(scene=>{
+      scene.shots.filter(Boolean).forEach(shot=>{
+        const wrap=div("gallery-item");
+        const media=div("gallery-media");
+        if(shot.type==="image"){ const img=new Image(); img.src=shot.src; media.appendChild(img); }
+        else{ const v=document.createElement("video"); v.src=shot.src; v.controls=true; v.playsInline=true; v.style.width="100%"; v.style.height="auto"; v.style.objectFit="contain"; media.appendChild(v); }
+        wrap.appendChild(media);
+
+        const meta=div("gallery-meta");
+        meta.innerHTML = `<div><strong>${esc(scene.name)}</strong> — ${esc(shot.filename)}</div>`;
+        const actions=document.createElement("div");
+        actions.style.display="flex"; actions.style.gap="6px"; actions.style.marginTop="8px";
+        const editBtn=document.createElement("button"); editBtn.className="small-btn"; editBtn.textContent="Edit details"; editBtn.onclick=()=> openEditor(scene.id, shot.id);
+        const repBtn=document.createElement("button"); repBtn.className="small-btn"; repBtn.textContent="Replace"; repBtn.onclick=()=>{ state.pendingReplace={sceneId:scene.id, shotId:shot.id}; fileSingle?.click(); };
+        const delBtn=document.createElement("button"); delBtn.className="small-btn danger"; delBtn.textContent="Delete"; delBtn.onclick=()=> deleteShot(scene.id, shot.id);
+        actions.appendChild(editBtn); actions.appendChild(repBtn); actions.appendChild(delBtn);
+        meta.appendChild(actions);
+        wrap.appendChild(meta);
+        gallery.appendChild(wrap);
+      });
+    });
+  }
+
+  // =========================
+  // Editor
+  // =========================
+  function openEditor(sceneId, shotId){
+    state.editRef = {sceneId, shotId};
+    const shot = getShot(sceneId, shotId); if(!shot) return;
+    editorTitle.textContent = `Edit • ${shot.filename}`;
+    edLens.value       = shot.meta.lens || "50mm";
+    edShotType.value   = shot.meta.shotType || "MS";
+    edTransition.value = shot.meta.transition || "Cut";
+    edDialogue.value   = shot.meta.dialogue || "";
+    edNotes.value      = shot.meta.notes || "";
+    [...edMoves.querySelectorAll(".tag")].forEach(b=> b.classList.toggle("active", !!shot.meta.movements?.includes(b.dataset.mov)));
+    if(shot.meta.voiceNote){ recStatus.textContent=`Voice note • ${formatTime(shot.meta.voiceNote.duration)}`; playNoteBtn.disabled=false; } else { recStatus.textContent="No voice note"; playNoteBtn.disabled=true; }
+    openSheet(editor);
+  }
+  function saveEditor(){
+    const shot = getShot(state.editRef?.sceneId, state.editRef?.shotId); if(!shot) return;
+    shot.meta.lens       = edLens.value;
+    shot.meta.shotType   = edShotType.value;
+    shot.meta.transition = edTransition.value;
+    shot.meta.dialogue   = edDialogue.value;
+    shot.meta.notes      = edNotes.value;
+    shot.meta.movements  = [...edMoves.querySelectorAll(".tag.active")].map(b=>b.dataset.mov);
+    persistDebounced(); renderAll();
+  }
+
+  // Voice notes
+  let mediaRec=null, recChunks=[], recStart=0;
+  async function toggleRecord(){
+    const shot = getShot(state.editRef?.sceneId, state.editRef?.shotId); if(!shot) return;
+    if(mediaRec && mediaRec.state==="recording"){ mediaRec.stop(); return; }
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+      recChunks=[]; mediaRec=new MediaRecorder(stream);
+      mediaRec.ondataavailable = e=> { if(e.data.size) recChunks.push(e.data); };
+      mediaRec.onstart = ()=>{ recStart=Date.now(); recStatus.textContent="Recording… tap to stop"; recBtn.textContent="⏹ Stop"; };
+      mediaRec.onstop = async ()=>{
+        const blob = new Blob(recChunks, {type: mediaRec.mimeType || "audio/webm"});
+        const dataUrl = await blobToDataURL(blob);
+        const dur = (Date.now()-recStart)/1000;
+        shot.meta.voiceNote = { dataUrl, duration: dur, mime: blob.type };
+        recStatus.textContent=`Saved • ${formatTime(dur)}`; playNoteBtn.disabled=false; recBtn.textContent="🎙 Record";
+        persistDebounced();
+      };
+      mediaRec.start();
+    }catch(err){ alert("Mic access failed: "+err.message); }
+  }
+  function blobToDataURL(blob){ return new Promise((res)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(blob); }); }
+  function playVoiceNote(){ const shot=getShot(state.editRef?.sceneId, state.editRef?.shotId); if(!shot?.meta.voiceNote) return; new Audio(shot.meta.voiceNote.dataUrl).play().catch(()=>{}); }
+
+  function setShotMeta(shotId, patch){ state.scenes.forEach(s=> s.shots.forEach(sh=>{ if(sh && sh.id===shotId) Object.assign(sh.meta, patch); })); persistDebounced(); renderAll(); }
+
+  // =========================
+  // Presentation
+  // =========================
+  let curIdx=0;
+  function openPresentation(){ state.flatIndex=flattenShots(); if(state.flatIndex.length===0) return; curIdx=0; player.classList.add("open"); player.setAttribute("aria-hidden","false"); showAt(0); }
+  function closePresentation(){ player.classList.remove("open"); player.setAttribute("aria-hidden","true"); stageMedia.innerHTML=""; }
+  function flattenShots(){ const arr=[]; state.scenes.forEach(s=> s.shots.filter(Boolean).forEach(sh=> arr.push({scene:s, shot:sh}))); return arr; }
+  function showAt(i){
+    const n=state.flatIndex.length; curIdx=(i%n+n)%n;
+    const {scene, shot} = state.flatIndex[curIdx];
+    stageMedia.innerHTML="";
+    let el;
+    if(shot.type==="image"){ el=new Image(); el.src=shot.src; el.alt=shot.filename; }
+    else{
+      el=document.createElement("video");
+      el.src=shot.src; el.autoplay=true; el.loop=false; el.muted=false; el.controls=false;
+      el.setAttribute("playsinline",""); el.setAttribute("webkit-playsinline","");
+      el.style.width="100%"; el.style.height="100%"; el.style.objectFit="contain";
+      const resume=()=>{ el.play().catch(()=>{}); stage.removeEventListener("click", resume); };
+      el.addEventListener("loadeddata", ()=> el.play().catch(()=>{}), {once:true});
+      stage.addEventListener("click", resume, {once:true});
+    }
+    stageMedia.appendChild(el);
+    ovTL.textContent=scene.name;
+    ovTR.textContent=`${shot.meta.lens} · ${shot.meta.shotType} • ${shot.meta.transition||"Cut"}`;
+    ovB.textContent=shot.meta.dialogue || shot.meta.notes || "";
+  }
+
+  // =========================
+  // Export (MP4 w/ progress + audio mix) + WebM fallback
+  // =========================
+  async function exportFilmSmart(){
+    toast("Export started");
+    if(await ensureFFmpeg()){ await exportFilmMP4(); }
+    else{ await exportFilmWebM(); }
+  }
+
+  // ffmpeg loader
+  let FF=null, ffmpeg=null;
+  async function importScript(src){ return new Promise((res,rej)=>{ const s=document.createElement("script"); s.src=src; s.onload=()=>res(); s.onerror=rej; document.head.appendChild(s); }); }
+  async function ensureFFmpeg(){
+    if(ffmpeg) return true;
+    try{
+      if(!window.FFmpeg){
+        await importScript("./vendor/ffmpeg/ffmpeg.min.js")
+          .catch(()=>importScript("https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js"));
+      }
+      const { createFFmpeg, fetchFile } = window.FFmpeg || window;
+      ffmpeg = createFFmpeg({ log:false, corePath: "./vendor/ffmpeg/ffmpeg-core.js" });
+      ffmpeg._fetchFile = fetchFile;
+      ffmpeg.setProgress(({ratio})=> progressUpdate("Encoding…", ratio||0));
+      if(!ffmpeg.isLoaded()){ progressOpen("Loading encoder…"); await ffmpeg.load(); progressUpdate("Encoder ready", 1); }
+      return true;
+    }catch(e){ console.warn("ffmpeg load failed", e); toast("Couldn’t load MP4 encoder — falling back to WebM."); return false; }
+    finally{ progressClose(); }
+  }
+
+  async function exportFilmMP4(){
+    const flat=flattenShots(); if(flat.length===0){ toast("Add shots first"); return; }
+    progressOpen("Exporting MP4…"); progressUpdate("Preparing parts…", 0);
+
+    const width=1280, height=720, fps=30;
+    let idx=0; const parts=[];
+
+    // 1) Picture-only segments
+    for(const {shot} of flat){
+      idx++;
+      if(shot.type==="image"){
+        const img=`img_${idx}.jpg`;
+        ffmpeg.FS('writeFile', img, dataURLtoUint8(shot.src));
+        const dur=Math.max(7, shot.meta.voiceNote?.duration||0);
+        const out=`part_${idx}.mp4`;
+        progressUpdate(`Image ${idx}: ${dur.toFixed(1)}s`, 0);
+        await ffmpeg.run('-loop','1','-t', String(dur), '-i', img,
+          '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+          '-r', String(fps), '-c:v','libx264','-pix_fmt','yuv420p','-profile:v','baseline','-an', out);
+        parts.push(out);
+      }else{
+        const inName=`clip_${idx}.mp4`;
+        ffmpeg.FS('writeFile', inName, dataURLtoUint8(shot.src));
+        const out=`part_${idx}.mp4`;
+        progressUpdate(`Video ${idx}: picture re-encode`, 0);
+        await ffmpeg.run('-i', inName, '-t','7',
+          '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+          '-r', String(fps), '-c:v','libx264','-pix_fmt','yuv420p','-profile:v','baseline','-an', out);
+        parts.push(out);
+      }
+    }
+
+    // 2) Concat picture
+    progressUpdate("Concatenating picture…", 0.3);
+    ffmpeg.FS('writeFile','concat.txt', strToUint8(parts.map(p=>`file '${p}'`).join('\n')));
+    await ffmpeg.run('-f','concat','-safe','0','-i','concat.txt','-c','copy','temp_video.mp4');
+
+    // 3) Audio mix: voice notes + clip audio
+    progressUpdate("Mixing audio…", 0.5);
+    const wav = await buildFullAudioTrack(flat);
+    if(wav){ ffmpeg.FS('writeFile','audio.wav', wav); progressUpdate("Muxing MP4…", 0.8); await ffmpeg.run('-i','temp_video.mp4','-i','audio.wav','-c:v','copy','-c:a','aac','-shortest','out.mp4'); }
+    else { await ffmpeg.run('-i','temp_video.mp4','-c','copy','out.mp4'); }
+
+    const mp4 = ffmpeg.FS('readFile','out.mp4');
+    const fileName = (sanitize(state.projectName)||"storyboard")+"_film.mp4";
+    const blob = new Blob([mp4.buffer], {type:'video/mp4'});
+
+    progressUpdate("Finalizing…", 0.95);
+    try{
+      if(navigator.canShare && navigator.canShare({ files:[new File([blob], fileName, {type:'video/mp4'})] })){
+        await navigator.share({ files:[new File([blob], fileName, {type:'video/mp4'})], title:fileName, text:'Storyboard export' });
+        toast("Shared — choose ‘Save Video’ to add to Photos");
+      }else{
+        downloadBlob(blob, fileName, 'video/mp4');
+        toast("Downloaded MP4 — Share → Save Video");
+      }
+    }catch{
+      downloadBlob(blob, fileName, 'video/mp4');
+      toast("Downloaded MP4 — Share → Save Video");
+    }finally{
+      progressClose();
     }
   }
 
-  // Results/Archived: append with unique ids
-  const allIds = new Set([...state.results, ...state.archived].map(r=>r.id));
-  for(const r of incomingResults){ const x=deepCopy(r||{}); if(!x.id || allIds.has(x.id)) x.id = uid('res'); state.results.push(x); allIds.add(x.id); }
-  for(const r of incomingArchived){ const x=deepCopy(r||{}); if(!x.id || allIds.has(x.id)) x.id = uid('res'); state.archived.push(x); allIds.add(x.id); }
+  // Build stereo WAV track including voice notes and original clip audio
+  async function buildFullAudioTrack(flat){
+    const sr=48000;
+    let total=0;
+    for(const {shot} of flat){ total += (shot.type==="image") ? Math.max(7, shot.meta.voiceNote?.duration || 0) : 7; }
+    if(total<=0) return null;
 
-  mergeDecksByName();
-}
+    const Offline = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if(!Offline) return null;
+    const ctx = new Offline(2, Math.ceil(total*sr), sr);
 
-//////////////////////// normalize & boot ////////////////////////
-function normalizeTests(){
-  let changed=false;
-  for(const id of Object.keys(state.tests)){
-    const t=state.tests[id];
-    const norm=dedupeSelections(t.selections||[]);
-    if(JSON.stringify(norm)!==JSON.stringify(t.selections||[])){ t.selections=norm; changed=true; }
+    let t=0;
+    for(const {shot} of flat){
+      const dur = (shot.type==="image") ? Math.max(7, shot.meta.voiceNote?.duration || 0) : 7;
+
+      // voice note
+      if(shot.type==="image" && shot.meta.voiceNote?.dataUrl){
+        try{
+          const ab = await fetch(shot.meta.voiceNote.dataUrl).then(r=>r.arrayBuffer());
+          const buf = await ctx.decodeAudioData(ab);
+          const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination); src.start(t);
+        }catch{}
+      }
+      // clip audio (trim natural to ~7s)
+      if(shot.type==="video"){
+        try{
+          const ab = await fetch(shot.src).then(r=>r.arrayBuffer());
+          const buf = await ctx.decodeAudioData(ab);
+          const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
+          src.start(t); // you can src.stop(t+7) if needed
+        }catch{}
+      }
+      t += dur;
+    }
+
+    const rendered = await ctx.startRendering();
+    return audioBufferToWavBytes(rendered);
   }
-  if(changed) store.set(KEYS.tests,state.tests);
-}
 
-function boot(){
-  mergeDecksByName();
-  normalizeTests();
-  applyStudentMode();
+  async function exportFilmWebM(){
+    const flat=flattenShots(); if(flat.length===0){ toast("Add shots first"); return; }
+    progressOpen("Exporting (fallback WebM)…");
 
-  // select touch focus helper
-  $$('select').forEach(sel=>{
-    sel.style.pointerEvents='auto';
-    sel.addEventListener('touchstart',()=>sel.focus(),{passive:true});
-  });
+    const fps=30, width=1280, height=720;
+    const canvas=document.createElement("canvas"); canvas.width=width; canvas.height=height;
+    const ctx=canvas.getContext("2d");
+    const stream = canvas.captureStream(fps);
+    let chunks=[]; let rec;
+    try{ rec=new MediaRecorder(stream,{mimeType:"video/webm;codecs=vp9"}); }
+    catch{ try{ rec=new MediaRecorder(stream,{mimeType:"video/webm;codecs=vp8"}); } catch{ progressClose(); alert("Recording not supported"); return; } }
+    rec.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
+    const done=new Promise(res=> rec.onstop=res);
+    rec.start();
 
-  if($('#studentDate') && !$('#studentDate').value) $('#studentDate').value=todayISO();
+    function drawCover(media){
+      const iw=media.videoWidth||media.naturalWidth||width, ih=media.videoHeight||media.naturalHeight||height;
+      const ir=iw/ih, r=width/height; let dw,dh; if(ir>r){ dh=height; dw=ir*dh; } else { dw=width; dh=dw/ir; }
+      const dx=(width-dw)/2, dy=(height-dh)/2; ctx.fillStyle="#000"; ctx.fillRect(0,0,width,height); ctx.drawImage(media,dx,dy,dw,dh);
+    }
+    function drawOverlays(scene,shot){
+      ctx.save(); ctx.fillStyle="rgba(0,0,0,.55)"; ctx.fillRect(10,10,320,28); ctx.fillStyle="#e9eef9"; ctx.font="700 16px system-ui"; ctx.fillText(scene.name,18,30); ctx.restore();
+      const txt=`${shot.meta.lens} · ${shot.meta.shotType} • ${shot.meta.transition||"Cut"}`;
+      ctx.save(); ctx.font="700 16px system-ui"; const tw=ctx.measureText(txt).width+24; ctx.fillStyle="rgba(0,0,0,.55)"; ctx.fillRect(width-tw-10,10,tw,28); ctx.fillStyle="#e9eef9"; ctx.fillText(txt,width-tw+2,30); ctx.restore();
+      if(shot.meta.dialogue || shot.meta.notes){
+        const text=shot.meta.dialogue||shot.meta.notes;
+        ctx.save(); ctx.fillStyle="rgba(0,0,0,.6)"; ctx.fillRect(0,height-80,width,80); ctx.fillStyle="#e9eef9"; ctx.font="700 20px system-ui";
+        wrapText(ctx,text,width-60).forEach((ln,i)=> ctx.fillText(ln,30,height-50+i*24)); ctx.restore();
+      }
+    }
+    function wrapText(ctx,text,maxW){ const words=String(text||"").split(/\s+/); const lines=[]; let line=""; ctx.font="700 20px system-ui"; for(const w of words){ const t=line?line+" "+w:w; if(ctx.measureText(t).width>maxW){ if(line) lines.push(line); line=w; } else line=t; } if(line) lines.push(line); return lines; }
+    const wait=()=>sleep(1000/fps);
 
-  activate(qs().get('view') || (isStudent() ? 'practice' : 'create'));
-}
-window.boot = boot; // expose for quick console check
-boot();
+    let processed=0;
+    for(const {scene,shot} of flat){
+      processed++; progressUpdate(`Rendering ${processed}/${flat.length}`, processed/flat.length*0.9);
+      if(shot.type==="image"){
+        const img=await loadImage(shot.src);
+        const hold=Math.max(7, shot.meta.voiceNote?.duration||0);
+        const frames=Math.max(1, Math.round(fps*hold));
+        for(let f=0; f<frames; f++){ drawCover(img); drawOverlays(scene,shot); await wait(); }
+      }else{
+        const v=document.createElement("video"); v.src=shot.src; v.playsInline=true; await v.play().catch(()=>{});
+        const endAt=performance.now()+7000;
+        while(performance.now()<endAt){ drawCover(v); drawOverlays(scene,shot); await wait(); }
+        v.pause();
+      }
+    }
+    rec.stop(); await done; progressUpdate("Preparing download…", 0.98);
+    const blob=new Blob(chunks,{type:rec.mimeType||"video/webm"});
+    downloadBlob(blob, (sanitize(state.projectName)||"storyboard")+"_film.webm", blob.type);
+    progressClose(); toast("WebM downloaded — some apps can’t play WebM; use MP4 when possible.");
+  }
+
+  // helpers for ffmpeg
+  function strToUint8(s){ return new TextEncoder().encode(s); }
+  function dataURLtoUint8(dataUrl){ const [,b64]=dataUrl.split(','); const bin=atob(b64); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); return bytes; }
+  function audioBufferToWavBytes(ab){
+    const ch=ab.numberOfChannels, sr=ab.sampleRate, len=ab.length, bps=16, bytesPer= bps/8, block= ch*bytesPer;
+    const buffer=new ArrayBuffer(44 + len*ch*bytesPer); const view=new DataView(buffer);
+    write(0,'RIFF'); view.setUint32(4,36+len*ch*bytesPer,true); write(8,'WAVE'); write(12,'fmt '); view.setUint32(16,16,true);
+    view.setUint16(20,1,true); view.setUint16(22,ch,true); view.setUint32(24,sr,true); view.setUint32(28,sr*block,true); view.setUint16(32,block,true); view.setUint16(34,bps,true);
+    write(36,'data'); view.setUint32(40,len*ch*bytesPer,true);
+    let off=44; const data=[]; for(let c=0;c<ch;c++) data.push(ab.getChannelData(c));
+    for(let i=0;i<len;i++){ for(let c=0;c<ch;c++){ let s=Math.max(-1,Math.min(1,data[c][i])); view.setInt16(off, s<0?s*0x8000:s*0x7FFF, true); off+=2; } }
+    return new Uint8Array(buffer);
+    function write(off,str){ for(let i=0;i<str.length;i++) view.setUint8(off+i, str.charCodeAt(i)); }
+  }
+
+  function exportJSONCurrent(){ const payload={ schema:"storyboard_v4", exportedAt:new Date().toISOString(), projectName:state.projectName||"Untitled", scenes:state.scenes }; downloadBlob(JSON.stringify(payload,null,2), (sanitize(state.projectName)||"storyboard")+".json", "application/json"); }
+  async function importProjectJSON(file){
+    if(!file) return;
+    try{
+      const data=JSON.parse(await file.text()); if(!Array.isArray(data.scenes)) throw new Error("Invalid JSON");
+      const id=uid("p_"); const name=data.projectName||"Imported";
+      const rec={ id, name, createdAt:Date.now(), updatedAt:Date.now(), cover:firstCoverFrom(data)||null, data };
+      await dbPut(rec); await openProject(id);
+    }catch(e){ alert("Import failed: "+e.message); }
+    importFile.value="";
+  }
+  function clearAll(){ if(confirm("Clear all scenes in this project?")){ state.projectName=""; state.scenes=[]; addScene(); renderAll(); persistProject(); } }
+
+  // Small DOM helpers & sheets
+  function div(cls, txt){ const d=document.createElement("div"); d.className=cls; if(txt!=null) d.textContent=txt; return d; }
+  function smallBtn(label, onClick){ const b=document.createElement("button"); b.className="small-btn"; b.textContent=label; b.onclick=onClick; return b; }
+  function mobilePrompt(options){ return new Promise(resolve=>{ const overlay=document.createElement("div"); overlay.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);display:grid;place-items:end center;z-index:20000;"; const sheet=document.createElement("div"); sheet.style.cssText="width:100%;max-width:640px;background:#151a22;border-top-left-radius:16px;border-top-right-radius:16px;border:1px solid #2a3243;box-shadow:0 10px 30px rgba(0,0,0,.35);padding:8px;"; options.forEach(opt=>{ const b=document.createElement("button"); b.textContent=opt; b.style.cssText="width:100%;padding:14px 16px;background:#1a2130;border:1px solid #2a3243;color:#e8ecf3;border-radius:12px;margin:6px 8px;font-size:16px"; if(/delete/i.test(opt)) b.style.background="#3b2326"; sheet.appendChild(b); b.onclick=()=>{ document.body.removeChild(overlay); resolve(opt); }; }); overlay.onclick=(e)=>{ if(e.target===overlay){ document.body.removeChild(overlay); resolve("Cancel"); } }; overlay.appendChild(sheet); document.body.appendChild(overlay); }); }
+  function openSheet(sh){ sh?.classList.add("show"); document.body.classList.add("sheet-open"); }
+  function closeSheet(sh){ sh?.classList.remove("show"); document.body.classList.remove("sheet-open"); }
+})();
