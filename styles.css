@@ -1,230 +1,311 @@
-/* =========================
-   Theme
-   ========================= */
+/* =========================================================
+   Barista Flashcards & Quizzes — styles.css (mobile-first)
+   - Smooth mobile menu (never scrollable)
+   - Sticky header
+   - Responsive cards & grids
+   - Accessible focus styles
+   - Toast/Snackbar
+   - Matches latest HTML/JS IDs & classes
+========================================================= */
+
 :root{
-  --bg:#0f1115;
-  --panel:#151a22;
-  --elev:#1a2130;
-  --text:#e8ecf3;
-  --muted:#9aa6bd;
-  --accent:#87b4ff;
-  --danger:#ff6b6b;
-  --border:#2a3243;
-  --radius:14px;
-  --shadow:0 10px 30px rgba(0,0,0,.35);
+  --bg:#0f1322; --panel:#171c2f; --panel2:#1f2744; --text:#e8eefc; --muted:#9fb0d6;
+  --brand:#56b6f7; --primary:#42bdf4; --success:#35d19a; --danger:#e87070;
+  --line:rgba(255,255,255,.08); --chip:#2a355b;
 }
 
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
-  margin:0;
-  background:var(--bg);
-  color:var(--text);
-  font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;
-  -webkit-tap-highlight-color:transparent;
+  margin:0;color:var(--text);
+  background:radial-gradient(1200px 600px at 20% -10%,#1c2543 0%,#0f1322 40%,#0f1322 100%);
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+  -webkit-tap-highlight-color: transparent;
 }
-a{color:inherit}
-.muted{color:var(--muted)}
+.container{max-width:1050px;margin:16px auto;padding:0 16px 80px}
+
+/* ======================= Header / Menu ======================= */
+.app-header{
+  position:sticky;top:0;z-index:20;
+  background:linear-gradient(90deg,#12182b,#111527);
+  border-bottom:1px solid var(--line)
+}
+.brand{display:flex;align-items:center;gap:12px;padding:14px 16px 8px}
+.logo{font-size:22px}
+h1{margin:0;font-size:28px;letter-spacing:.3px}
+
+.topnav{display:flex;align-items:center;justify-content:flex-end;padding:6px 16px 12px}
+
+/* Menu container (never scrollable) */
+.menu{position:relative;z-index:1000;overflow:visible}
+
+/* Menu button – large touch target */
+#menuBtn{
+  position:relative;
+  border:1px solid var(--line);
+  background:#18203a;color:var(--text);
+  padding:10px 14px;border-radius:10px;
+  font-weight:700;letter-spacing:.2px;cursor:pointer;
+  transition:transform .12s ease, filter .12s ease;
+  will-change: transform;
+  -webkit-tap-highlight-color: transparent;
+}
+#menuBtn:hover{ filter:brightness(1.06) }
+#menuBtn:active{ transform:translateY(1px) }
+#menuBtn:focus-visible{ outline:2px solid var(--brand); outline-offset:2px }
+
+/* Dropdown panel (animated; NEVER scrollable) */
+.menu-list{
+  position:absolute;right:0;top:calc(100% + 8px);
+  min-width:220px;
+  background:linear-gradient(180deg,#141a2e,#12182b);
+  border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 16px 40px rgba(0,0,0,.45);
+  padding:8px;
+
+  display:block;  /* keep in flow for animation math */
+  opacity:0;pointer-events:none;transform:translateY(-6px) scale(.98);
+  transform-origin: top right;
+  transition:opacity .16s ease, transform .16s ease;
+
+  /* ensure no scrollbars/indicators ever show */
+  max-height:none; overflow:hidden;
+}
+.menu-list.open{
+  opacity:1;pointer-events:auto;transform:translateY(0) scale(1);
+  /* still not scrollable per requirement */
+  overflow:hidden;
+}
+
+/* Hide any scrollbar visuals defensively */
+.menu-list::-webkit-scrollbar{display:none}
+.menu-list{scrollbar-width:none}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce){
+  .menu-list{ transition:none }
+  #menuBtn{ transition:none }
+}
+
+/* Menu items */
+.menu-item{
+  display:block;width:100%;text-align:left;
+  padding:12px;margin:4px 0;border-radius:10px;
+  border:1px solid var(--line);background:#192341;color:var(--text);
+  cursor:pointer;font-weight:600;transition:background .12s ease, filter .12s ease;
+}
+.menu-item:hover{ filter:brightness(1.05) }
+.menu-item.active{ background:var(--brand);color:#061125;border-color:transparent }
+.menu-item:focus-visible{ outline:2px solid var(--brand); outline-offset:2px }
+
+/* Hide admin routes in student mode */
+body.student .menu-item[data-route="create"],
+body.student .menu-item[data-route="build"],
+body.student .menu-item[data-route="reports"]{display:none}
+
+/* ============================ Views ========================== */
+.view{display:none}
+.view.active{display:block}
+
+/* ====================== Cards / Layout ======================= */
+.card{
+  position:relative;background:var(--panel);
+  border:1px solid var(--line);border-radius:14px;padding:16px;margin:16px 0;
+  box-shadow:0 10px 30px rgba(0,0,0,.25)
+}
+.card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.grow{flex:1}
+.mt{margin-top:14px}.mt-sm{margin-top:8px}
+.lead{font-size:18px}
+.hint{color:var(--muted);font-size:13px}
 .hidden{display:none!important}
-body.sheet-open{overflow:hidden}
 
-/* =========================
-   Top bar
-   ========================= */
-.topbar{
-  position:sticky; top:0; z-index:1100;
-  display:flex; align-items:center; justify-content:space-between; gap:10px;
-  padding:12px 14px;
-  background:rgba(12,16,22,.9);
-  border-bottom:1px solid var(--border);
-  backdrop-filter:blur(10px);
-}
-.brand{display:flex; align-items:center; gap:10px}
-.logo{filter:drop-shadow(0 2px 6px rgba(135,180,255,.5))}
-.title{font-weight:700}
-.top-actions{display:flex; gap:8px}
+/* Avoid overflow of action buttons on small screens */
+.card .card-head .btn{white-space:nowrap}
+.card .card-head{row-gap:8px}
 
-.icon-btn,.seg,.small-btn,.close-btn{
-  appearance:none; border:1px solid var(--border); color:var(--text);
-  background:var(--elev); border-radius:12px; cursor:pointer;
-}
-.icon-btn{padding:10px 12px; font-size:18px}
-.seg{padding:10px 12px; font-size:14px; background:linear-gradient(180deg,#23324a,#1a2436)}
-.small-btn{padding:8px 10px; font-size:13px; background:#0f1420}
-.small-btn.danger{background:#3b2326; border-color:#5a2f35; color:#ffd9dd}
-.close-btn{width:100%; margin-top:8px; padding:12px; background:#0f1420}
+/* Grids */
+.grid{display:grid;gap:12px}
+.grid.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:800px){.grid.g2,.grid.g3{grid-template-columns:1fr}}
 
-/* =========================
-   Sheets (Menu / Editor / Transition / Picker)
-   ========================= */
-.sheet{position:fixed; inset:0; display:none; z-index:10000}
-.sheet.show{display:block}
-.sheet-backdrop{position:absolute; inset:0; background:rgba(0,0,0,.45)}
-.sheet-body{
-  position:absolute; left:0; right:0; bottom:0;
-  background:var(--panel);
-  border-top-left-radius:20px; border-top-right-radius:20px;
-  border:1px solid var(--border); box-shadow:var(--shadow);
-  padding:10px 14px 14px; max-height:80dvh; overflow:auto;
+/* ================= Inputs & selects ========================== */
+.input,select{
+  width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--text);line-height:1.2;pointer-events:auto;position:relative;z-index:2
 }
-.sheet-grabber{width:54px; height:5px; border-radius:999px; background:#2c3546; margin:8px auto 10px}
-.sheet h2{margin:4px 0 12px 2px; font-size:18px}
-.sheet-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px}
-.sheet-btn{background:var(--elev); border:1px solid var(--border); border-radius:12px; padding:12px; color:var(--text); text-align:center}
-.sheet-btn.danger{background:#3b2326; border-color:#5a2f35; color:#ffd9dd}
+select.input{-webkit-appearance: menulist;appearance: menulist}
+.input.small{max-width:120px}
+.textarea{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--panel2);color:var(--text)}
+.label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+.select-wrap{position:relative;z-index:2}
 
-.field{display:grid; gap:6px; margin:8px 0}
-.field input,.field select,.field textarea{
-  padding:10px 12px; border-radius:10px; border:1px solid var(--border);
-  background:#0f1420; color:var(--text)
-}
-.tags{display:flex; flex-wrap:wrap; gap:8px}
-.tag{
-  background:#0d1a24; border:1px solid #25394c; color:#cfeaff;
-  padding:6px 10px; border-radius:999px; font-size:12px; cursor:pointer; user-select:none
-}
-.tag.active{background:#18314a; border-color:#2d4f75}
-.audio-bar{display:flex; align-items:center; gap:8px; margin:6px 0}
-
-/* =========================
-   Comic view (scenes + strip)
-   ========================= */
-.comic-head{padding:8px 14px 0}
-.hint{margin:0 0 8px; color:var(--muted); font-size:13px}
-
-.scenes{display:grid; gap:14px; padding:6px 8px calc(80px + env(safe-area-inset-bottom))}
-.scene{
-  background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow)
-}
-.scene-head{
-  display:flex; align-items:center; gap:10px;
-  padding:8px 12px; border-bottom:1px solid var(--border)
-}
-.scene-title{font-weight:700; font-size:15px; flex:1; min-width:0}
-.scene-actions{display:flex; gap:8px}
-
-.strip{
-  display:flex; align-items:stretch; gap:10px;
-  overflow-x:auto; overscroll-behavior-x:contain;
-  padding:12px
-}
-.strip::-webkit-scrollbar{height:10px}
-.strip::-webkit-scrollbar-thumb{background:#243246; border-radius:999px}
-.strip::-webkit-scrollbar-track{background:transparent}
-
-.shot{
-  flex:0 0 240px; max-width:240px;
-  border:1px solid var(--border); border-radius:12px;
-  background:var(--elev);
-  display:grid; grid-template-rows:1fr auto;
-  min-height:140px; overflow:hidden; position:relative
-}
-.thumb{display:grid; place-items:center; background:#0b0e13; aspect-ratio:16/9; overflow:hidden}
-.thumb img,.thumb video{width:100%; height:100%; object-fit:cover}
-.badge{
-  position:absolute; top:8px; left:8px;
-  background:#0c1625; border:1px solid #2a3c58; color:#cfe0ff;
-  font-size:11px; padding:3px 6px; border-radius:999px
-}
-.meta{border-top:1px solid var(--border); padding:8px; font-size:12px; color:var(--muted)}
-.meta strong{color:var(--text)}
-
-.overlay-info{
-  position:absolute; inset:0; display:none;
-  align-items:flex-end; justify-content:center;
-  background:linear-gradient(180deg,rgba(0,0,0,0),rgba(0,0,0,.65));
-  color:#ecf3ff; text-align:center; padding:12px; font-weight:700
-}
-.shot.show-info .overlay-info{display:flex}
-
-.shot.empty .thumb{
-  background:repeating-linear-gradient(45deg,#0c1220 0 10px,#0e1426 10px 20px)
-}
-.add-box{display:grid; place-items:center; color:#b9c7e6; font-weight:700; letter-spacing:.25px}
-.add-box .plus{font-size:34px; line-height:1}
-
-.trans-chip{align-self:center; flex:0 0 auto}
-.trans-chip button{
-  border:1px dashed #3b4a66; background:#0e1420; color:#cfe0ff;
-  border-radius:999px; padding:6px 10px; font-size:12px
+/* NEW: tighten stacked filter rows on narrow screens */
+@media (max-width:800px){
+  .select-wrap + .select-wrap { margin-top: 6px; }
 }
 
-.dragging{opacity:.6}
+/* ======================== Buttons ============================ */
+.btn{
+  border:1px solid transparent;border-radius:12px;padding:10px 14px;
+  background:#26335b;color:var(--text);cursor:pointer;font-weight:600
+}
+.btn:hover{filter:brightness(1.05)}
+.btn.primary{background:var(--primary);color:#041221}
+.btn.success{background:var(--success);color:#062013}
+.btn.danger{background:var(--danger)}
+.btn.ghost{background:transparent;border-color:var(--line)}
+.btn.small{padding:7px 10px;font-size:13px}
 
-/* =========================
-   Board view (vertical gallery)
-   ========================= */
-.board{padding:10px 8px calc(80px + env(safe-area-inset-bottom)); display:grid; gap:12px}
-.dropzone{
-  border:2px dashed #3b4866; border-radius:14px;
-  display:grid; place-items:center; text-align:center; padding:24px;
-  color:var(--muted); background:#0e1420; outline:none
+/* ======================== Lists ============================== */
+.list .cardline{
+  display:grid;grid-template-columns:1.3fr 1fr auto;gap:12px;
+  padding:12px;border-radius:10px;background:var(--panel2);margin:10px 0
 }
-.dropzone:focus{box-shadow:0 0 0 3px rgba(135,180,255,.25)}
-.dropzone.dragover{background:#101a2e; color:#fff; border-color:#49639a}
-.dz-inner strong{display:block; margin-bottom:4px}
+.list .actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+@media (max-width:800px){.list .cardline{grid-template-columns:1fr}}
 
-.gallery{display:grid; gap:16px; max-width:980px; margin:0 auto}
-.gallery-item{
-  background:var(--panel); border:1px solid var(--border);
-  border-radius:14px; overflow:hidden; box-shadow:var(--shadow)
+/* ================= Deck chooser (Build) ====================== */
+.deck-pick .deck-row{
+  border:1px dashed var(--line);border-radius:12px;padding:12px;margin:10px 0;background:#141a2e
 }
-.gallery-media{background:#0b0e13; display:grid; place-items:center}
-.gallery-media img,.gallery-media video{
-  width:100%; height:auto; max-height:75vh; object-fit:contain
-}
-.gallery-meta{padding:10px 12px; border-top:1px solid var(--border)}
+.deck-pick .top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.wrap{display:flex;align-items:center;gap:10px}
+.subs{margin-top:10px;display:flex;flex-wrap:wrap;gap:10px}
+.subchip{display:flex;align-items:center;gap:6px;background:var(--chip);border:1px solid var(--line);padding:6px 10px;border-radius:12px}
 
-/* =========================
-   Presentation Player
-   ========================= */
-.player{position:fixed; inset:0; background:rgba(5,8,12,.95); display:none; flex-direction:column; z-index:12000}
-.player.open{display:flex}
-.player .player-chrome{
-  display:flex; align-items:center; justify-content:space-between; gap:12px;
-  padding:10px 14px; border-bottom:1px solid var(--border);
-  background:rgba(12,16,22,.8)
+/* ======================== Chips ============================== */
+.chips{display:flex;flex-wrap:wrap;gap:10px}
+.chip{
+  display:flex;align-items:center;gap:8px;border:1px solid var(--line);
+  background:var(--panel2);padding:8px 12px;border-radius:999px
 }
-.player .stage{flex:1; position:relative; display:grid; place-items:center; overflow:hidden}
-.stage-media{max-width:100%; max-height:100%; display:grid; place-items:center}
-.stage-media img,.stage-media video{
-  max-width:100%; max-height:100%;
-  object-fit:contain;
-  border-radius:10px; box-shadow:0 10px 40px rgba(0,0,0,.6)
+.chip .remove{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:0}
+.chip .remove:hover{color:var(--danger)}
+
+/* ======================== Switch ============================= */
+.switch{display:flex;align-items:center;gap:8px}
+.switch input{transform:scale(1.2)}
+
+/* ===================== Flashcard (Practice) ================== */
+.flip{position:relative;perspective:1200px;min-height:180px}
+.flip .front,.flip .back{
+  border-radius:12px;border:1px solid var(--line);background:var(--panel2);
+  padding:18px;position:absolute;inset:0;backface-visibility:hidden;
+  transition:transform .5s ease;display:flex;flex-direction:column;justify-content:center
 }
-.overlay{
-  position:absolute; pointer-events:none;
-  padding:10px 12px; border-radius:10px;
-  background:linear-gradient(180deg,rgba(14,18,26,.75),rgba(14,18,26,.6));
-  border:1px solid #243043; color:#e9f2ff; font-size:14px;
-  text-shadow:0 1px 2px #000
+.flip .front{transform:rotateY(0)} .flip .back{transform:rotateY(180deg)}
+.flip.flipped .front{transform:rotateY(180deg)} .flip.flipped .back{transform:rotateY(360deg)}
+.fc-title{color:var(--muted);text-transform:uppercase;letter-spacing:.12em;font-size:12px;margin-bottom:6px}
+.fc-text{font-size:18px}
+#practiceCard{cursor:pointer}
+#practiceCard:focus-visible .front,#practiceCard:focus-visible .back{box-shadow:0 0 0 2px var(--brand) inset}
+
+/* ======================== Quiz =============================== */
+.options{display:grid;gap:10px}
+.option{
+  display:flex;align-items:center;gap:10px;padding:12px;border-radius:12px;
+  border:1px solid var(--line);background:#1a2140
 }
-.overlay.top-left{top:14px; left:14px}
-.overlay.top-right{top:14px; right:14px; text-align:right}
-.overlay.bottom{
-  left:50%; transform:translateX(-50%);
-  bottom:18px; max-width:min(900px,90vw);
-  background:linear-gradient(0deg,rgba(10,12,16,.9),rgba(10,12,16,.6))
+.option.correct{border-color:#2bd4a9;background:rgba(43,212,169,.08)}
+.option.incorrect{border-color:#e87070;background:rgba(232,112,112,.08)}
+.option.disabled{opacity:.7;pointer-events:none}
+.bar{display:flex;align-items:center;gap:14px}
+
+/* ================ Answers (review) =========================== */
+.answers .row{border:1px solid var(--line);border-radius:12px;padding:10px;margin:8px 0;background:#151b34}
+.answers .q{font-weight:600;margin-bottom:4px}
+.answers .a{display:flex;flex-wrap:wrap;gap:8px}
+.tag{padding:4px 8px;border-radius:999px;border:1px solid var(--line);background:#1a2140}
+.tag.good{background:rgba(43,212,169,.1);border-color:#2bd4a9;color:#bdf6e7}
+.tag.bad{background:rgba(232,112,112,.1);border-color:#e87070;color:#ffd4d4}
+
+/* ========================= Table ============================= */
+.table-wrap{overflow:auto}
+.table{width:100%;border-collapse:collapse}
+.table th,.table td{border-bottom:1px solid var(--line);padding:10px 8px;text-align:left;vertical-align:middle}
+.table th{
+  color:color-mix(in oklab,var(--muted) 85%,white 15%);font-weight:600;font-size:12px;
+  text-transform:uppercase;letter-spacing:.08em;white-space:nowrap
+}
+.table .view-btn{white-space:nowrap}
+
+/* ===================== Missed summary ======================== */
+.missed{display:flex;flex-direction:column;gap:10px}
+.missed .missrow{display:flex;gap:10px;align-items:flex-start}
+.missed .missq{flex:1}
+.missed .misscount{min-width:60px;text-align:center;border:1px solid var(--line);background:#1a2140;border-radius:10px;padding:6px}
+
+/* =================== Location Averages ======================= */
+#locationAverages .missrow{align-items:center}
+
+/* ========================== Toast ============================ */
+.toast{
+  position:fixed;left:50%;bottom:18px;transform:translateX(-50%) translateY(20px);
+  background:#0e152b;border:1px solid var(--line);color:var(--text);padding:10px 14px;
+  border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.4);opacity:0;
+  transition:opacity .18s ease, transform .18s ease;z-index:2000;pointer-events:none
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ========================= Footer ============================ */
+.footer{text-align:center;padding:30px 0;color:var(--muted)}
+
+/* =============== Utility & Accessibility ===================== */
+.sr-only{
+  position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0
+}
+.noscript{background:#ffdede;color:#3a0b0b;padding:8px 12px;text-align:center;font-weight:600}
+.micro{font-size:12px;color:var(--muted);opacity:.9}
+kbd{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:12px;line-height:1;
+  display:inline-block;padding:4px 6px;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;background:#10172a;
+  box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 1px 0 rgba(0,0,0,.4)
+}
+:focus-visible{outline:2px solid color-mix(in oklab,var(--brand) 70%,white 0%);outline-offset:2px}
+.btn:focus-visible,.input:focus-visible,select.input:focus-visible,.menu-item:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+
+/* ==================== Minor polish tweaks ==================== */
+/* Animate optional sub‑deck reveal in Create */
+#newSubdeck{transition:max-height .25s ease,opacity .2s ease;max-height:120px}
+#newSubdeck.hidden{max-height:0;opacity:0;overflow:hidden}
+
+/* Ensure select popups remain tappable on iOS */
+.select-wrap{isolation:isolate}
+
+/* Slightly tighter headers/buttons on narrow screens */
+@media (max-width:720px){
+  #menuBtn{padding:9px 12px}
+  .menu-item{padding:10px 12px}
+  .brand h1{font-size:22px}
 }
 
-/* =========================
-   Spacing
-   ========================= */
-.spacer-80{height:calc(80px + env(safe-area-inset-bottom))}
-
-/* =========================
-   Project Picker quick defaults
-   ========================= */
-#picker .small-btn{padding:8px 10px}
-#picker .small-btn.danger{background:#3b2326; border-color:#5a2f35; color:#ffd9dd}
-
-/* =========================
-   Responsive
-   ========================= */
-@media (max-width: 480px){
-  .shot{flex-basis:200px; max-width:200px}
-  .sheet-grid{grid-template-columns:1fr}
+/* ===================== Create view meta ====================== */
+#deckMeta{display:grid;gap:6px}
+#deckMetaTitle{
+  display:inline-block;padding:6px 10px;border:1px solid var(--line);
+  border-radius:10px;background:var(--panel2);font-size:13px
+}
+#deckMetaSubs{display:flex;flex-wrap:wrap;gap:8px}
+#deckMetaSubs .chip{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:12px;color:var(--text)}
+#deckMetaSubs .chip .remove{margin-left:4px;color:var(--muted);background:none;border:none;cursor:pointer;font-size:14px;line-height:1}
+#deckMetaSubs .chip .remove:hover{color:var(--danger)}
+#subdeckManager{background:linear-gradient(180deg,#141a2e,#12182b);border:1px solid var(--line);border-radius:12px;padding:12px}
+#subdeckManager>summary.card-head{cursor:pointer}
+#subdeckManagerList{display:flex;flex-wrap:wrap;gap:8px}
+#subdeckManager .grid.g2 .input{min-width:0}
+#deckSelect.input{background:linear-gradient(0deg,rgba(255,255,255,0.02),rgba(255,255,255,0.02)),var(--panel2)}
+#newClassName,#newDeckName,#newSubdeck,#subdeckNewName{background:linear-gradient(0deg,rgba(255,255,255,0.02),rgba(255,255,255,0.02)),var(--panel2)}
+#view-create .card .card-head strong{white-space:nowrap}
+@media (max-width:800px){
+  #deckMetaTitle{font-size:12px}
+  #deckMetaSubs .chip{font-size:11px;padding:5px 8px}
 }
 
-/* tiny transition for injected toasts */
-#toasts > div{transition:opacity .25s}
+/* NEW: Create — sub-deck filter positioning */
+#cardsSubFilter.input{ background:linear-gradient(0deg,rgba(255,255,255,0.02),rgba(255,255,255,0.02)),var(--panel2) }
+
+/* NEW: Reports — date/test filter inputs inherit .input styling; keep spacing tight */
+#repDateFrom.input,#repDateTo.input,#repTest.input{ background:linear-gradient(0deg,rgba(255,255,255,0.02),rgba(255,255,255,0.02)),var(--panel2) }
