@@ -11,9 +11,16 @@
    - Location averages
    - Full backup export/import (Merge or Replace) preserving classes/decks/subdecks/tests/results/archived
 
-   NEW (per your requests):
+   NEW (Sheets integration):
+   - CLOUD config + helper fetchers
+   - Pull from Cloud (decks/cards/tests)
+   - Push Backup to Cloud (Merge or Replace)
+   - Reports: Refresh Results from Cloud
+   - submitQuiz(): best-effort POST to Cloud
+
+   NEW (per your earlier requests):
    1) Reports: filter by Date Range AND by Test
-   2) Create: filter/show cards by Sub‑deck (view sub‑decks individually)
+   2) Create: filter/show cards by Sub-deck (view sub-decks individually)
    3) Create: after creating a deck, auto-select it in “Pick Existing Deck”
    4) Create: deleting a card no longer changes deck or scrolls to top
 */
@@ -40,13 +47,46 @@ const ADMIN_VIEWS = new Set(['create','build','reports']);
 //////////////////////////// utils ///////////////////////////////
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
 const todayISO = () => new Date().toISOString().slice(0,10);
-const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]));
 const shuffle  = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [x[i],x[j]]=[x[j],x[i]] } return x; };
 const sample   = (a,n) => shuffle(a).slice(0,n);
 const unique   = xs => Array.from(new Set(xs));
 const deepCopy = obj => JSON.parse(JSON.stringify(obj));
 const deckKey  = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName||'').trim().toLowerCase()}`;
 const cardKey  = c => `${(c.q||'').trim().toLowerCase()}|${(c.a||'').trim().toLowerCase()}|${(c.sub||'').trim().toLowerCase()}`;
+
+///////////////////////// CLOUD (Sheets) /////////////////////////
+// Fill BASE with your Apps Script /exec URL. API_KEY is only required
+// for write actions (submit results, bulkUpsert, archive/delete).
+const CLOUD = {
+  BASE   : 'https://script.google.com/macros/s/AKfycbziNVr9lGMkXjdTmhk9BKdPNoAz2TuaUUo875CCN62cUxA9zm2FyPJj9tRYfMYHYBorkA/exec',
+  API_KEY: '' // paste your Script Property value locally on admin machine (keep blank for public builds)
+};
+
+async function cloudGET(params){
+  if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
+  const qs = new URLSearchParams(params||{}).toString();
+  const r  = await fetch(`${CLOUD.BASE}${qs ? ('?'+qs) : ''}`);
+  const j  = await r.json();
+  if(!j.ok) throw new Error(j.error||'Cloud GET failed');
+  return j.data;
+}
+async function cloudPOST(action, payload={}){
+  if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
+  const r  = await fetch(`${CLOUD.BASE}?action=${encodeURIComponent(action)}`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ ...payload, apiKey: CLOUD.API_KEY })
+  });
+  const j = await r.json();
+  if(!j.ok) throw new Error(j.error||'Cloud POST failed');
+  return j.data;
+}
+async function getAllFromCloud(){ return cloudGET({ action:'list' }); } // {decks,cards,tests}
+async function getResultsFromCloud(limit){ 
+  const p = { action:'results' }; if(limit) p.limit = String(limit);
+  return cloudGET(p); // array of result rows
+}
 
 /////////////////////////// global state /////////////////////////
 let state = {
@@ -241,6 +281,10 @@ function renderCreate(){
   on($('#bulkAddBtn'),'click',bulkAddCards);
   on($('#addCardBtn'),'click',addCard);
 
+  // NEW: Cloud buttons
+  on($('#cloudPullBtn'),'click',cloudPullHandler);
+  on($('#cloudPushBtn'),'click',cloudPushHandler);
+
   // Reset sub-filter when changing deck
   on($('#deckSelect'),'change',()=>{ 
     state.ui.subFilter=''; 
@@ -248,6 +292,61 @@ function renderCreate(){
     renderSubdeckManager(); 
     renderCardsList(); 
   });
+}
+
+async function cloudPullHandler(){
+  try{
+    toast('Pulling from Cloud…', 800);
+    const { decks, cards, tests } = await getAllFromCloud();
+
+    // Build decks map
+    const dmap = {};
+    (decks||[]).forEach(d=>{
+      dmap[d.deckId] = {
+        id:d.deckId,
+        className:d.className||'',
+        deckName:d.deckName||'',
+        tags:(d.tags||'').split('|').filter(Boolean),
+        cards:[],
+        createdAt:+d.createdAt||Date.now()
+      };
+    });
+    (cards||[]).forEach(c=>{
+      const dk=dmap[c.deckId]; if(!dk) return;
+      dk.cards.push({
+        id:c.cardId, q:c.q, a:c.a,
+        distractors:(c.distractors||'').split('|').filter(Boolean),
+        sub:c.sub||'', createdAt:+c.createdAt||Date.now()
+      });
+    });
+
+    const tmap = {};
+    (tests||[]).forEach(t=>{
+      tmap[t.testId] = {
+        id:t.testId, name:t.name, title:t.title||t.name, n:+t.n||30,
+        selections: JSON.parse(t.selectionsJSON||'[]')
+      };
+    });
+
+    state.decks=dmap; state.tests=tmap;
+    store.set(KEYS.decks,dmap); store.set(KEYS.tests,tmap);
+    mergeDecksByName(); normalizeTests();
+
+    renderCreate(); renderBuild(); toast('Cloud pulled');
+  }catch(e){
+    console.warn(e); toast('Cloud pull failed');
+  }
+}
+
+async function cloudPushHandler(){
+  try{
+    const modeMerge = confirm('Push backup to Cloud?\n\nOK = MERGE into existing\nCancel = REPLACE (wipe and replace on the Cloud)');
+    const backup = makeFullBackupObject();
+    await cloudPOST('bulkUpsert', { mode: modeMerge ? 'merge' : 'replace', ...backup });
+    toast(modeMerge ? 'Cloud merged' : 'Cloud replaced');
+  }catch(e){
+    console.warn(e); toast('Cloud push failed');
+  }
 }
 
 function renderDeckSelect(){
@@ -325,7 +424,7 @@ function renderCardsList(){
   cardsList.innerHTML=list.map(c=>`
     <div class="cardline" data-id="${c.id}">
       <div><strong>Q:</strong> ${esc(c.q)}</div>
-      <div><strong>Correct:</strong> ${esc(c.a)}<br><span class="hint">Wrong:</span> ${esc((c.distractors||[]).join(' | '))}${c.sub? `<br><span class="hint">Sub‑deck: ${esc(c.sub)}</span>`:''}</div>
+      <div><strong>Correct:</strong> ${esc(c.a)}<br><span class="hint">Wrong:</span> ${esc((c.distractors||[]).join(' | '))}${c.sub? `<br><span class="hint">Sub-deck: ${esc(c.sub)}</span>`:''}</div>
       <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
     </div>`).join('');
 
@@ -339,7 +438,6 @@ function renderCardsList(){
     store.set(KEYS.decks,state.decks);
 
     // Refresh UI while preserving selection and sub-filter
-    // (renderDeckSelect is optional; if you want dropdown counts to update immediately, keep it.)
     renderDeckSelect();
     const deckSelect = $('#deckSelect');
     if (deckSelect) deckSelect.value = keepDeckId;
@@ -359,7 +457,7 @@ function renderCardsList(){
     const q=prompt('Question:',card.q); if(q===null) return;
     const a=prompt('Correct answer:',card.a); if(a===null) return;
     const wrong=prompt('Wrong answers (separate by |):',(card.distractors||[]).join('|'));
-    const sub=prompt('Card sub‑deck (optional):',card.sub||''); if(sub===null) return;
+    const sub=prompt('Card sub-deck (optional):',card.sub||''); if(sub===null) return;
     card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
     if(card.sub){ d.tags=unique([...(d.tags||[]),card.sub]); }
     store.set(KEYS.decks,state.decks); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
@@ -847,7 +945,7 @@ function drawQuiz(){
   window.__bqQuizKeys__=handler;
   window.addEventListener('keydown', handler);
 }
-function submitQuiz(){
+async function submitQuiz(){
   const name=$('#studentName')?.value.trim();
   const studentLocSel=$('#studentLocationSelect');
   const studentLocOther=$('#studentLocationOther');
@@ -880,6 +978,14 @@ function submitQuiz(){
     </div>`).join('');
   toast('Submission saved');
 
+  // NEW: Best-effort Cloud sync (non-blocking for students)
+  try {
+    await cloudPOST('submitResult', { row });
+    // toast('Synced online'); // optional
+  } catch(e) {
+    console.warn('Cloud submit failed', e);
+  }
+
   on($('#restartQuizBtn'),'click',()=>{ $('#quizFinished')?.classList.add('hidden'); $('#quizArea')?.classList.remove('hidden'); startOrRefreshQuiz(); }, { once:true });
   on($('#finishedPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); }, { once:true });
 }
@@ -911,6 +1017,38 @@ function renderReports(){
   on($('#repDateFrom'),'change',drawReports);
   on($('#repDateTo'),'change',drawReports);
   on($('#repTest'),'change',drawReports);
+
+  // NEW: Refresh from Cloud button
+  on($('#repCloudPullBtn'),'click',async ()=>{
+    try{
+      toast('Refreshing from Cloud…', 900);
+      const tests = (await getAllFromCloud()).tests || [];
+      const tmap={}; tests.forEach(t=>{ tmap[t.testId]={ id:t.testId,name:t.name,title:t.title||t.name,n:+t.n||30,selections:JSON.parse(t.selectionsJSON||'[]') }; });
+      state.tests=tmap; store.set(KEYS.tests,tmap);
+
+      const results = await getResultsFromCloud(); // all (or add limit)
+      // Normalize to local shape
+      const norm = (results||[]).map(r=>({
+        id:String(r.resId||uid('res')),
+        name:r.name||'',
+        location:r.location||'',
+        date:r.date||'',
+        time:Number(r.timeEpoch||Date.now()),
+        testId:String(r.testId||''),
+        testName:String(r.testName||''),
+        score:Number(r.score||0),
+        correct:Number(r.correct||0),
+        of:Number(r.of||0),
+        answers: (()=>{ try{return JSON.parse(r.answersJSON||'[]')}catch{return[]} })()
+      }));
+      state.results = norm;
+      store.set(KEYS.results, state.results);
+      renderReports();
+      toast('Cloud data loaded');
+    }catch(e){
+      console.warn(e); toast('Cloud refresh failed');
+    }
+  });
 }
 function drawReports(){
   const view    = ($('#repView')?.value || 'active');
@@ -940,7 +1078,7 @@ function drawReports(){
   if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
   if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
   if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
-  if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));
+  if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));  
   if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));  
 
   const tb=$('#repTable tbody'); if(!tb) return;
@@ -1111,8 +1249,8 @@ function ensureBackupButtons(){
     });
   }
 }
-function exportAllBackup(){
-  const backup = {
+function makeFullBackupObject(){
+  return {
     schema : 'bq_backup_v1',
     exportedAt: Date.now(),
     decks   : state.decks,
@@ -1120,6 +1258,9 @@ function exportAllBackup(){
     results : state.results,
     archived: state.archived
   };
+}
+function exportAllBackup(){
+  const backup = makeFullBackupObject();
   const json = JSON.stringify(backup, null, 2);
 
   // Download file
@@ -1275,10 +1416,66 @@ function normalizeTests(){
   if(changed) store.set(KEYS.tests,state.tests);
 }
 
-function boot(){
+// Cloud hydrator for student/empty state
+async function maybeHydrateFromCloud(){
+  const should = isStudent() || (Object.keys(state.decks||{}).length===0 && Object.keys(state.tests||{}).length===0);
+  if(!should) return;
+  try{
+    const { decks, cards, tests } = await getAllFromCloud();
+
+    // Build state.decks map
+    const dmap = {};
+    (decks||[]).forEach(d => {
+      dmap[d.deckId] = {
+        id:d.deckId,
+        className:d.className||'',
+        deckName:d.deckName||'',
+        tags:(d.tags||'').split('|').filter(Boolean),
+        cards:[],
+        createdAt:+d.createdAt||Date.now()
+      };
+    });
+
+    // Attach cards to decks
+    (cards||[]).forEach(c => {
+      const deck = dmap[c.deckId]; if(!deck) return;
+      deck.cards.push({
+        id:c.cardId, q:c.q, a:c.a,
+        distractors:(c.distractors||'').split('|').filter(Boolean),
+        sub:c.sub||'', createdAt:+c.createdAt||Date.now()
+      });
+    });
+
+    // Build tests map
+    const tmap = {};
+    (tests||[]).forEach(t => {
+      tmap[t.testId] = {
+        id:t.testId,
+        name:t.name,
+        title:t.title||t.name,
+        n:+t.n||30,
+        selections: JSON.parse(t.selectionsJSON||'[]')
+      };
+    });
+
+    state.decks=dmap; state.tests=tmap;
+    store.set(KEYS.decks,dmap);
+    store.set(KEYS.tests,tmap);
+    mergeDecksByName();
+    normalizeTests();
+  }catch(e){
+    console.warn('Cloud hydrate failed', e);
+    toast('Online data unavailable; using local');
+  }
+}
+
+async function boot(){
   mergeDecksByName();
   normalizeTests();
   applyStudentMode();
+
+  // fetch from Sheets for student/empty state
+  await maybeHydrateFromCloud();
 
   // select touch focus helper
   $$('select').forEach(sel=>{
