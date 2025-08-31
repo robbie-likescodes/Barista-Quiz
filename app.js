@@ -25,6 +25,12 @@
    4) Create: deleting a card no longer changes deck or scrolls to top
 */
 
+const CLOUD = {
+  BASE: "https://script.google.com/macros/s/AKfycbziNVr9lGMkXjdTmhk9BKdPNoAz2TuaUUo875CCN62cUxA9zm2FyPJj9tRYfMYHYBorkA/exec",
+  API_KEY: "" // or your secret if you enabled API key checks
+};
+
+
 //////////////////// tiny DOM/storage helpers ////////////////////
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
