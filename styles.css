@@ -158,6 +158,9 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .btn.ghost{background:transparent;border-color:var(--line)}
 .btn.small{padding:7px 10px;font-size:13px}
 
+/* Subtle icon spacing if you add icons later */
+.btn .ico{display:inline-block;margin-right:8px;line-height:0}
+
 /* ======================== Lists ============================== */
 .list .cardline{
   display:grid;grid-template-columns:1.3fr 1fr auto;gap:12px;
@@ -268,7 +271,7 @@ kbd{
 .btn:focus-visible,.input:focus-visible,select.input:focus-visible,.menu-item:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 
 /* ==================== Minor polish tweaks ==================== */
-/* Animate optional sub‑deck reveal in Create */
+/* Animate optional sub-deck reveal in Create */
 #newSubdeck{transition:max-height .25s ease,opacity .2s ease;max-height:120px}
 #newSubdeck.hidden{max-height:0;opacity:0;overflow:hidden}
 
@@ -309,3 +312,16 @@ kbd{
 
 /* NEW: Reports — date/test filter inputs inherit .input styling; keep spacing tight */
 #repDateFrom.input,#repDateTo.input,#repTest.input{ background:linear-gradient(0deg,rgba(255,255,255,0.02),rgba(255,255,255,0.02)),var(--panel2) }
+
+/* ========= Small additions for Cloud controls (admin only) === */
+/* Buttons already use .btn; these tighten spacing when many actions are in the header */
+#cloudPullBtn,#cloudPushBtn{ }
+#repCloudPullBtn{ }
+
+/* Optional status dot you can toggle from JS later (not shown to students) */
+.status-dot{
+  display:inline-block;width:8px;height:8px;border-radius:50%;
+  margin-left:8px;background:#7a829a;border:1px solid var(--line);vertical-align:middle
+}
+.status-dot.online{ background:var(--success) }
+.status-dot.offline{ background:var(--danger) }
