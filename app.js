@@ -1,30 +1,14 @@
-/* Barista Flashcards & Quizzes — local-first SPA (menu-hardened)
-   Features:
-   - Smooth mobile menu (auto-close on item/outside/Escape/resize)
-   - Toast confirmations
-   - Deck create/rename/delete/export/import
-   - Test save/rename/delete + deck/subdeck selection
-   - Student link copy/open; Student mode guard
-   - Practice & Quiz flows (keys supported)
-   - Quiz location dropdown + “Other…”
-   - Reports: filters/sorts, view Active/Archived, archive/restore/delete, “Most Missed”
-   - Location averages
-   - Full backup export/import (Merge or Replace) preserving classes/decks/subdecks/tests/results/archived
+/* =========================================================
+   Barista Flashcards & Quizzes — app.js (with Google Sheets sync)
+   Local-first SPA + Cloud sync (pull/push/submit/results)
+========================================================= */
 
-   NEW (Sheets integration):
-   - CLOUD config + helper fetchers
-   - Pull from Cloud (decks/cards/tests)
-   - Push Backup to Cloud (Merge or Replace)
-   - Reports: Refresh Results from Cloud
-   - submitQuiz(): best-effort POST to Cloud
-
-   NEW (per your earlier requests):
-   1) Reports: filter by Date Range AND by Test
-   2) Create: filter/show cards by Sub-deck (view sub-decks individually)
-   3) Create: after creating a deck, auto-select it in “Pick Existing Deck”
-   4) Create: deleting a card no longer changes deck or scrolls to top
-*/
-
+/* ========= Cloud API Config (EDIT ONLY IF YOU REDEPLOY) ========= */
+const CLOUD = {
+  BASE: "https://script.google.com/macros/s/AKfycbwjRzGAFZUZld6-IhJlcQclaJN0rGrduInI_xYuBp_isfBJigUBtaUH5luuVXcUmjjDhg/exec",
+  API_KEY: "longrandomstringwhatwhat" // must match Script Property 'API_KEY'
+};
+/* ================================================================ */
 
 //////////////////// tiny DOM/storage helpers ////////////////////
 const $  = s => document.querySelector(s);
@@ -48,7 +32,7 @@ const ADMIN_VIEWS = new Set(['create','build','reports']);
 //////////////////////////// utils ///////////////////////////////
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
 const todayISO = () => new Date().toISOString().slice(0,10);
-const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]));
+const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const shuffle  = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [x[i],x[j]]=[x[j],x[i]] } return x; };
 const sample   = (a,n) => shuffle(a).slice(0,n);
 const unique   = xs => Array.from(new Set(xs));
@@ -56,37 +40,133 @@ const deepCopy = obj => JSON.parse(JSON.stringify(obj));
 const deckKey  = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName||'').trim().toLowerCase()}`;
 const cardKey  = c => `${(c.q||'').trim().toLowerCase()}|${(c.a||'').trim().toLowerCase()}|${(c.sub||'').trim().toLowerCase()}`;
 
-///////////////////////// CLOUD (Sheets) /////////////////////////
-// Fill BASE with your Apps Script /exec URL. API_KEY is only required
-// for write actions (submit results, bulkUpsert, archive/delete).
-const CLOUD = {
-  BASE   : 'https://script.google.com/macros/s/AKfycbwjRzGAFZUZld6-IhJlcQclaJN0rGrduInI_xYuBp_isfBJigUBtaUH5luuVXcUmjjDhg/exec',
-  API_KEY: 'longrandomstringwhatwhat' // paste your Script Property value locally on admin machine (keep blank for public builds)
-};
-
-async function cloudGET(params){
-  if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
-  const qs = new URLSearchParams(params||{}).toString();
-  const r  = await fetch(`${CLOUD.BASE}${qs ? ('?'+qs) : ''}`);
-  const j  = await r.json();
-  if(!j.ok) throw new Error(j.error||'Cloud GET failed');
-  return j.data;
+//////////////////////// Cloud helpers /////////////////////////
+async function cloudGET(params={}){
+  const url = new URL(CLOUD.BASE);
+  Object.entries(params).forEach(([k,v])=> url.searchParams.set(k, String(v)));
+  const r = await fetch(url.toString(), { method:'GET' });
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
 }
-async function cloudPOST(action, payload={}){
-  if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
-  const r  = await fetch(`${CLOUD.BASE}?action=${encodeURIComponent(action)}`, {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ ...payload, apiKey: CLOUD.API_KEY })
+async function cloudPOST(action, payload={}, extraQS={}){
+  const url = new URL(CLOUD.BASE);
+  url.searchParams.set('action', action);
+  if (CLOUD.API_KEY) url.searchParams.set('key', CLOUD.API_KEY);
+  for(const [k,v] of Object.entries(extraQS||{})) url.searchParams.set(k, v);
+  const r = await fetch(url.toString(), {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
   });
-  const j = await r.json();
-  if(!j.ok) throw new Error(j.error||'Cloud POST failed');
-  return j.data;
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
 }
-async function getAllFromCloud(){ return cloudGET({ action:'list' }); } // {decks,cards,tests}
-async function getResultsFromCloud(limit){ 
-  const p = { action:'results' }; if(limit) p.limit = String(limit);
-  return cloudGET(p); // array of result rows
+async function getAllFromCloud(){
+  const data = await cloudGET({action:'getAll'}); // {decks:[],cards:[],tests:[]}
+  if(!data || !Array.isArray(data.decks) || !Array.isArray(data.cards) || !Array.isArray(data.tests)){
+    throw new Error('Malformed getAll response');
+  }
+  const decks = {};
+  for(const d of data.decks){
+    const id = d.deckId || d.id || uid('deck');
+    decks[id] = {
+      id,
+      className: d.className || '',
+      deckName : d.deckName || (d.name || 'Deck'),
+      cards    : [],
+      tags     : Array.isArray(d.tags) ? d.tags
+               : (typeof d.tags==='string' && d.tags ? String(d.tags).split(',').map(s=>s.trim()).filter(Boolean) : []),
+      createdAt: d.createdAt || Date.now()
+    };
+  }
+  for(const c of data.cards){
+    const deckId = c.deckId;
+    if(!deckId || !decks[deckId]) continue;
+    (decks[deckId].cards ||= []).push({
+      id: c.cardId || uid('card'),
+      q: c.q || '',
+      a: c.a || '',
+      distractors: Array.isArray(c.distractors) ? c.distractors
+                 : (typeof c.distractors==='string' && c.distractors ? String(c.distractors).split('|').map(s=>s.trim()).filter(Boolean) : []),
+      sub: c.sub || '',
+      createdAt: c.createdAt || Date.now()
+    });
+  }
+  const tests = {};
+  for(const t of data.tests){
+    const id = t.id || uid('test');
+    tests[id] = { id, name: t.name || 'Test', title: t.title || t.name || 'Test', n: Math.max(1, +t.n || 30), selections: Array.isArray(t.selections) ? t.selections : [] };
+  }
+  return {decks, tests};
+}
+function makeBackupObject(){
+  return {
+    schema : 'bq_backup_v1',
+    exportedAt: Date.now(),
+    decks   : state.decks,
+    tests   : state.tests,
+    results : state.results,
+    archived: state.archived
+  };
+}
+async function cloudPullHandler(){
+  try{
+    $('#cloudPullBtn')?.setAttribute('disabled','true');
+    const {decks, tests} = await getAllFromCloud();
+    state.decks = decks; state.tests = tests;
+    mergeDecksByName(); normalizeTests();
+    store.set(KEYS.decks, state.decks);
+    store.set(KEYS.tests, state.tests);
+    renderCreate(); renderBuild(); renderReports();
+    toast('Pulled from Cloud');
+  }catch(err){
+    alert('Cloud pull failed: '+(err.message||err));
+  }finally{ $('#cloudPullBtn')?.removeAttribute('disabled'); }
+}
+async function cloudPushHandler(){
+  const modeMerge = confirm('Push to Cloud?\n\nOK = MERGE into Sheets\nCancel = REPLACE (overwrite Sheets with local)');
+  try{
+    $('#cloudPushBtn')?.setAttribute('disabled','true');
+    const backup = makeBackupObject();
+    const resp = await cloudPOST('backup', backup, {mode: modeMerge ? 'merge' : 'replace'});
+    if(resp?.status==='ok'){ toast(modeMerge ? 'Merged to Cloud' : 'Replaced in Cloud'); }
+    else{
+      const msg = resp?.message || resp?.reason || JSON.stringify(resp||{});
+      throw new Error(msg);
+    }
+  }catch(err){
+    alert('Cloud push failed: '+(err.message||err));
+  }finally{ $('#cloudPushBtn')?.removeAttribute('disabled'); }
+}
+async function resultsRefreshFromCloud(){
+  try{
+    const rows = await cloudGET({action:'getResults',limit:500});
+    if(!Array.isArray(rows)) throw new Error('Bad getResults response');
+    state.results = rows.map(r=>({
+      id:r.id||uid('res'), name:r.name||'', location:r.location||'', date:r.date||'',
+      time:Number(r.time)||Date.now(), testId:r.testId||'', testName:r.testName||'',
+      score:Number(r.score)||0, correct:Number(r.correct)||0, of:Number(r.of)||0,
+      answers:Array.isArray(r.answers)?r.answers:[]
+    }));
+    store.set(KEYS.results, state.results);
+    renderReports();
+    toast('Results pulled from Cloud');
+  }catch(err){
+    alert('Failed to refresh results: '+(err.message||err));
+  }
+}
+async function maybeHydrateFromCloud(){
+  try{
+    const needHydrate = isStudent() ||
+      (Object.keys(state.decks||{}).length===0 && Object.keys(state.tests||{}).length===0);
+    if(!needHydrate) return;
+    const {decks, tests} = await getAllFromCloud();
+    state.decks = decks; state.tests = tests;
+    store.set(KEYS.decks, decks); store.set(KEYS.tests, tests);
+    toast('Loaded latest decks & tests from Cloud');
+  }catch(err){
+    console.warn('Cloud hydrate failed:', err.message||err);
+  }
 }
 
 /////////////////////////// global state /////////////////////////
@@ -97,15 +177,13 @@ let state = {
   archived: store.get(KEYS.archived, []),
   practice: { cards:[], idx:0 },
   quiz    : { items:[], idx:0, n:30, locked:false, testId:'' },
-  ui      : { currentTestId: null, subFilter: '' } // NEW: subFilter for Create view
+  ui      : { currentTestId: null, subFilter: '' }
 };
 
 //////////////////////////// toasts //////////////////////////////
 function toast(msg, ms=1800){
-  const t = $('#toast');
-  if(!t){ alert(msg); return; }
-  t.textContent = msg;
-  t.classList.add('show');
+  const t = $('#toast'); if(!t){ alert(msg); return; }
+  t.textContent = msg; t.classList.add('show');
   clearTimeout(window.__toastTimer);
   window.__toastTimer = setTimeout(()=>t.classList.remove('show'), ms);
 }
@@ -133,66 +211,32 @@ function activate(view){
   if(view==='quiz')     renderQuizScreen();
   if(view==='reports')  renderReports();
 
-  // Always close menu after navigation
   closeMenu();
 }
 window.addEventListener('popstate', ()=>activate(qs().get('view')||'create'));
 
 /////////////////////// mobile menu (robust) /////////////////////
-function menuEls(){
-  return { btn: document.getElementById('menuBtn'), list: document.getElementById('menuList') };
-}
-function openMenu(){
-  const {btn,list}=menuEls(); if(!btn||!list) return;
-  list.classList.add('open');
-  btn.setAttribute('aria-expanded','true');
-}
-function closeMenu(){
-  const {btn,list}=menuEls(); if(!btn||!list) return;
-  list.classList.remove('open');
-  btn.setAttribute('aria-expanded','false');
-}
-function toggleMenu(e){
-  const {btn,list}=menuEls(); if(!btn||!list) return;
-  e && e.stopPropagation();
-  if(list.classList.contains('open')) closeMenu(); else openMenu();
-}
-// Bind once, safely
+function menuEls(){ return { btn: $('#menuBtn'), list: $('#menuList') }; }
+function openMenu(){ const {btn,list}=menuEls(); if(!btn||!list) return; list.classList.add('open'); btn.setAttribute('aria-expanded','true'); }
+function closeMenu(){ const {btn,list}=menuEls(); if(!btn||!list) return; list.classList.remove('open'); btn.setAttribute('aria-expanded','false'); }
+function toggleMenu(e){ const {btn,list}=menuEls(); if(!btn||!list) return; e&&e.stopPropagation(); list.classList.contains('open')?closeMenu():openMenu(); }
 (function bindMenu(){
-  const {btn,list}=menuEls();
-  if(!btn || !list) return; // HTML not ready? boot() will still run; menu just won't bind.
-
-  // Click/tap to open
+  const {btn,list}=menuEls(); if(!btn||!list) return;
   btn.addEventListener('click', toggleMenu);
-
-  // Close when selecting a route + trigger route
   list.addEventListener('click', (e)=>{
-    const item = e.target.closest('.menu-item');
-    if(!item) return;
-    const route = item.dataset.route;
-    if(route){ setParams({view:route}); activate(route); }
+    const item = e.target.closest('.menu-item'); if(!item) return;
+    const route = item.dataset.route; if(route){ setParams({view:route}); activate(route); }
     closeMenu();
   });
-
-  // Outside click closes (no capture to avoid pre-closing)
-  document.addEventListener('click', (e)=>{
-    if (!e.target.closest('.menu')) closeMenu();
-  });
-
-  // Escape closes
-  document.addEventListener('keydown', (e)=>{
-    if(e.key === 'Escape') closeMenu();
-  });
-
-  // Orientation/resize closes to prevent misposition
-  window.addEventListener('resize', closeMenu, { passive:true });
-  window.addEventListener('orientationchange', closeMenu, { passive:true });
+  document.addEventListener('click', e=>{ if(!e.target.closest('.menu')) closeMenu(); });
+  document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeMenu(); });
+  window.addEventListener('resize', closeMenu, {passive:true});
+  window.addEventListener('orientationchange', closeMenu, {passive:true});
 })();
 
 /////////////////////// student mode /////////////////////////////
 function applyStudentMode(){
-  const p = qs();
-  const student = isStudent();
+  const p = qs(); const student = isStudent();
   document.body.classList.toggle('student', student);
   if(student){
     const name = p.get('test')||'';
@@ -225,11 +269,7 @@ function mergeDecksByName(){
   for(const [id,d] of Object.entries(state.decks)){
     d.cards=Array.isArray(d.cards)?d.cards:[]; d.tags=Array.isArray(d.tags)?d.tags:[];
     const k=deckKey(d);
-    if(!mapByKey.has(k)){
-      mapByKey.set(k,id);
-      if(d.subdeck) d.tags=unique([...(d.tags||[]),d.subdeck]);
-      continue;
-    }
+    if(!mapByKey.has(k)){ mapByKey.set(k,id); if(d.subdeck) d.tags=unique([...(d.tags||[]),d.subdeck]); continue; }
     const primaryId=mapByKey.get(k), P=state.decks[primaryId];
     P.cards=[...(P.cards||[]),...(d.cards||[])];
     P.tags=unique([...(P.tags||[]),...(d.tags||[]),...(d.subdeck?[d.subdeck]:[])]);
@@ -250,9 +290,8 @@ function mergeDecksByName(){
 
 //////////////////////////// CREATE //////////////////////////////
 function renderCreate(){
-  ensureBackupButtons(); // Export All / Import Backup…
+  ensureBackupButtons(); // adds Export/Import + Cloud Pull/Push
 
-  // datalists for Class + Deck
   const classListEl = $('#classNames');
   const deckListEl  = $('#deckNames');
   if (classListEl && deckListEl){
@@ -268,7 +307,6 @@ function renderCreate(){
   renderSubdeckManager();
   renderCardsList();
 
-  // Button bindings (safe)
   on($('#createSubdeckBtn'),'click',createSubdeck);
   on($('#toggleSubdeckBtn'),'click',toggleNewSubdeck);
   on($('#addDeckBtn'),'click',addDeck);
@@ -282,72 +320,13 @@ function renderCreate(){
   on($('#bulkAddBtn'),'click',bulkAddCards);
   on($('#addCardBtn'),'click',addCard);
 
-  // NEW: Cloud buttons
   on($('#cloudPullBtn'),'click',cloudPullHandler);
   on($('#cloudPushBtn'),'click',cloudPushHandler);
 
-  // Reset sub-filter when changing deck
   on($('#deckSelect'),'change',()=>{ 
     state.ui.subFilter=''; 
-    renderDeckMeta(); 
-    renderSubdeckManager(); 
-    renderCardsList(); 
+    renderDeckMeta(); renderSubdeckManager(); renderCardsList(); 
   });
-}
-
-async function cloudPullHandler(){
-  try{
-    toast('Pulling from Cloud…', 800);
-    const { decks, cards, tests } = await getAllFromCloud();
-
-    // Build decks map
-    const dmap = {};
-    (decks||[]).forEach(d=>{
-      dmap[d.deckId] = {
-        id:d.deckId,
-        className:d.className||'',
-        deckName:d.deckName||'',
-        tags:(d.tags||'').split('|').filter(Boolean),
-        cards:[],
-        createdAt:+d.createdAt||Date.now()
-      };
-    });
-    (cards||[]).forEach(c=>{
-      const dk=dmap[c.deckId]; if(!dk) return;
-      dk.cards.push({
-        id:c.cardId, q:c.q, a:c.a,
-        distractors:(c.distractors||'').split('|').filter(Boolean),
-        sub:c.sub||'', createdAt:+c.createdAt||Date.now()
-      });
-    });
-
-    const tmap = {};
-    (tests||[]).forEach(t=>{
-      tmap[t.testId] = {
-        id:t.testId, name:t.name, title:t.title||t.name, n:+t.n||30,
-        selections: JSON.parse(t.selectionsJSON||'[]')
-      };
-    });
-
-    state.decks=dmap; state.tests=tmap;
-    store.set(KEYS.decks,dmap); store.set(KEYS.tests,tmap);
-    mergeDecksByName(); normalizeTests();
-
-    renderCreate(); renderBuild(); toast('Cloud pulled');
-  }catch(e){
-    console.warn(e); toast('Cloud pull failed');
-  }
-}
-
-async function cloudPushHandler(){
-  try{
-    const modeMerge = confirm('Push backup to Cloud?\n\nOK = MERGE into existing\nCancel = REPLACE (wipe and replace on the Cloud)');
-    const backup = makeFullBackupObject();
-    await cloudPOST('bulkUpsert', { mode: modeMerge ? 'merge' : 'replace', ...backup });
-    toast(modeMerge ? 'Cloud merged' : 'Cloud replaced');
-  }catch(e){
-    console.warn(e); toast('Cloud push failed');
-  }
 }
 
 function renderDeckSelect(){
@@ -383,7 +362,6 @@ function renderDeckMeta(){
     });
   });
 
-  // NEW: populate "Show sub-deck" filter if it exists in HTML
   const subSel = $('#cardsSubFilter');
   if(subSel){
     const curr = state.ui.subFilter || '';
@@ -417,7 +395,6 @@ function renderCardsList(){
   if(!id){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
   const d=state.decks[id];
 
-  // NEW: filter by selected sub-deck if any
   const subFilter = ($('#cardsSubFilter')?.value || state.ui.subFilter || '').trim();
   const list = subFilter ? (d.cards||[]).filter(c => (c.sub||'') === subFilter) : (d.cards||[]);
 
@@ -429,7 +406,6 @@ function renderCardsList(){
       <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
     </div>`).join('');
 
-  // Delete — NEW: preserve deck selection AND scroll position
   cardsList.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',()=>{
     const keepDeckId = selectedDeckId(); if(!keepDeckId) return;
     const y = window.scrollY;
@@ -438,21 +414,15 @@ function renderCardsList(){
     d.cards=d.cards.filter(c=>c.id!==cid);
     store.set(KEYS.decks,state.decks);
 
-    // Refresh UI while preserving selection and sub-filter
     renderDeckSelect();
     const deckSelect = $('#deckSelect');
     if (deckSelect) deckSelect.value = keepDeckId;
 
-    renderDeckMeta();
-    renderSubdeckManager();
-    renderCardsList();
-
-    // restore scroll
+    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
     window.scrollTo(0, y);
     toast('Card deleted');
   }));
 
-  // Edit (unchanged)
   cardsList.querySelectorAll('.btn-edit').forEach(b=>b.addEventListener('click',()=>{
     const cid=b.closest('.cardline').dataset.id; const card=d.cards.find(c=>c.id===cid); if(!card) return;
     const q=prompt('Question:',card.q); if(q===null) return;
@@ -490,8 +460,7 @@ function addDeck(){
     const deckSelect=$('#deckSelect'); if(deckSelect) deckSelect.value=existing.id;
     if(sdn){ existing.tags=unique([...(existing.tags||[]),sdn]); store.set(KEYS.decks,state.decks); }
     renderDeckMeta(); renderSubdeckManager(); renderCardsList(); renderDeckSelect();
-    toast('Selected existing deck');
-    return;
+    toast('Selected existing deck'); return;
   }
   const id=uid('deck');
   state.decks[id]={id,className:cls,deckName:dnm,cards:[],tags:sdn?[sdn]:[],createdAt:Date.now()};
@@ -502,11 +471,7 @@ function addDeck(){
   if($('#newSubdeck')){ $('#newSubdeck').value=''; $('#newSubdeck').classList.add('hidden'); }
 
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-
-  // NEW: auto-select the newly created deck in the dropdown
-  const deckSelect=$('#deckSelect'); 
-  if (deckSelect){ deckSelect.value = id; }
-
+  const deckSelect=$('#deckSelect'); if (deckSelect){ deckSelect.value = id; }
   toast('Deck created');
 }
 function renameDeck(){
@@ -762,8 +727,7 @@ function copyShareLink(){
 function openSharePreview(){
   const t=getCurrentTestOrSave(); if(!t) return;
   const url=new URL(location.href); url.searchParams.set('mode','student'); url.searchParams.set('test',t.name); url.searchParams.set('view','practice');
-  open(url.toString(),'_blank');
-  toast('Opened student preview');
+  open(url.toString(),'_blank'); toast('Opened student preview');
 }
 function getCurrentTestOrSave(){
   const testNameInput=$('#testNameInput'); if(!testNameInput) return null;
@@ -822,7 +786,8 @@ function fillTestsSelect(sel,lockToStudent=false){
   if(!sel) return;
   const list=Object.entries(state.tests).sort((a,b)=>a[1].name.localeCompare(b[1].name));
   if(state.quiz.locked && state.quiz.testId && lockToStudent){
-    const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(t.name)}</option>`:''; sel.value=state.quiz.testId; sel.disabled=true; return;
+    const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(t.name)}</option>`:'';
+    sel.value=state.quiz.testId; sel.disabled=true; return;
   }
   sel.disabled=false;
   sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('')||'';
@@ -882,7 +847,6 @@ function renderQuizScreen(){
   if(last && sel?.querySelector(`option[value="${last}"]`)) sel.value=last;
   if($('#studentDate') && !$('#studentDate').value) $('#studentDate').value=todayISO();
 
-  // location dropdown toggle
   const studentLocSel=$('#studentLocationSelect');
   const studentLocOther=$('#studentLocationOther');
   if(studentLocSel){
@@ -967,6 +931,15 @@ async function submitQuiz(){
   const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
   state.results.push(row); store.set(KEYS.results,state.results);
 
+  // Try to write to Cloud (does not block UI)
+  try{
+    const resp = await cloudPOST('submitResult', row);
+    if(resp?.status==='ok') { /* ok */ }
+    else { console.warn('submitResult resp', resp); toast('Saved locally; cloud error.'); }
+  }catch(err){
+    console.warn('Cloud submit failed', err); toast('Saved locally (offline).');
+  }
+
   $('#quizArea')?.classList.add('hidden'); $('#quizFinished')?.classList.remove('hidden');
   if($('#finishedMsg')) $('#finishedMsg').innerHTML=`Thanks, <strong>${esc(name)}</strong>! You scored <strong>${score}%</strong> (${correct}/${total}).`;
   if($('#finishedAnswers')) $('#finishedAnswers').innerHTML=answers.map(a=>`
@@ -979,26 +952,18 @@ async function submitQuiz(){
     </div>`).join('');
   toast('Submission saved');
 
-  // NEW: Best-effort Cloud sync (non-blocking for students)
-  try {
-    await cloudPOST('submitResult', { row });
-    // toast('Synced online'); // optional
-  } catch(e) {
-    console.warn('Cloud submit failed', e);
-  }
-
   on($('#restartQuizBtn'),'click',()=>{ $('#quizFinished')?.classList.add('hidden'); $('#quizArea')?.classList.remove('hidden'); startOrRefreshQuiz(); }, { once:true });
   on($('#finishedPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); }, { once:true });
 }
 
 /////////////////////////// REPORTS //////////////////////////////
 function renderReports(){
-  // Populate Location dropdown (existing behavior)
+  ensureReportsButtons();
+
   const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
   const keepLoc=$('#repLocation')?.value;
   if($('#repLocation')) $('#repLocation').innerHTML=`<option value="">All locations</option>`+locs.map(l=>`<option ${keepLoc===l?'selected':''}>${esc(l)}</option>`).join('');
 
-  // NEW: Populate Test dropdown if present
   const repTestSel = $('#repTest');
   if (repTestSel){
     const keepTest = repTestSel.value || '';
@@ -1008,56 +973,19 @@ function renderReports(){
 
   drawReports();
 
-  // Existing binds
   on($('#repLocation'),'change',drawReports);
   on($('#repAttemptView'),'change',drawReports);
   on($('#repSort'),'change',drawReports);
   on($('#repView'),'change',drawReports);
-
-  // NEW binds for date range + test
   on($('#repDateFrom'),'change',drawReports);
   on($('#repDateTo'),'change',drawReports);
   on($('#repTest'),'change',drawReports);
-
-  // NEW: Refresh from Cloud button
-  on($('#repCloudPullBtn'),'click',async ()=>{
-    try{
-      toast('Refreshing from Cloud…', 900);
-      const tests = (await getAllFromCloud()).tests || [];
-      const tmap={}; tests.forEach(t=>{ tmap[t.testId]={ id:t.testId,name:t.name,title:t.title||t.name,n:+t.n||30,selections:JSON.parse(t.selectionsJSON||'[]') }; });
-      state.tests=tmap; store.set(KEYS.tests,tmap);
-
-      const results = await getResultsFromCloud(); // all (or add limit)
-      // Normalize to local shape
-      const norm = (results||[]).map(r=>({
-        id:String(r.resId||uid('res')),
-        name:r.name||'',
-        location:r.location||'',
-        date:r.date||'',
-        time:Number(r.timeEpoch||Date.now()),
-        testId:String(r.testId||''),
-        testName:String(r.testName||''),
-        score:Number(r.score||0),
-        correct:Number(r.correct||0),
-        of:Number(r.of||0),
-        answers: (()=>{ try{return JSON.parse(r.answersJSON||'[]')}catch{return[]} })()
-      }));
-      state.results = norm;
-      store.set(KEYS.results, state.results);
-      renderReports();
-      toast('Cloud data loaded');
-    }catch(e){
-      console.warn(e); toast('Cloud refresh failed');
-    }
-  });
 }
 function drawReports(){
   const view    = ($('#repView')?.value || 'active');
   const loc     = $('#repLocation')?.value || '';
   const attempt = $('#repAttemptView')?.value || 'all';
   const sort    = $('#repSort')?.value || 'date_desc';
-
-  // NEW
   const fromISO = $('#repDateFrom')?.value || '';
   const toISO   = $('#repDateTo')?.value   || '';
   const testNm  = $('#repTest')?.value     || '';
@@ -1079,7 +1007,7 @@ function drawReports(){
   if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
   if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
   if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
-  if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));  
+  if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));
   if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));  
 
   const tb=$('#repTable tbody'); if(!tb) return;
@@ -1100,7 +1028,6 @@ function drawReports(){
     </td>
   </tr>`).join('');
 
-  // bind row actions
   tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
     const id=btn.closest('tr').dataset.id; const src = view==='archived'?state.archived:state.results;
     const r=src.find(x=>x.id===id); if(!r) return;
@@ -1125,10 +1052,8 @@ function drawReports(){
     }
   }));
 
-  // Recompute location averages with current filters
   renderLocationAverages(view, loc, attempt, fromISO, toISO, testNm);
 
-  // Most missed — based on ACTIVE results only (unchanged)
   const baseRows=[...state.results];
   const missMap=new Map();
   for(const r of baseRows){
@@ -1188,7 +1113,6 @@ function computeLocationAverages(rows){
   out.sort((a,b)=> a.location.localeCompare(b.location));
   return out;
 }
-// UPDATED signature to respect filters
 function renderLocationAverages(view='active', locFilter='', attempt='all', fromISO='', toISO='', testNm=''){
   const box  = $('#locationAverages'); if(!box) return;
   let base = view==='archived' ? [...state.archived] : [...state.results];
@@ -1206,14 +1130,11 @@ function renderLocationAverages(view='active', locFilter='', attempt='all', from
 
   const avgs = computeLocationAverages(base);
   if (!avgs.length){
-    box.innerHTML = '<div class="hint">No data yet.</div>';
-    return;
+    box.innerHTML = '<div class="hint">No data yet.</div>'; return;
   }
   box.innerHTML = avgs.map(x=>`
     <div class="missrow">
-      <div class="misscount">
-        <div>${x.count}</div><div class="hint">attempts</div>
-      </div>
+      <div class="misscount"><div>${x.count}</div><div class="hint">attempts</div></div>
       <div class="missq"><strong>${esc(x.location)}</strong> — avg <strong>${Math.round(x.avg)}%</strong></div>
     </div>
   `).join('');
@@ -1221,27 +1142,22 @@ function renderLocationAverages(view='active', locFilter='', attempt='all', from
 
 //////////////////// Full Backup / Restore //////////////////////
 function ensureBackupButtons(){
-  const hdr = $('#view-create .card .card-head');
-  if(!hdr) return;
+  const hdr = $('#view-create .card .card-head'); if(!hdr) return;
+
   if(!$('#exportAllBtn')){
     const ex = document.createElement('button');
-    ex.id='exportAllBtn'; ex.className='btn';
-    ex.textContent='Export All';
-    hdr.appendChild(ex);
-    ex.addEventListener('click', exportAllBackup);
+    ex.id='exportAllBtn'; ex.className='btn'; ex.textContent='Export All';
+    hdr.appendChild(ex); ex.addEventListener('click', exportAllBackup);
   }
   if(!$('#importBackupBtn')){
     const im = document.createElement('button');
-    im.id='importBackupBtn'; im.className='btn';
-    im.textContent='Import Backup…';
-    hdr.appendChild(im);
-    im.addEventListener('click', importBackupFlow);
+    im.id='importBackupBtn'; im.className='btn'; im.textContent='Import Backup…';
+    hdr.appendChild(im); im.addEventListener('click', importBackupFlow);
   }
   if(!$('#importBackupInput')){
     const fi = document.createElement('input');
     fi.type='file'; fi.accept='.json,application/json,text/plain';
-    fi.id='importBackupInput'; fi.hidden=true;
-    hdr.appendChild(fi);
+    fi.id='importBackupInput'; fi.hidden=true; hdr.appendChild(fi);
     fi.addEventListener('change', async (e)=>{
       const f=e.target.files?.[0]; if(!f) return;
       const txt=await f.text(); e.target.value='';
@@ -1249,36 +1165,32 @@ function ensureBackupButtons(){
       catch(err){ alert('Invalid backup JSON: '+err.message); }
     });
   }
-}
-function makeFullBackupObject(){
-  return {
-    schema : 'bq_backup_v1',
-    exportedAt: Date.now(),
-    decks   : state.decks,
-    tests   : state.tests,
-    results : state.results,
-    archived: state.archived
-  };
+
+  // Cloud buttons
+  if(!$('#cloudPullBtn')){
+    const cp = document.createElement('button');
+    cp.id='cloudPullBtn'; cp.className='btn ghost'; cp.textContent='Pull from Cloud';
+    hdr.appendChild(cp);
+  }
+  if(!$('#cloudPushBtn')){
+    const pb = document.createElement('button');
+    pb.id='cloudPushBtn'; pb.className='btn success'; pb.textContent='Push Backup';
+    hdr.appendChild(pb);
+  }
 }
 function exportAllBackup(){
-  const backup = makeFullBackupObject();
+  const backup = makeBackupObject();
   const json = JSON.stringify(backup, null, 2);
-
-  // Download file
   const stamp = new Date().toISOString().replace(/[:.]/g,'-');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([json],{type:'application/json'}));
-  a.download = `bq_backup_${stamp}.json`;
-  a.click(); URL.revokeObjectURL(a.href);
-
-  // Clipboard (best-effort)
+  a.download = `bq_backup_${stamp}.json`; a.click(); URL.revokeObjectURL(a.href);
   navigator.clipboard?.writeText(json).then(()=>toast('Backup downloaded & copied'),()=>toast('Backup downloaded'));
 }
 function importBackupFlow(){
   const useFile = confirm('Import from a file?\n\nOK = Choose file\nCancel = Paste JSON');
   if(useFile){ $('#importBackupInput')?.click(); return; }
-  const txt = prompt('Paste full backup JSON here:');
-  if(!txt) return;
+  const txt = prompt('Paste full backup JSON here:'); if(!txt) return;
   try { const data=JSON.parse(txt); importBackupData(data); }
   catch(err){ alert('Invalid backup JSON: '+err.message); }
 }
@@ -1288,7 +1200,6 @@ function importBackupData(data){
   }
   const modeMerge = confirm('How to apply backup?\n\nOK = MERGE into existing\nCancel = REPLACE (wipe current and restore backup)');
   if(modeMerge) mergeBackup(data); else replaceBackup(data);
-  // persist and refresh
   store.set(KEYS.decks,   state.decks);
   store.set(KEYS.tests,   state.tests);
   store.set(KEYS.results, state.results);
@@ -1341,7 +1252,6 @@ function mergeBackup(data){
   const incomingResults  = Array.isArray(data.results)  ? data.results  : [];
   const incomingArchived = Array.isArray(data.archived) ? data.archived : [];
 
-  // Decks: merge by class+deckName
   const keyToId = new Map();
   for(const [id,d] of Object.entries(state.decks)) keyToId.set(deckKey(d), id);
   const importedKeyToExistingId = new Map();
@@ -1374,7 +1284,6 @@ function mergeBackup(data){
     }
   }
 
-  // Tests: merge by name, remap deckIds
   for(const [tid,t] of Object.entries(incomingTests)){
     const remappedSelections = dedupeSelections((t.selections||[]).map(sel=>{
       const targetId = importedKeyToExistingId.get(sel.deckId) || sel.deckId;
@@ -1384,11 +1293,8 @@ function mergeBackup(data){
     if(!match){
       const newId = uid('test');
       state.tests[newId] = {
-        id: newId,
-        name: t.name || 'Test',
-        title: t.title || t.name || 'Test',
-        n: Math.max(1, +t.n || 30),
-        selections: remappedSelections
+        id: newId, name: t.name || 'Test', title: t.title || t.name || 'Test',
+        n: Math.max(1, +t.n || 30), selections: remappedSelections
       };
     }else{
       const id = match[0], dst = state.tests[id];
@@ -1398,7 +1304,6 @@ function mergeBackup(data){
     }
   }
 
-  // Results/Archived: append with unique ids
   const allIds = new Set([...state.results, ...state.archived].map(r=>r.id));
   for(const r of incomingResults){ const x=deepCopy(r||{}); if(!x.id || allIds.has(x.id)) x.id = uid('res'); state.results.push(x); allIds.add(x.id); }
   for(const r of incomingArchived){ const x=deepCopy(r||{}); if(!x.id || allIds.has(x.id)) x.id = uid('res'); state.archived.push(x); allIds.add(x.id); }
@@ -1417,68 +1322,23 @@ function normalizeTests(){
   if(changed) store.set(KEYS.tests,state.tests);
 }
 
-// Cloud hydrator for student/empty state
-async function maybeHydrateFromCloud(){
-  const should = isStudent() || (Object.keys(state.decks||{}).length===0 && Object.keys(state.tests||{}).length===0);
-  if(!should) return;
-  try{
-    const { decks, cards, tests } = await getAllFromCloud();
-
-    // Build state.decks map
-    const dmap = {};
-    (decks||[]).forEach(d => {
-      dmap[d.deckId] = {
-        id:d.deckId,
-        className:d.className||'',
-        deckName:d.deckName||'',
-        tags:(d.tags||'').split('|').filter(Boolean),
-        cards:[],
-        createdAt:+d.createdAt||Date.now()
-      };
-    });
-
-    // Attach cards to decks
-    (cards||[]).forEach(c => {
-      const deck = dmap[c.deckId]; if(!deck) return;
-      deck.cards.push({
-        id:c.cardId, q:c.q, a:c.a,
-        distractors:(c.distractors||'').split('|').filter(Boolean),
-        sub:c.sub||'', createdAt:+c.createdAt||Date.now()
-      });
-    });
-
-    // Build tests map
-    const tmap = {};
-    (tests||[]).forEach(t => {
-      tmap[t.testId] = {
-        id:t.testId,
-        name:t.name,
-        title:t.title||t.name,
-        n:+t.n||30,
-        selections: JSON.parse(t.selectionsJSON||'[]')
-      };
-    });
-
-    state.decks=dmap; state.tests=tmap;
-    store.set(KEYS.decks,dmap);
-    store.set(KEYS.tests,tmap);
-    mergeDecksByName();
-    normalizeTests();
-  }catch(e){
-    console.warn('Cloud hydrate failed', e);
-    toast('Online data unavailable; using local');
+function ensureReportsButtons(){
+  const headerCard = $('#view-reports .card'); if(!headerCard) return;
+  if(!$('#resultsCloudBtn')){
+    const btn = document.createElement('button');
+    btn.id='resultsCloudBtn'; btn.className='btn'; btn.textContent='Refresh from Cloud';
+    headerCard.querySelector('.grid')?.appendChild(document.createElement('div'))?.appendChild?.(btn) || headerCard.appendChild(btn);
+    on(btn,'click',resultsRefreshFromCloud);
   }
 }
 
 async function boot(){
   mergeDecksByName();
   normalizeTests();
+
+  await maybeHydrateFromCloud(); // load from Sheets for student/empty devices
   applyStudentMode();
 
-  // fetch from Sheets for student/empty state
-  await maybeHydrateFromCloud();
-
-  // select touch focus helper
   $$('select').forEach(sel=>{
     sel.style.pointerEvents='auto';
     sel.addEventListener('touchstart',()=>sel.focus(),{passive:true});
@@ -1488,5 +1348,15 @@ async function boot(){
 
   activate(qs().get('view') || (isStudent() ? 'practice' : 'create'));
 }
-window.boot = boot; // expose for quick console check
-boot();
+window.boot = boot;
+
+// Safer boot wrapper (handles script timing & shows clear error)
+(function safeBoot(){
+  try{
+    if (document.readyState !== 'loading') boot();
+    else window.addEventListener('DOMContentLoaded', boot, { once:true });
+  }catch(e){
+    console.error('Boot error:', e);
+    alert('App failed to start. See console for details.');
+  }
+})();
