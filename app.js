@@ -27,7 +27,7 @@
 
 const CLOUD = {
   BASE: "https://script.google.com/macros/s/AKfycbziNVr9lGMkXjdTmhk9BKdPNoAz2TuaUUo875CCN62cUxA9zm2FyPJj9tRYfMYHYBorkA/exec",
-  API_KEY: "" // or your secret if you enabled API key checks
+  API_KEY: "longrandomstringwhatwhat"
 };
 
 
