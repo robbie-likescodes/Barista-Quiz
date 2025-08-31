@@ -25,11 +25,6 @@
    4) Create: deleting a card no longer changes deck or scrolls to top
 */
 
-const CLOUD = {
-  BASE: "https://script.google.com/macros/s/AKfycbwjRzGAFZUZld6-IhJlcQclaJN0rGrduInI_xYuBp_isfBJigUBtaUH5luuVXcUmjjDhg/exec",
-  API_KEY: "longrandomstringwhatwhat"
-};
-
 
 //////////////////// tiny DOM/storage helpers ////////////////////
 const $  = s => document.querySelector(s);
@@ -65,8 +60,8 @@ const cardKey  = c => `${(c.q||'').trim().toLowerCase()}|${(c.a||'').trim().toLo
 // Fill BASE with your Apps Script /exec URL. API_KEY is only required
 // for write actions (submit results, bulkUpsert, archive/delete).
 const CLOUD = {
-  BASE   : 'https://script.google.com/macros/s/AKfycbziNVr9lGMkXjdTmhk9BKdPNoAz2TuaUUo875CCN62cUxA9zm2FyPJj9tRYfMYHYBorkA/exec',
-  API_KEY: '' // paste your Script Property value locally on admin machine (keep blank for public builds)
+  BASE   : 'https://script.google.com/macros/s/AKfycbwjRzGAFZUZld6-IhJlcQclaJN0rGrduInI_xYuBp_isfBJigUBtaUH5luuVXcUmjjDhg/exec',
+  API_KEY: 'longrandomstringwhatwhat' // paste your Script Property value locally on admin machine (keep blank for public builds)
 };
 
 async function cloudGET(params){
