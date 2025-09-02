@@ -12,8 +12,8 @@
 
   // ---- Config (persisted) ----
   const _cfg = loadCfg() || {
-    SCRIPT_URL: '', // e.g. https://script.google.com/macros/s/AKfycb.../exec
-    API_KEY: ''     // same as Apps Script Script Property API_KEY
+    SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbzrw0Asmr7iAxq3qq64IB9uatgASDdGkAOZU4J7JcFPMzLRf9yJpPO1jA-NbPo0LVugRA/exec', // e.g. https://script.google.com/macros/s/AKfycb.../exec
+    API_KEY: 'longrandomstringwhatwhat'     // same as Apps Script Script Property API_KEY
   };
 
   function saveCfg() {
