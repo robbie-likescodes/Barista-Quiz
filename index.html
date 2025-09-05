@@ -2,261 +2,407 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Palette Mapper · Cup Print Helper</title>
-  <link rel="stylesheet" href="styles.css" />
-  <meta name="theme-color" content="#0f172a">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <meta name="theme-color" content="#111827" />
+  <title>Barista Flashcards & Quizzes</title>
+
+  <!-- Cache-busting versions must match your deployed filenames -->
+  <link rel="stylesheet" href="styles.css?v=12" />
+  <script defer src="app.js?v=12"></script>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <span class="logo" aria-hidden="true">☕</span>
-    <h1>Palette Mapper</h1>
-  </div>
-  <div class="spacer"></div>
-  <button id="openProjects" class="ghost" type="button">Projects</button>
-</header>
+  <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
 
-<!-- Projects side pane -->
-<aside id="projectsPane" class="sidepane" aria-hidden="true">
-  <div class="panehead">
-    <h2>Projects</h2>
-    <button id="closeProjects" class="ghost" type="button" aria-label="Close">✕</button>
-  </div>
-  <div class="panecontent">
-    <div class="row wrap gap">
-      <button id="saveProject" type="button">Save current</button>
-      <button id="refreshProjects" type="button">Refresh list</button>
+  <!-- Header / Brand / Mobile menu -->
+  <header class="app-header" role="banner">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">☕</span>
+      <h1>Barista Flashcards &amp; Quizzes</h1>
     </div>
 
-    <div id="projectsList" class="list" aria-label="Saved projects"></div>
-
-    <hr>
-
-    <div class="row wrap gap">
-      <button id="exportProject" type="button">Export selected</button>
-      <label class="filelike">Import
-        <input type="file" id="importProject" accept="application/json">
-      </label>
-      <button id="deleteProject" class="danger" type="button">Delete selected</button>
-    </div>
-  </div>
-</aside>
-
-<main>
-  <section class="controls">
-    <!-- 1) Load image -->
-    <div class="card">
-      <h2>1) Load image</h2>
-      <div class="row wrap">
-        <!-- This one gives BOTH Photo Library and Camera options -->
-        <label class="filelike">Upload
-          <input type="file" id="fileInput" accept="image/*">
-        </label>
-
-        <!-- Optional: Camera only -->
-        <label class="filelike">Camera
-          <input type="file" id="cameraInput" accept="image/*" capture="environment">
-        </label>
-
-        <button id="pasteBtn" type="button" title="Paste image from clipboard (desktop)">Paste</button>
-        <button id="resetBtn" type="button" disabled>Reset</button>
-      </div>
-
-      <div class="row wrap">
-        <label>Max preview width (px)
-          <input type="number" id="maxW" value="1400" min="300" step="100">
-        </label>
-        <label class="chk">
-          <input type="checkbox" id="keepFullRes" checked>
-          Process at full resolution
-        </label>
-      </div>
-      <small>
-        “Upload” lets you choose from Photo Library or Camera.&nbsp;
-        “Camera” forces the camera only.
-      </small>
-    </div>
-
-    <!-- 2) Palette -->
-    <div class="card">
-      <h2>2) Palette</h2>
-      <div id="paletteList" class="palette-list"></div>
-      <div class="row gap wrap">
-        <button id="addColor" type="button">+ Add color</button>
-        <button id="clearColors" type="button">Clear</button>
-        <button id="loadExample" type="button">Load example</button>
-      </div>
-
-      <details>
-        <summary>Auto-extract from image (optional)</summary>
-        <div class="row gap wrap">
-          <label>K (colors) <input type="number" id="kColors" value="5" min="2" max="16"></label>
-          <button id="autoExtract" type="button" disabled>Extract</button>
+    <!-- Compact top nav: dropdown menu on mobile; all handled by CSS/JS -->
+    <div class="topnav">
+      <div class="menu">
+        <button id="menuBtn" class="btn ghost" aria-haspopup="true" aria-expanded="false">Menu ≡</button>
+        <div id="menuList" class="menu-list" role="menu" aria-label="Primary">
+          <button class="menu-item active" data-route="create" role="menuitem">Create</button>
+          <button class="menu-item" data-route="build" role="menuitem">Build Test</button>
+          <button class="menu-item" data-route="practice" role="menuitem">Practice</button>
+          <button class="menu-item" data-route="quiz" role="menuitem">Quiz</button>
+          <button class="menu-item" data-route="reports" role="menuitem">Reports</button>
         </div>
-        <small>Extract a starting palette, then edit hex to exact brand/spot colors.</small>
+      </div>
+    </div>
+  </header>
+
+  <main class="container" role="main">
+    <div id="liveRegion" class="sr-only" aria-live="polite"></div>
+
+    <!-- ========================= CREATE ========================= -->
+    <section id="view-create" class="view active" aria-labelledby="create-title">
+      <h2 id="create-title">Create &amp; Manage Decks</h2>
+
+      <div class="card">
+        <div class="card-head">
+          <strong>Add / Select a Deck (merged by Deck Name)</strong>
+          <div class="grow"></div>
+
+          <!-- Cloud sync actions (admin) -->
+          <button id="cloudPullBtn" class="btn ghost" title="Fetch Decks/Cards/Tests from Google Sheets">Pull from Cloud</button>
+          <button id="cloudPushBtn" class="btn" title="Push full backup to Google Sheets (Merge/Replace)">Push Backup</button>
+
+          <!-- Deck actions -->
+          <button id="renameDeckBtn" class="btn ghost">Rename</button>
+          <button id="editDeckMetaBtn" class="btn ghost">Edit Meta</button>
+          <button id="deleteDeckBtn" class="btn danger">Delete</button>
+          <button id="exportDeckBtn" class="btn">Export</button>
+          <button id="importDeckBtn" class="btn">Import…</button>
+          <input id="importDeckInput" type="file" accept=".json,.txt" hidden>
+          <!-- JS injects: Export All / Import Backup… buttons + hidden backup input -->
+        </div>
+
+        <div class="grid g2 mt">
+          <div>
+            <label class="label" for="newClassName">Class</label>
+            <input id="newClassName" class="input" list="classNames" placeholder="e.g., Barista Training" autocomplete="off" />
+            <datalist id="classNames"></datalist>
+          </div>
+          <div>
+            <label class="label" for="newDeckName">Deck (merged by name)</label>
+            <input id="newDeckName" class="input" list="deckNames" placeholder="e.g., Hot Drinks" autocomplete="off" />
+            <datalist id="deckNames"></datalist>
+          </div>
+        </div>
+
+        <div class="grid g2 mt">
+          <div class="subcat-wrap">
+            <button id="toggleSubdeckBtn" class="btn ghost small" aria-controls="newSubdeck" aria-expanded="false">+ Sub-deck (optional)</button>
+            <input id="newSubdeck" class="input hidden" placeholder="e.g., Latte Art">
+          </div>
+          <div class="mt-sm"><button id="addDeckBtn" class="btn primary">Create / Select Deck</button></div>
+        </div>
+
+        <div class="mt select-wrap">
+          <label class="label" for="deckSelect">Pick Existing Deck (by Name)</label>
+          <select id="deckSelect" class="input" aria-label="Pick Deck (by Name)"></select>
+          <div id="deckMeta" class="hint mt-sm">
+            <span id="deckMetaTitle"></span>
+            <div id="deckMetaSubs" class="micro"></div>
+          </div>
+        </div>
+      </div>
+
+      <details class="card">
+        <summary class="card-head">Bulk Add (tap for format)</summary>
+        <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
+        <textarea id="bulkTextarea" class="textarea mt" rows="5"
+          placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)"></textarea>
+        <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
       </details>
 
-      <div class="card subtle">
-        <h3>Saved Palettes</h3>
-        <div id="savedPalettes" class="list tiny" aria-label="Saved palettes"></div>
-        <div class="row gap wrap">
-          <button id="savePalette" type="button">Save current</button>
-          <button id="clearSavedPalettes" type="button">Clear saved</button>
+      <div class="card">
+        <h3>Add / Edit Card</h3>
+        <div class="grid g2 mt">
+          <input id="qInput" class="input" placeholder="Question" aria-label="Question">
+          <input id="aCorrectInput" class="input" placeholder="Correct answer" aria-label="Correct answer">
+          <input id="aWrong1Input" class="input" placeholder="Wrong answer 1 (required)" aria-label="Wrong answer 1">
+          <input id="aWrong2Input" class="input" placeholder="Wrong answer 2 (optional)" aria-label="Wrong answer 2">
+          <input id="aWrong3Input" class="input" placeholder="Wrong answer 3 (optional)" aria-label="Wrong answer 3">
+          <input id="cardSubInput" class="input" placeholder="Card sub-deck (optional)" aria-label="Card sub-deck">
         </div>
-      </div>
-    </div>
+        <div class="mt"><button id="addCardBtn" class="btn primary">Save Card</button></div>
 
-    <!-- 3) Mapping options -->
-    <div class="card">
-      <h2>3) Mapping options</h2>
-
-      <div class="row">
-        <label>Chroma weight
-          <input type="range" id="wChroma" min="50" max="200" value="100">
-        </label>
-        <output id="wChromaOut">1.00×</output>
+        <details class="mt card" id="subdeckManager" open>
+          <summary class="card-head">Sub-decks in this Deck</summary>
+          <div id="subdeckManagerList" class="chips mt"></div>
+          <div class="grid g2 mt">
+            <input id="subdeckNewName" class="input" placeholder="Add new sub-deck (tag)">
+            <button id="createSubdeckBtn" class="btn">Add Sub-deck</button>
+          </div>
+        </details>
       </div>
 
-      <div class="row">
-        <label>Lightness weight
-          <input type="range" id="wLight" min="50" max="200" value="100">
-        </label>
-        <output id="wLightOut">1.00×</output>
-      </div>
+      <div class="card">
+        <h3>Cards in Deck</h3>
 
-      <div class="row wrap">
-        <label class="chk"><input type="checkbox" id="useDither"> Floyd–Steinberg dithering</label>
-        <label>Background
-          <select id="bgMode">
-            <option value="keep">Keep alpha</option>
-            <option value="white">Force white</option>
-            <option value="transparent">Force transparent (alpha &lt; 128)</option>
+        <!-- NEW: sub-deck viewer filter -->
+        <div class="select-wrap mt-sm">
+          <label class="label" for="cardsSubFilter">Show sub-deck</label>
+          <select id="cardsSubFilter" class="input" aria-label="Filter cards by sub-deck">
+            <!-- JS populates options; default is “All sub-decks” -->
           </select>
-        </label>
-      </div>
-
-      <!-- Halftone dots block -->
-      <div class="card subtle">
-        <h3>Halftone (tiny dots)</h3>
-        <label class="chk">
-          <input type="checkbox" id="useHalftone">
-          Render as dots instead of pixels
-        </label>
-
-        <div class="row wrap">
-          <label>Dot cell size (px)
-            <input type="number" id="dotCell" value="6" min="3" max="64" step="1">
-          </label>
-          <label>Background
-            <input type="text" id="dotBg" value="#FFFFFF" placeholder="#RRGGBB">
-          </label>
-          <label class="chk">
-            <input type="checkbox" id="dotJitter">
-            Jitter positions slightly
-          </label>
         </div>
 
-        <small>
-          Each cell becomes a dot of the nearest palette color, sized by coverage against the background.
-        </small>
+        <div id="cardsList" class="list" aria-live="polite"></div>
       </div>
+    </section>
 
-      <div class="row gap wrap">
-        <button id="applyBtn" type="button" disabled>Refresh with my color selection</button>
-        <button id="downloadBtn" type="button" disabled>Download PNG</button>
-        <button id="openEditor" type="button">Open full-screen editor</button>
-        <!-- Optional: one-click smoke test to verify Sheets write -->
-        <button id="testWrite" class="ghost" type="button" title="Writes a demo row to Results">Test write → Sheets</button>
-      </div>
-    </div>
+    <!-- ========================= BUILD ========================= -->
+    <section id="view-build" class="view" aria-labelledby="build-title">
+      <h2 id="build-title">Build Test &amp; Share</h2>
 
-    <!-- Region tool (rectangle) -->
-    <div class="card">
-      <h2>Region tool (optional)</h2>
-      <div class="row wrap">
-        <label class="chk"><input type="checkbox" id="regionMode"> Draw rectangle region (drag on Original)</label>
-        <button id="regionClear" type="button" class="ghost">Clear all regions</button>
-      </div>
-      <div id="regionConfig" class="region-config" hidden>
-        <h3>Region palette</h3>
-        <div id="regionPaletteChecks"></div>
-        <div class="row gap">
-          <button id="regionApply" type="button">Save region</button>
-          <button id="regionCancel" type="button" class="ghost">Cancel</button>
+      <div class="card">
+        <label class="switch">
+          <input type="checkbox" id="previewToggle">
+          <span>Preview as Barista</span>
+        </label>
+
+        <div class="grid g3 mt">
+          <div>
+            <label class="label" for="testNameInput">Create or select a Test</label>
+            <input id="testNameInput" class="input" list="testsList" placeholder="Type a new Test name or select" autocomplete="off">
+            <datalist id="testsList"></datalist>
+            <div class="mt-sm">
+              <button id="saveTestBtn" class="btn primary">Save/Select Test</button>
+              <button id="renameTestBtn" class="btn ghost">Rename Test</button>
+              <button id="deleteTestBtn" class="btn danger">Delete Test</button>
+            </div>
+          </div>
+          <div>
+            <label class="label" for="builderTitle">Title shown to barista</label>
+            <input id="builderTitle" class="input" placeholder="e.g., Barista Basics">
+          </div>
+          <div>
+            <label class="label" for="builderCount">Total Questions</label>
+            <input id="builderCount" type="number" min="1" class="input small" value="30">
+          </div>
         </div>
-        <small>Uncheck colors you do <em>not</em> want to appear in this rectangle.</small>
+
+        <div class="mt">
+          <h4>Share</h4>
+          <button id="copyShareBtn" class="btn success">Copy Student Link</button>
+          <button id="openShareBtn" class="btn">Open Student Preview</button>
+          <p class="hint mt-sm">Student link is restricted: no Create/Build/Reports; only the shared Test is visible.</p>
+        </div>
       </div>
-    </div>
-  </section>
 
-  <section class="canvases">
-    <div class="canvas-card">
-      <h3>Original</h3>
-      <div class="canvas-wrap">
-        <canvas id="srcCanvas" tabindex="0" aria-label="Original image preview"></canvas>
+      <details id="deckChooser" class="card" open>
+        <summary class="card-head">Choose decks (✓ whole deck or expand to pick sub-decks)</summary>
+        <div id="deckPickList" class="deck-pick"></div>
+      </details>
+
+      <div id="previewPanel" class="card hidden">
+        <h3 id="previewTitle">Preview</h3>
+        <div class="hint" id="previewMeta" aria-live="polite"></div>
+        <div class="mt">
+          <button id="previewPracticeBtn" class="btn">Preview Practice</button>
+          <button id="previewQuizBtn" class="btn primary">Preview Quiz</button>
+        </div>
       </div>
-      <small>Press &amp; hold to pick a color (eyedropper), or ALT-click on desktop.</small>
-    </div>
+    </section>
 
-    <div class="canvas-card">
-      <h3>Mapped</h3>
-      <div class="canvas-wrap">
-        <canvas id="outCanvas" tabindex="0" aria-label="Palette-mapped / halftoned image"></canvas>
+    <!-- ========================= PRACTICE ====================== -->
+    <section id="view-practice" class="view" aria-labelledby="practice-title">
+      <h2 id="practice-title">Practice</h2>
+
+      <div class="card">
+        <div class="grid g2">
+          <div class="select-wrap">
+            <label class="label" for="practiceTestSelect">Select Test</label>
+            <select id="practiceTestSelect" class="input" aria-label="Select Test for Practice"></select>
+          </div>
+          <div class="hint mt-sm">
+            Pick which decks (from the Test) you want to study
+            <div class="micro mt-xs">Hotkeys: <kbd>Space</kbd> flip • <kbd>←</kbd>/<kbd>→</kbd> prev/next</div>
+          </div>
+        </div>
+        <div id="practiceDeckChecks" class="chips mt"></div>
+        <button id="startPracticeBtn" class="btn primary mt">Start Practice</button>
       </div>
-    </div>
-  </section>
-</main>
 
-<footer>
-  <p>Palette Mapper · Mobile-friendly · Works offline</p>
-</footer>
+      <div id="practiceArea" class="card" hidden>
+        <div class="bar">
+          <span id="practiceLabel">Studying…</span>
+          <div class="grow"></div>
+          <span id="practiceProgress" class="hint" aria-live="polite"></span>
+        </div>
+        <div id="practiceCard" class="flip mt" tabindex="0" aria-label="Flashcard">
+          <div class="front">
+            <div class="fc-title">Question</div>
+            <div id="practiceQuestion" class="fc-text"></div>
+            <div class="hint mt-sm">Tap or press <kbd>Space</kbd> to flip</div>
+          </div>
+          <div class="back">
+            <div class="fc-title">Answer</div>
+            <div id="practiceAnswer" class="fc-text"></div>
+          </div>
+        </div>
+        <div class="mt grid g3">
+          <button id="practicePrev" class="btn">Prev</button>
+          <button id="practiceShuffle" class="btn ghost">Shuffle</button>
+          <button id="practiceNext" class="btn">Next</button>
+        </div>
+      </div>
+    </section>
 
-<!-- Eyedropper popover -->
-<div id="eyedropperPopover" class="popover" hidden>
-  <div class="swatch" id="eyeSwatch"></div>
-  <code id="eyeHex">#000000</code>
-  <div class="row gap">
-    <button id="eyeAdd" type="button">Add</button>
-    <button id="eyeCancel" type="button" class="ghost">Cancel</button>
-  </div>
-</div>
+    <!-- =========================== QUIZ ======================== -->
+    <section id="view-quiz" class="view" aria-labelledby="quiz-title">
+      <h2 id="quiz-title">Quiz</h2>
 
-<!-- Full-screen Editor Overlay -->
-<div id="editorOverlay" class="editor hidden" aria-hidden="true">
-  <div class="editor-left">
-    <div class="editor-toolbar">
-      <button id="toolEyedrop" type="button" class="tool active">Eyedropper</button>
-      <button id="toolLasso"   type="button" class="tool">Lasso</button>
-      <button id="toolPan"     type="button" class="tool">Pan</button>
-      <div class="spacer"></div>
-      <button id="editorDone"  type="button" class="ghost">Done</button>
-    </div>
-    <div class="editor-canvas-wrap">
-      <canvas id="editCanvas"></canvas>
-      <canvas id="editOverlay"></canvas>
-    </div>
-  </div>
+      <div class="card">
+        <div class="grid g3">
+          <div class="select-wrap">
+            <label class="label" for="quizTestSelect">Select Test</label>
+            <select id="quizTestSelect" class="input"></select>
+          </div>
+          <input id="studentName" class="input" placeholder="Your name (required)" aria-label="Your name">
 
-  <aside class="editor-right">
-    <h3>Palette</h3>
-    <div id="editorPalette" class="editor-palette"></div>
-    <hr>
-    <h3>Region palette (lasso)</h3>
-    <small>Uncheck colors you do <em>not</em> want in this lasso region.</small>
-    <div id="lassoChecks" class="editor-checks"></div>
-    <div class="row gap">
-      <button id="lassoSave" type="button" disabled>Save region</button>
-      <button id="lassoClear" type="button" class="ghost" disabled>Clear</button>
-    </div>
-  </aside>
-</div>
+          <!-- Location: dropdown with "Other…" text field -->
+          <div class="select-wrap">
+            <label class="label" for="studentLocationSelect">Location</label>
+            <select id="studentLocationSelect" class="input" aria-label="Location">
+              <option value="" disabled selected>Choose location…</option>
+              <option>Huffman</option>
+              <option>Camelot</option>
+              <option>Muldoon</option>
+              <option>Boniface</option>
+              <option>Lake Otis</option>
+              <option>Office</option>
+              <option value="__OTHER__">Other…</option>
+            </select>
+            <input id="studentLocationOther" class="input mt-sm hidden" placeholder="Type location…" aria-label="Other location">
+          </div>
+        </div>
 
-<!-- Your script (contains the Sheets sync client inside) -->
-<script src="app.js" defer></script>
+        <div class="mt">
+          <label class="label" for="studentDate">Date</label>
+          <input id="studentDate" class="input" type="date">
+        </div>
+        <div class="micro hint mt-sm">Hotkeys: <kbd>1</kbd>–<kbd>4</kbd> pick • <kbd>←</kbd>/<kbd>→</kbd> prev/next</div>
+      </div>
 
-<script src="db.js"></script>
-<script src="app.js"></script>
+      <div id="quizArea" class="card">
+        <div class="bar">
+          <span id="quizQuestion" class="qtxt"></span>
+          <div class="grow"></div>
+          <span id="quizProgress" class="hint" aria-live="polite"></span>
+        </div>
+        <div id="quizOptions" class="options mt" role="group" aria-label="Answer choices"></div>
+        <div class="mt grid g3">
+          <button id="quizPrev" class="btn">Prev</button>
+          <button id="submitQuizBtn" class="btn primary">Submit</button>
+          <button id="quizNext" class="btn">Next</button>
+        </div>
+      </div>
 
+      <div id="quizFinished" class="card hidden">
+        <h3>Finished!</h3>
+        <p id="finishedMsg" class="lead"></p>
+        <details open class="answer-key">
+          <summary class="card-head">Your Answers &amp; Key</summary>
+          <div id="finishedAnswers" class="answers mt"></div>
+        </details>
+        <div class="mt grid g2">
+          <button id="restartQuizBtn" class="btn">Restart with fresh questions</button>
+          <button id="finishedPracticeBtn" class="btn ghost">Go to Practice</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================= REPORTS ======================= -->
+    <section id="view-reports" class="view" aria-labelledby="reports-title">
+      <h2 id="reports-title">Reports</h2>
+
+      <div class="card">
+        <div class="grid g3">
+          <div class="select-wrap">
+            <label class="label" for="repLocation">Location</label>
+            <select id="repLocation" class="input">
+              <option value="">All locations</option>
+            </select>
+          </div>
+          <div class="select-wrap">
+            <label class="label" for="repAttemptView">Attempts</label>
+            <select id="repAttemptView" class="input">
+              <option value="all">All attempts</option>
+              <option value="first">First attempt only</option>
+              <option value="last">Last attempt only</option>
+            </select>
+          </div>
+          <div class="select-wrap">
+            <label class="label" for="repSort">Sort</label>
+            <select id="repSort" class="input">
+              <option value="date_desc">Newest first</option>
+              <option value="date_asc">Oldest first</option>
+              <option value="test_asc">Test A→Z</option>
+              <option value="test_desc">Test Z→A</option>
+              <option value="loc_asc">Location A→Z</option>
+              <option value="loc_desc">Location Z→A</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- NEW: Date range + Test filters -->
+        <div class="grid g3 mt">
+          <div>
+            <label class="label" for="repDateFrom">Date from</label>
+            <input id="repDateFrom" class="input" type="date" aria-label="Filter results from date">
+          </div>
+          <div>
+            <label class="label" for="repDateTo">Date to</label>
+            <input id="repDateTo" class="input" type="date" aria-label="Filter results to date">
+          </div>
+          <div class="select-wrap">
+            <label class="label" for="repTest">Test</label>
+            <select id="repTest" class="input" aria-label="Filter by test name">
+              <option value="">All tests</option>
+              <!-- JS populates test names -->
+            </select>
+          </div>
+        </div>
+
+        <div class="grid g2 mt">
+          <div class="select-wrap">
+            <label class="label" for="repView">View</label>
+            <select id="repView" class="input">
+              <option value="active">Active results</option>
+              <option value="archived">Archived results</option>
+            </select>
+          </div>
+
+          <!-- Optional: one-click refresh from cloud for reports -->
+          <div class="mt-sm" style="display:flex;align-items:flex-end;justify-content:flex-end">
+            <button id="repCloudPullBtn" class="btn ghost" title="Refresh Results/Tests from Google Sheets">Refresh from Cloud</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Location Averages -->
+      <div class="card" id="locAvgCard">
+        <h3>Location Averages</h3>
+        <div id="locationAverages" class="missed"></div>
+      </div>
+
+      <div class="card table-wrap">
+        <table id="repTable" class="table">
+          <thead>
+            <tr>
+              <th>Date/Time</th>
+              <th>Name</th>
+              <th>Location</th>
+              <th>Test</th>
+              <th>Score</th>
+              <th>Correct</th>
+              <th>View</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Most Missed Questions</h3>
+        <div id="missedSummary" class="missed"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer" role="contentinfo">
+    <span class="hint">Admin data stays in this browser (localStorage). Share the student link to restrict access.</span>
+  </footer>
+
+  <!-- Toast / Snackbar -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
