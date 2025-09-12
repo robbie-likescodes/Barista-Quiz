@@ -33,7 +33,7 @@ const ADMIN_VIEWS = new Set(['create','build','reports']);
 //////////////////////////// utils ///////////////////////////////
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
 const todayISO = () => new Date().toISOString().slice(0,10);
-const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const esc      = s => (s??'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]));
 const shuffle  = a => { const x=a.slice(); for(let i=x.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [x[i],x[j]]=[x[j],x[i]] } return x; };
 const sample   = (a,n) => shuffle(a).slice(0,n);
 const unique   = xs => Array.from(new Set(xs));
@@ -41,38 +41,67 @@ const deepCopy = obj => JSON.parse(JSON.stringify(obj));
 const deckKey  = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName||'').trim().toLowerCase()}`;
 const cardKey  = c => `${(c.q||'').trim().toLowerCase()}|${(c.a||'').trim().toLowerCase()}|${(c.sub||'').trim().toLowerCase()}`;
 
+// tolerant name matcher for ?test=
+const _smartMap = { '“':'"', '”':'"', '‘':'\'', '’':'\'' };
+const normalizeName = raw => (decodeURIComponent(String(raw||''))
+  .replace(/[“”‘’]/g, ch => _smartMap[ch] || ch)
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase());
+
+//////////////////////// fetch helpers /////////////////////////
+// Timeout wrapper (Safari-friendly)
+async function fetchWithTimeout(url, opts={}, ms=7000){
+  const controller = new AbortController();
+  const t = setTimeout(()=>controller.abort(), ms);
+  try{
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 //////////////////////// Cloud helpers /////////////////////////
-// ✅ ADDED: include API key on GET and a cache-buster to avoid stale caches
+// include API key on GET + cache-buster + no-store; use timeout + single retry
 async function cloudGET(params={}){
   if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
-  const url = new URL(CLOUD.BASE);
-  if (CLOUD.API_KEY) url.searchParams.set('key', CLOUD.API_KEY);   // <— added
-  Object.entries(params).forEach(([k,v])=> url.searchParams.set(k, String(v)));
-  url.searchParams.set('_', String(Date.now()));                   // <— tiny cache-buster
+  const makeUrl = () => {
+    const url = new URL(CLOUD.BASE);
+    if (CLOUD.API_KEY) url.searchParams.set('key', CLOUD.API_KEY);
+    Object.entries(params).forEach(([k,v])=> url.searchParams.set(k, String(v)));
+    url.searchParams.set('_', String(Date.now())); // cache-buster
+    return url.toString();
+  };
 
-  // no custom headers → simple CORS GET
-  const r = await fetch(url.toString(), { method:'GET', cache:'no-store' });
-  if(!r.ok) throw new Error(`HTTP ${r.status}`);
-  const json = await r.json();
-  if(json && typeof json === 'object' && 'ok' in json){
-    if(json.ok) return json.data;
-    throw new Error(json.error || 'Server error');
+  const tryOnce = async () => {
+    const r = await fetchWithTimeout(makeUrl(), { method:'GET', cache:'no-store' }, 7000);
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const json = await r.json();
+    if(json && typeof json === 'object' && 'ok' in json){
+      if(json.ok) return json.data;
+      throw new Error(json.error || 'Server error');
+    }
+    return json;
+  };
+
+  try{
+    return await tryOnce();
+  }catch(e){
+    // small jittered backoff then one retry
+    await new Promise(res => setTimeout(res, 500 + Math.random()*300));
+    return await tryOnce();
   }
-  return json;
 }
 
 async function cloudPOST(action, payload={}){
   if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
-  // IMPORTANT: Use x-www-form-urlencoded to avoid preflight
   const params = new URLSearchParams();
   params.set('action', action);
   if (CLOUD.API_KEY) params.set('key', CLOUD.API_KEY);
-  // flatten top-level fields
   for (const [k,v] of Object.entries(payload)){
-    // For objects/arrays, send JSON string
     params.set(k, (v && typeof v === 'object') ? JSON.stringify(v) : String(v));
   }
-  const r = await fetch(CLOUD.BASE, { method: 'POST', body: params });
+  const r = await fetchWithTimeout(CLOUD.BASE, { method: 'POST', body: params }, 8000);
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const json = await r.json();
   if(json && typeof json === 'object' && 'ok' in json){
@@ -165,7 +194,8 @@ async function cloudPullHandler(){
     renderCreate(); renderBuild(); renderReports();
     toast('Pulled from Cloud');
   }catch(err){
-    alert('Cloud pull failed: '+(err.message||err));
+    const hint = (String(err||'').includes('HTTP 403')||String(err||'').toLowerCase().includes('key')) ? ' • Check API key' : '';
+    alert('Cloud pull failed: '+(err.message||err)+hint);
   }finally{ $('#cloudPullBtn')?.removeAttribute('disabled'); }
 }
 
@@ -173,9 +203,8 @@ async function cloudPushHandler(){
   const modeMerge = confirm('Push to Cloud?\n\nOK = MERGE into Sheets\nCancel = REPLACE (overwrite Sheets with local)');
   try{
     $('#cloudPushBtn')?.setAttribute('disabled','true');
-    const backup = makeBackupObject(); // backup schema A (handled by bulkUpsert)
+    const backup = makeBackupObject();
     const resp = await cloudPOST('bulkupsert', { ...backup, mode: modeMerge ? 'merge' : 'replace' });
-    // Apps Script returns {status:'ok',mode:'merge'|'replace'}
     if(resp && (resp.status === 'ok')){
       toast(modeMerge ? 'Merged to Cloud' : 'Replaced in Cloud');
     } else {
@@ -214,26 +243,56 @@ async function resultsRefreshFromCloud(){
 }
 
 /* ---------------------- UPDATED (drop-in) ---------------------- */
-// Force refresh when student mode, otherwise only when empty
+// single-flight guard + loading banner control
+let __hydratingPromise = null;
+function setStudentLoading(on, msg='Loading latest decks & tests…'){
+  const banner = $('#studentLoading');
+  if(!banner) return;
+  banner.textContent = msg;
+  banner.classList.toggle('hidden', !on);
+  // disable selects/buttons while loading
+  const disable = sel => sel && (sel.disabled = on);
+  disable($('#practiceTestSelect'));
+  disable($('#quizTestSelect'));
+  disable($('#startPracticeBtn'));
+  disable($('#quizPrev'));
+  disable($('#quizNext'));
+  disable($('#submitQuizBtn'));
+}
+
+// Force refresh when student mode, otherwise only when empty; retry built into cloudGET
 async function maybeHydrateFromCloud(force = false){
-  try{
-    const needHydrate =
-      force || // <— force when student
-      (Object.keys(state.decks||{}).length===0 && Object.keys(state.tests||{}).length===0);
+  if(__hydratingPromise) return __hydratingPromise;
+  const student = isStudent();
+  const needHydrate =
+    force ||
+    (Object.keys(state.decks||{}).length===0 && Object.keys(state.tests||{}).length===0);
 
-    if(!needHydrate) return;
+  if(!needHydrate) return;
 
-    // Optional: quick status message
-    toast('Loading latest decks & tests…', 1200);
+  __hydratingPromise = (async () => {
+    try{
+      if(student) setStudentLoading(true);
+      const {decks, tests} = await getAllFromCloud();
+      state.decks = decks; state.tests = tests;
+      store.set(KEYS.decks, decks);
+      store.set(KEYS.tests, tests);
+    }catch(err){
+      console.warn('Cloud hydrate failed:', err.message||err);
+      if(!student){
+        toast('Cloud pull failed (working from local).', 2200);
+      }else{
+        // subtle banner for students
+        setStudentLoading(true, 'Unable to reach Cloud. Using any saved data…');
+        setTimeout(()=>setStudentLoading(false), 1500);
+      }
+    }finally{
+      if(student) setStudentLoading(false);
+      __hydratingPromise = null;
+    }
+  })();
 
-    const {decks, tests} = await getAllFromCloud();
-    state.decks = decks; state.tests = tests;
-    store.set(KEYS.decks, decks);
-    store.set(KEYS.tests, tests);
-  }catch(err){
-    console.warn('Cloud hydrate failed:', err.message||err);
-    // Fall back to local data silently
-  }
+  return __hydratingPromise;
 }
 /* --------------------------------------------------------------- */
 
@@ -307,9 +366,11 @@ function applyStudentMode(){
   const p = qs(); const student = isStudent();
   document.body.classList.toggle('student', student);
   if(student){
-    const name = p.get('test')||'';
+    const nameRaw = p.get('test')||'';
+    const name = normalizeName(nameRaw);
     if(name){
-      const entry = Object.entries(state.tests).find(([,t])=>t.name.toLowerCase()===name.toLowerCase());
+      const entry = Object.entries(state.tests)
+        .find(([,t])=> normalizeName(t.name) === name);
       if(entry){ state.quiz.locked=true; state.quiz.testId=entry[0]; }
     }
     const next = p.get('view') && !ADMIN_VIEWS.has(p.get('view')) ? p.get('view') : 'practice';
@@ -999,7 +1060,6 @@ async function submitQuiz(){
   const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
   state.results.push(row); store.set(KEYS.results,state.results);
 
-  // Try to write to Cloud (does not block UI)
   try{
     await cloudPOST('submitresult', row);
   }catch(err){
@@ -1024,7 +1084,6 @@ async function submitQuiz(){
 
 /////////////////////////// REPORTS //////////////////////////////
 function renderReports(){
-  // Bind refresh button if present in HTML; otherwise create a fallback button
   ensureReportsButtons();
 
   const locs=unique(state.results.map(r=>r.location)).filter(Boolean).sort();
@@ -1127,7 +1186,6 @@ function drawReports(){
 
   renderLocationAverages(view, loc, attempt, fromISO, toISO, testNm);
 
-  // Most missed across ALL results (active+archived)
   const baseRows=[...state.results];
   const missMap=new Map();
   for(const r of baseRows){
@@ -1150,7 +1208,6 @@ async function archiveResult(id){
     state.archived.push(row);
     store.set(KEYS.results,state.results);
     store.set(KEYS.archived,state.archived);
-    // Fire and forget to cloud
     try{ await cloudPOST('archivemove', { id, to:'archived' }); }catch(_){}
     return true;
   }
@@ -1247,8 +1304,7 @@ function ensureBackupButtons(){
       catch(err){ alert('Invalid backup JSON: '+err.message); }
     });
   }
-
-  // Cloud buttons already exist in your HTML with #cloudPullBtn / #cloudPushBtn
+  // Cloud buttons already exist in HTML
 }
 function exportAllBackup(){
   const backup = makeBackupObject();
@@ -1395,13 +1451,11 @@ function normalizeTests(){
 }
 
 function ensureReportsButtons(){
-  // Use the button already in your HTML if present
   const existing = $('#repCloudPullBtn');
   if(existing){
     if(!existing.__bound){ on(existing,'click', resultsRefreshFromCloud); existing.__bound = true; }
     return;
   }
-  // Fallback injector if HTML didn’t include it
   const headerCard = $('#view-reports .card'); if(!headerCard) return;
   if(!$('#resultsCloudBtn')){
     const btn = document.createElement('button');
@@ -1416,7 +1470,15 @@ async function boot(){
   mergeDecksByName();
   normalizeTests();
 
-  // Force pull if this is a student link
+  // optional: add a small student loading banner container if not present
+  if(!$('#studentLoading')){
+    const b=document.createElement('div');
+    b.id='studentLoading';
+    b.className='banner hidden'; // style in CSS: position:sticky; top:0; etc.
+    b.textContent='Loading latest decks & tests…';
+    document.body.prepend(b);
+  }
+
   const forcePull = (new URLSearchParams(location.search).get('mode') === 'student');
   await maybeHydrateFromCloud(forcePull);
 
