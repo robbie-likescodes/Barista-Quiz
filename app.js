@@ -6,7 +6,7 @@
 
 /* ========= Cloud API Config (EDIT AFTER REDEPLOY) ========= */
 const CLOUD = {
-  BASE: "https://script.google.com/macros/s/AKfycbzpU5ua2lfpyujRiRs4ouQdJsb8nbhZPYtThueEs_pVUuFHmhaLTswN-T0xbRU0c4-urw/exec",
+  BASE: "https://script.google.com/macros/s/AKfycbztbXuLLEji2Lzm1zwq28cL1bXDzQkrDy0EvC0mgmre-NklUYichq6sbIpglFXeyDv6nA/exec",
   API_KEY: "longrandomstringwhatwhat" // must match Script Property 'API_KEY'
 };
 /* ========================================================= */
