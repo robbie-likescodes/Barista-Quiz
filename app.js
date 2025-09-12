@@ -1,11 +1,12 @@
 /* =========================================================
    Barista Flashcards & Quizzes — app.js (Google Sheets sync)
    Local-first SPA + Cloud sync (pull/push/submit/results)
+   NOTE: POST uses URL-ENCODED form data to avoid CORS preflight.
 ========================================================= */
 
 /* ========= Cloud API Config (EDIT AFTER REDEPLOY) ========= */
 const CLOUD = {
-  BASE: "https://script.google.com/macros/s/AKfycbz1rpsXjMso6us4oGhsrD0eeRgS7BWcQlsZdpyAx04ryzqA9-SY2hQ36dv6Nf93sQltZw/exec",
+  BASE: "https://script.google.com/macros/s/AKfycbzpU5ua2lfpyujRiRs4ouQdJsb8nbhZPYtThueEs_pVUuFHmhaLTswN-T0xbRU0c4-urw/exec",
   API_KEY: "longrandomstringwhatwhat" // must match Script Property 'API_KEY'
 };
 /* ========================================================= */
@@ -45,6 +46,7 @@ async function cloudGET(params={}){
   if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
   const url = new URL(CLOUD.BASE);
   Object.entries(params).forEach(([k,v])=> url.searchParams.set(k, String(v)));
+  // no custom headers → simple CORS GET
   const r = await fetch(url.toString(), { method:'GET' });
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const json = await r.json();
@@ -54,14 +56,19 @@ async function cloudGET(params={}){
   }
   return json;
 }
+
 async function cloudPOST(action, payload={}){
   if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
-  const body = { action, apiKey: CLOUD.API_KEY || '', ...payload };
-  const r = await fetch(CLOUD.BASE, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(body)
-  });
+  // IMPORTANT: Use x-www-form-urlencoded to avoid preflight
+  const params = new URLSearchParams();
+  params.set('action', action);
+  if (CLOUD.API_KEY) params.set('key', CLOUD.API_KEY);
+  // flatten top-level fields
+  for (const [k,v] of Object.entries(payload)){
+    // For objects/arrays, send JSON string
+    params.set(k, (v && typeof v === 'object') ? JSON.stringify(v) : String(v));
+  }
+  const r = await fetch(CLOUD.BASE, { method: 'POST', body: params });
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const json = await r.json();
   if(json && typeof json === 'object' && 'ok' in json){
@@ -164,7 +171,8 @@ async function cloudPushHandler(){
     $('#cloudPushBtn')?.setAttribute('disabled','true');
     const backup = makeBackupObject(); // backup schema A (handled by bulkUpsert)
     const resp = await cloudPOST('bulkupsert', { ...backup, mode: modeMerge ? 'merge' : 'replace' });
-    if(resp && (resp.merged || resp.replaced)){
+    // Apps Script returns {status:'ok',mode:'merge'|'replace'}
+    if(resp && (resp.status === 'ok')){
       toast(modeMerge ? 'Merged to Cloud' : 'Replaced in Cloud');
     } else {
       throw new Error(JSON.stringify(resp||{}));
@@ -868,6 +876,7 @@ function startPractice(){
 }
 function showPractice(){
   const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx]; if(!c) return;
+  if($('#practiceLabel')) $('#practiceLabel.textContent``
   if($('#practiceLabel')) $('#practiceLabel').textContent=`Card ${idx+1} of ${total}`;
   if($('#practiceProgress')) $('#practiceProgress').textContent=`Tap card to flip. Use ←/→ to navigate.`;
   if($('#practiceQuestion')) $('#practiceQuestion').textContent=c.q;
@@ -1105,7 +1114,7 @@ function drawReports(){
 
   renderLocationAverages(view, loc, attempt, fromISO, toISO, testNm);
 
-  // Most missed across ALL results (active+archived) for the heuristic section
+  // Most missed across ALL results (active+archived)
   const baseRows=[...state.results];
   const missMap=new Map();
   for(const r of baseRows){
