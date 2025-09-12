@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#111827" />
   <title>Barista Flashcards & Quizzes</title>
 
-  <!-- Cache-busting versions must match your deployed filenames -->
-  <link rel="stylesheet" href="styles.css?v=12" />
-  <script defer src="app.js?v=12"></script>
+  <!-- Cache-busting versions: bump when you redeploy -->
+  <link rel="stylesheet" href="styles.css?v=18" />
+  <script defer src="app.js?v=18"></script>
 </head>
 <body>
   <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
@@ -125,7 +125,7 @@
       <div class="card">
         <h3>Cards in Deck</h3>
 
-        <!-- NEW: sub-deck viewer filter -->
+        <!-- Sub-deck viewer filter -->
         <div class="select-wrap mt-sm">
           <label class="label" for="cardsSubFilter">Show sub-deck</label>
           <select id="cardsSubFilter" class="input" aria-label="Filter cards by sub-deck">
@@ -332,7 +332,7 @@
           </div>
         </div>
 
-        <!-- NEW: Date range + Test filters -->
+        <!-- Date range + Test filters -->
         <div class="grid g3 mt">
           <div>
             <label class="label" for="repDateFrom">Date from</label>
@@ -360,7 +360,7 @@
             </select>
           </div>
 
-          <!-- Optional: one-click refresh from cloud for reports -->
+          <!-- One-click refresh from cloud for reports -->
           <div class="mt-sm" style="display:flex;align-items:flex-end;justify-content:flex-end">
             <button id="repCloudPullBtn" class="btn ghost" title="Refresh Results/Tests from Google Sheets">Refresh from Cloud</button>
           </div>
