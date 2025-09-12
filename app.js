@@ -876,7 +876,6 @@ function startPractice(){
 }
 function showPractice(){
   const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx]; if(!c) return;
-  if($('#practiceLabel')) $('#practiceLabel.textContent``
   if($('#practiceLabel')) $('#practiceLabel').textContent=`Card ${idx+1} of ${total}`;
   if($('#practiceProgress')) $('#practiceProgress').textContent=`Tap card to flip. Use ←/→ to navigate.`;
   if($('#practiceQuestion')) $('#practiceQuestion').textContent=c.q;
