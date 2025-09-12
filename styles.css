@@ -115,7 +115,7 @@ body.student .menu-item[data-route="reports"]{display:none}
 }
 .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .grow{flex:1}
-.mt{margin-top:14px}.mt-sm{margin-top:8px}
+.mt{margin-top:14px}.mt-sm{margin-top:8px}.mt-xs{margin-top:4px}
 .lead{font-size:18px}
 .hint{color:var(--muted);font-size:13px}
 .hidden{display:none!important}
