@@ -209,19 +209,29 @@ async function resultsRefreshFromCloud(){
   }
 }
 
-async function maybeHydrateFromCloud(){
+/* ---------------------- UPDATED (drop-in) ---------------------- */
+// Force refresh when student mode, otherwise only when empty
+async function maybeHydrateFromCloud(force = false){
   try{
-    const needHydrate = isStudent() ||
+    const needHydrate =
+      force || // <— force when student
       (Object.keys(state.decks||{}).length===0 && Object.keys(state.tests||{}).length===0);
+
     if(!needHydrate) return;
+
+    // Optional: quick status message
+    toast('Loading latest decks & tests…', 1200);
+
     const {decks, tests} = await getAllFromCloud();
     state.decks = decks; state.tests = tests;
-    store.set(KEYS.decks, decks); store.set(KEYS.tests, tests);
-    toast('Loaded latest decks & tests from Cloud');
+    store.set(KEYS.decks, decks);
+    store.set(KEYS.tests, tests);
   }catch(err){
     console.warn('Cloud hydrate failed:', err.message||err);
+    // Fall back to local data silently
   }
 }
+/* --------------------------------------------------------------- */
 
 /////////////////////////// global state /////////////////////////
 let state = {
@@ -1397,11 +1407,15 @@ function ensureReportsButtons(){
   }
 }
 
+/* ---------------------- UPDATED (drop-in) ---------------------- */
 async function boot(){
   mergeDecksByName();
   normalizeTests();
 
-  await maybeHydrateFromCloud(); // load from Sheets for student/empty devices
+  // Force pull if this is a student link
+  const forcePull = (new URLSearchParams(location.search).get('mode') === 'student');
+  await maybeHydrateFromCloud(forcePull);
+
   applyStudentMode();
 
   $$('select').forEach(sel=>{
@@ -1413,6 +1427,7 @@ async function boot(){
 
   activate(qs().get('view') || (isStudent() ? 'practice' : 'create'));
 }
+/* --------------------------------------------------------------- */
 window.boot = boot;
 
 // Safer boot wrapper (handles script timing & shows clear error)
