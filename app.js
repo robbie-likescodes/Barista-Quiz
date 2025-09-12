@@ -1,4 +1,4 @@
-/* =========================================================
+/* ========================================================= 
    Barista Flashcards & Quizzes — app.js (Google Sheets sync)
    Local-first SPA + Cloud sync (pull/push/submit/results)
    NOTE: POST uses URL-ENCODED form data to avoid CORS preflight.
@@ -42,12 +42,16 @@ const deckKey  = d => `${(d.className||'').trim().toLowerCase()}||${(d.deckName|
 const cardKey  = c => `${(c.q||'').trim().toLowerCase()}|${(c.a||'').trim().toLowerCase()}|${(c.sub||'').trim().toLowerCase()}`;
 
 //////////////////////// Cloud helpers /////////////////////////
+// ✅ ADDED: include API key on GET and a cache-buster to avoid stale caches
 async function cloudGET(params={}){
   if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
   const url = new URL(CLOUD.BASE);
+  if (CLOUD.API_KEY) url.searchParams.set('key', CLOUD.API_KEY);   // <— added
   Object.entries(params).forEach(([k,v])=> url.searchParams.set(k, String(v)));
+  url.searchParams.set('_', String(Date.now()));                   // <— tiny cache-buster
+
   // no custom headers → simple CORS GET
-  const r = await fetch(url.toString(), { method:'GET' });
+  const r = await fetch(url.toString(), { method:'GET', cache:'no-store' });
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const json = await r.json();
   if(json && typeof json === 'object' && 'ok' in json){
