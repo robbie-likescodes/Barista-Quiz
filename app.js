@@ -417,6 +417,106 @@ function mergeDecksByName(){
   store.set(KEYS.decks,state.decks);
 }
 
+// ---- Always-visible CTA to load/refresh tests from Cloud ----
+async function loadTestsNow(btn){
+  const beforeTests = Object.keys(state.tests || {}).length;
+  const beforeDecks = Object.keys(state.decks || {}).length;
+
+  try{
+    if(btn){
+      btn.disabled = true;
+      btn.textContent = 'Loading…';
+      btn.style.opacity = '0.7';
+    }
+
+    // Force pull from Apps Script
+    await maybeHydrateFromCloud(true);
+
+    // Normalize + persist
+    mergeDecksByName();
+    normalizeTests();
+    store.set(KEYS.decks, state.decks);
+    store.set(KEYS.tests, state.tests);
+
+    // Re-render UI that depends on tests
+    renderCreate();
+    renderBuild();
+    renderPracticeScreen();
+    renderQuizScreen();
+
+    const afterTests = Object.keys(state.tests || {}).length;
+    const afterDecks = Object.keys(state.decks || {}).length;
+
+    // Build a friendly status
+    const deltaTests = afterTests - beforeTests;
+    const deltaDecks = afterDecks - beforeDecks;
+    const parts = [];
+    parts.push(`${afterTests} test${afterTests===1?'':'s'}`);
+    parts.push(`${afterDecks} deck${afterDecks===1?'':'s'}`);
+    const deltaText =
+      (deltaTests || deltaDecks)
+        ? ` (+${Math.max(0,deltaTests)} tests, +${Math.max(0,deltaDecks)} decks)`
+        : '';
+
+    toast(`Loaded ${parts.join(' & ')}${deltaText}. Select a test above to begin.`, 3200);
+
+  }catch(err){
+    console.error('Load/Refresh failed:', err);
+    alert('Failed to load from Cloud: ' + (err?.message || err));
+  }finally{
+    if(btn){
+      btn.disabled = false;
+      btn.textContent = 'Click Here to Load or Refresh Quizes'; // change to “Quizzes” if desired
+      btn.style.opacity = '1';
+    }
+  }
+}
+
+function ensureLoadTestsCTA(whereEl){
+  // Avoid duplicates
+  if(document.getElementById('loadTestsBtnWrap')) return;
+
+  // Default host is the Practice card; fall back to view container
+  const host = whereEl || document.querySelector('#view-practice .card') || document.querySelector('#view-practice') || document.body;
+
+  const wrap = document.createElement('div');
+  wrap.id = 'loadTestsBtnWrap';
+  wrap.style.textAlign = 'center';
+  wrap.style.margin = '12px 0';
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id   = 'loadTestsBtn';
+  btn.textContent = 'Click Here to Load or Refresh Quizes'; // (keep your wording)
+  btn.style.fontSize = '18px';
+  btn.style.fontWeight = '800';
+  btn.style.padding = '16px 22px';
+  btn.style.borderRadius = '999px';
+  btn.style.border = '0';
+  btn.style.cursor = 'pointer';
+  btn.style.boxShadow = '0 10px 30px rgba(0,0,0,.35)';
+  btn.style.transition = 'transform .05s ease';
+  btn.style.color = '#0b1220';
+  btn.style.background = 'linear-gradient(90deg, #64d6ff, #6ff)';
+  btn.onpointerdown = ()=> btn.style.transform = 'scale(.985)';
+  btn.onpointerup   = ()=> btn.style.transform = 'scale(1)';
+  btn.onclick = ()=> loadTestsNow(btn);
+
+  const hint = document.createElement('div');
+  hint.textContent = 'Loads/refreshes decks & tests from the Cloud (Google Sheet).';
+  hint.style.fontSize = '12px';
+  hint.style.opacity = '.8';
+  hint.style.marginTop = '8px';
+
+  wrap.appendChild(btn);
+  wrap.appendChild(hint);
+
+  // Try to put it near the “Select Test” UI
+  const slot = document.querySelector('#view-practice .card .grid') || host;
+  slot.prepend(wrap);
+}
+
+
 //////////////////////////// CREATE //////////////////////////////
 function renderCreate(){
   ensureBackupButtons(); // adds Export/Import + Cloud Pull/Push if missing
@@ -966,6 +1066,9 @@ function showPractice(){
   window.removeEventListener('keydown', window.__bqPracticeKeys__);
   window.__bqPracticeKeys__=handler;
   window.addEventListener('keydown', handler);
+
+ensureLoadTestsCTA(document.querySelector('#view-practice .card'));
+
 }
 
 //////////////////////////// QUIZ //////////////////////////////////
@@ -988,6 +1091,8 @@ function renderQuizScreen(){
       }
     };
     studentLocSel.addEventListener('change', window.__locHandler__);
+     ensureLoadTestsCTA(document.querySelector('#view-quiz .card'));
+
   }
 
   startOrRefreshQuiz();
@@ -1483,6 +1588,9 @@ async function boot(){
   await maybeHydrateFromCloud(forcePull);
 
   applyStudentMode();
+
+   ensureLoadTestsCTA(document.querySelector('#view-practice .card'));
+
 
   $$('select').forEach(sel=>{
     sel.style.pointerEvents='auto';
