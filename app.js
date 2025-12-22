@@ -26,7 +26,8 @@ const KEYS = {
   decks   : 'bq_decks_v6',
   tests   : 'bq_tests_v6',
   results : 'bq_results_v6',
-  archived: 'bq_results_archived_v1'
+  archived: 'bq_results_archived_v1',
+  outbox  : 'bq_outbox_v1'
 };
 const ADMIN_VIEWS = new Set(['create','build','reports']);
 
@@ -95,20 +96,33 @@ async function cloudGET(params={}){
 
 async function cloudPOST(action, payload={}){
   if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
-  const params = new URLSearchParams();
-  params.set('action', action);
-  if (CLOUD.API_KEY) params.set('key', CLOUD.API_KEY);
-  for (const [k,v] of Object.entries(payload)){
-    params.set(k, (v && typeof v === 'object') ? JSON.stringify(v) : String(v));
+  const makeParams = () => {
+    const params = new URLSearchParams();
+    params.set('action', action);
+    if (CLOUD.API_KEY) params.set('key', CLOUD.API_KEY);
+    for (const [k,v] of Object.entries(payload)){
+      params.set(k, (v && typeof v === 'object') ? JSON.stringify(v) : String(v));
+    }
+    return params;
+  };
+
+  const tryOnce = async () => {
+    const r = await fetchWithTimeout(CLOUD.BASE, { method: 'POST', body: makeParams() }, 8000);
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const json = await r.json();
+    if(json && typeof json === 'object' && 'ok' in json){
+      if(json.ok) return json.data;
+      throw new Error(json.error || 'Server error');
+    }
+    return json;
+  };
+
+  try{
+    return await tryOnce();
+  }catch(err){
+    await new Promise(res => setTimeout(res, 500 + Math.random()*500));
+    return await tryOnce();
   }
-  const r = await fetchWithTimeout(CLOUD.BASE, { method: 'POST', body: params }, 8000);
-  if(!r.ok) throw new Error(`HTTP ${r.status}`);
-  const json = await r.json();
-  if(json && typeof json === 'object' && 'ok' in json){
-    if(json.ok) return json.data;
-    throw new Error(json.error || 'Server error');
-  }
-  return json;
 }
 
 // GET list() → {decks, cards, tests}
@@ -302,10 +316,56 @@ let state = {
   tests   : store.get(KEYS.tests, {}),
   results : store.get(KEYS.results, []),
   archived: store.get(KEYS.archived, []),
+  outbox  : store.get(KEYS.outbox, []),
   practice: { cards:[], idx:0 },
-  quiz    : { items:[], idx:0, n:30, locked:false, testId:'' },
+  quiz    : { items:[], idx:0, n:30, locked:false, testId:'', submitting:false },
   ui      : { currentTestId: null, subFilter: '' }
 };
+
+//////////////////////////// outbox //////////////////////////////
+let __outboxFlushPromise = null;
+function persistOutbox(){ store.set(KEYS.outbox, state.outbox); }
+function enqueueOutbox(action, payload){
+  const exists = state.outbox.some(item => item.action === action && item.id === payload.id);
+  if(exists) return;
+  state.outbox.push({
+    id: payload.id,
+    action,
+    payload,
+    tries: 0,
+    nextAttemptAt: 0,
+    lastError: ''
+  });
+  persistOutbox();
+}
+async function flushOutbox(forceToast=false){
+  if(__outboxFlushPromise) return __outboxFlushPromise;
+  if(!state.outbox.length) return;
+
+  __outboxFlushPromise = (async ()=>{
+    const now = Date.now();
+    const remaining = [];
+    let sent = 0;
+    for(const item of state.outbox){
+      if(item.nextAttemptAt && item.nextAttemptAt > now){ remaining.push(item); continue; }
+      try{
+        await cloudPOST(item.action, item.payload);
+        sent++;
+      }catch(err){
+        item.tries = (item.tries || 0) + 1;
+        item.lastError = String(err?.message || err || 'Unknown error');
+        const backoffMs = Math.min(60000, 1000 * Math.pow(2, Math.min(item.tries, 6)));
+        item.nextAttemptAt = Date.now() + backoffMs;
+        remaining.push(item);
+      }
+    }
+    state.outbox = remaining;
+    persistOutbox();
+    if(forceToast && sent){ toast(`Synced ${sent} queued result${sent===1?'':'s'}.`); }
+  })().finally(()=>{ __outboxFlushPromise = null; });
+
+  return __outboxFlushPromise;
+}
 
 //////////////////////////// toasts //////////////////////////////
 function toast(msg, ms=1800){
@@ -1145,6 +1205,9 @@ function drawQuiz(){
   window.addEventListener('keydown', handler);
 }
 async function submitQuiz(){
+  if(state.quiz.submitting) return;
+  state.quiz.submitting = true;
+  $('#submitQuizBtn')?.setAttribute('disabled','true');
   const name=$('#studentName')?.value.trim();
   const studentLocSel=$('#studentLocationSelect');
   const studentLocOther=$('#studentLocationOther');
@@ -1157,8 +1220,19 @@ async function submitQuiz(){
     loc = ($('#studentLocation')?.value || '').trim();
   }
   const dt=$('#studentDate')?.value;
-  if(!name||!loc||!dt) return alert('Name, location and date are required.');
-  const tid=$('#quizTestSelect')?.value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
+  if(!name||!loc||!dt){
+    alert('Name, location and date are required.');
+    state.quiz.submitting = false;
+    $('#submitQuizBtn')?.removeAttribute('disabled');
+    return;
+  }
+  const tid=$('#quizTestSelect')?.value; const t=state.tests[tid];
+  if(!t){
+    alert('No test selected.');
+    state.quiz.submitting = false;
+    $('#submitQuizBtn')?.removeAttribute('disabled');
+    return;
+  }
   const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
   const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
 
@@ -1166,7 +1240,8 @@ async function submitQuiz(){
   state.results.push(row); store.set(KEYS.results,state.results);
 
   try{
-    await cloudPOST('submitresult', row);
+    enqueueOutbox('submitresult', row);
+    await flushOutbox(true);
   }catch(err){
     console.warn('Cloud submit failed', err); toast('Saved locally (offline).');
   }
@@ -1185,6 +1260,9 @@ async function submitQuiz(){
 
   on($('#restartQuizBtn'),'click',()=>{ $('#quizFinished')?.classList.add('hidden'); $('#quizArea')?.classList.remove('hidden'); startOrRefreshQuiz(); }, { once:true });
   on($('#finishedPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); }, { once:true });
+
+  state.quiz.submitting = false;
+  $('#submitQuizBtn')?.removeAttribute('disabled');
 }
 
 /////////////////////////// REPORTS //////////////////////////////
@@ -1591,6 +1669,8 @@ async function boot(){
 
    ensureLoadTestsCTA(document.querySelector('#view-practice .card'));
 
+  window.addEventListener('online', ()=>flushOutbox());
+  flushOutbox();
 
   $$('select').forEach(sel=>{
     sel.style.pointerEvents='auto';
