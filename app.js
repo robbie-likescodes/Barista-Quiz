@@ -1714,7 +1714,15 @@ function drawReports(){
   renderLocationTrends(baseRows);
 
   const tb=$('#repTable tbody'); if(!tb) return;
-  tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
+  const getResultId = r => String(r.id || r.resId || '');
+  const getResultAnswers = r => {
+    if (Array.isArray(r.answers)) return r.answers;
+    if (typeof r.answersJSON === 'string') {
+      try { return JSON.parse(r.answersJSON) || []; } catch { return []; }
+    }
+    return [];
+  };
+  tb.innerHTML=rows.map(r=>`<tr data-id="${esc(getResultId(r))}">
     <td>${new Date(r.time).toLocaleString()}</td>
     <td>${esc(r.name)}</td>
     <td>${esc(r.location)}</td>
@@ -1737,8 +1745,9 @@ function drawReports(){
     const viewMode = ($('#repView')?.value || 'active');
     if(event.target.closest('.view-btn')){
       const src = viewMode==='archived'?state.archived:state.results;
-      const r=src.find(x=>x.id===id); if(!r) return;
-      const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
+      const r=src.find(x=>getResultId(x)===id); if(!r) return;
+      const answers = getResultAnswers(r);
+      const rows=answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
         <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
         <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
         <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
@@ -1873,7 +1882,7 @@ function renderLocationTrends(rows){
   `).join('');
 }
 async function archiveResult(id){
-  const i = state.results.findIndex(r=>r.id===id);
+  const i = state.results.findIndex(r=>String(r.id || r.resId || '')===id);
   if(i>-1){
     const [row]=state.results.splice(i,1);
     state.archived.push(row);
@@ -1885,7 +1894,7 @@ async function archiveResult(id){
   return false;
 }
 async function restoreResult(id){
-  const i = state.archived.findIndex(r=>r.id===id);
+  const i = state.archived.findIndex(r=>String(r.id || r.resId || '')===id);
   if(i>-1){
     const [row]=state.archived.splice(i,1);
     state.results.push(row);
@@ -1898,7 +1907,7 @@ async function restoreResult(id){
 }
 async function deleteForever(id, from='active'){
   const list = from==='archived' ? state.archived : state.results;
-  const i = list.findIndex(r=>r.id===id);
+  const i = list.findIndex(r=>String(r.id || r.resId || '')===id);
   if(i>-1){
     list.splice(i,1);
     saveResults();
