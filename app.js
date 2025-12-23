@@ -710,6 +710,7 @@ function renderCreate(){
   renderDeckSelect();
   renderDeckMeta();
   renderSubdeckManager();
+  renderFolderTree();
   renderCardsList();
 
   bindOnce($('#createSubdeckBtn'),'click',createSubdeck);
@@ -727,7 +728,7 @@ function renderCreate(){
 
   bindOnce($('#deckSelect'),'change',()=>{ 
     state.ui.subFilter=''; 
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList(); 
+    renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList(); 
   });
 }
 
@@ -777,6 +778,7 @@ function renderDeckMeta(){
     if(curr && subs.includes(curr)) subSel.value = curr; else subSel.value = '';
     subSel.onchange = ()=>{ state.ui.subFilter = subSel.value || ''; renderCardsList(); };
   }
+  renderFolderTree();
 }
 function renderSubdeckManager(){
   const list=$('#subdeckManagerList'); if(!list) return;
@@ -799,6 +801,7 @@ function renderSubdeckManager(){
 }
 function renderCardsList(){
   const cardsList=$('#cardsList'); if(!cardsList) return;
+  renderFolderTree();
   const id=selectedDeckId();
   if(!id){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
   const d=state.decks[id];
