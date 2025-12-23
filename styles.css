@@ -118,6 +118,7 @@ body.student .menu-item[data-route="reports"]{display:none}
 .mt{margin-top:14px}.mt-sm{margin-top:8px}.mt-xs{margin-top:4px}
 .lead{font-size:18px}
 .hint{color:var(--muted);font-size:13px}
+.footer #outboxStatus.pending{ color: var(--primary); font-weight:600; }
 .hidden{display:none!important}
 
 /* Avoid overflow of action buttons on small screens */
