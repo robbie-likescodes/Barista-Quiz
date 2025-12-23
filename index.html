@@ -7,7 +7,7 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=18" />
+  <link rel="stylesheet" href="styles.css?v=20" />
   <script defer src="app.js?v=18"></script>
 </head>
 <body>
@@ -43,7 +43,7 @@
     <section id="view-create" class="view active" aria-labelledby="create-title">
       <h2 id="create-title">Content Library</h2>
 
-      <div class="card">
+      <div class="card primary-card">
         <div class="card-head">
           <strong>Add / Select a Deck (merged by Deck Name)</strong>
           <div class="grow"></div>
@@ -89,7 +89,7 @@
         </div>
       </div>
 
-      <details class="card">
+      <details class="card bulk-card">
         <summary class="card-head">Bulk Add (tap for format)</summary>
         <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
         <textarea id="bulkTextarea" class="textarea mt" rows="5"
@@ -97,7 +97,7 @@
         <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
       </details>
 
-      <div class="card">
+      <div class="card primary-card">
         <h3>Add / Edit Card</h3>
         <div class="grid g2 mt">
           <input id="qInput" class="input" placeholder="Question" aria-label="Question">
@@ -119,7 +119,7 @@
         </details>
       </div>
 
-      <div class="card">
+      <div class="card filters-card">
         <h3>Cards in Deck</h3>
 
         <!-- Sub-deck viewer filter -->
