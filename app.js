@@ -385,18 +385,6 @@ function saveDecks(){ store.set(KEYS.decks, state.decks); state.meta.decksVersio
 function saveTests(){ store.set(KEYS.tests, state.tests); state.meta.testsVersion++; }
 function saveResults(){ store.set(KEYS.results, state.results); state.meta.resultsVersion++; }
 function saveArchived(){ store.set(KEYS.archived, state.archived); state.meta.archivedVersion++; }
-
-function validateResultRow(row){
-  if(!row) return 'Missing result payload';
-  if(!row.id) return 'Missing result id';
-  if(!row.name) return 'Missing name';
-  if(!row.location) return 'Missing location';
-  if(!row.date) return 'Missing date';
-  if(!row.testId) return 'Missing test id';
-  if(!row.testName) return 'Missing test name';
-  if(!Array.isArray(row.answers)) return 'Missing answers';
-  return '';
-}
 function persistOutbox(){ store.set(KEYS.outbox, state.outbox); }
 function enqueueOutbox(action, payload){
   const exists = state.outbox.some(item => item.action === action && item.id === payload.id);
@@ -736,16 +724,16 @@ function renderDeckMeta(){
   subsEl.innerHTML=subs.length?subs.map(s=>`
     <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
   `).join(''):`<span class="hint">No sub-decks yet</span>`;
-  bindOnce(subsEl, 'click', (event)=>{
-    const btn = event.target.closest('.remove');
-    if(!btn) return;
-    const tag=btn.dataset.sub;
-    const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-    d.tags=(d.tags||[]).filter(t=>t!==tag);
-    if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-    saveDecks();
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-  }, 'deckMetaRemove');
+  subsEl.querySelectorAll('.remove').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const tag=btn.dataset.sub;
+      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
+      d.tags=(d.tags||[]).filter(t=>t!==tag);
+      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
+      saveDecks();
+      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    });
+  });
 
   const subSel = $('#cardsSubFilter');
   if(subSel){
@@ -763,16 +751,16 @@ function renderSubdeckManager(){
   list.innerHTML=subs.length?subs.map(s=>`
     <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
   `).join(''):`<span class="hint">No sub-decks yet.</span>`;
-  bindOnce(list, 'click', (event)=>{
-    const btn = event.target.closest('.remove');
-    if(!btn) return;
-    const tag=btn.dataset.sub;
-    const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-    d.tags=(d.tags||[]).filter(t=>t!==tag);
-    if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-    saveDecks();
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-  }, 'subdeckRemove');
+  list.querySelectorAll('.remove').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const tag=btn.dataset.sub;
+      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
+      d.tags=(d.tags||[]).filter(t=>t!==tag);
+      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
+      saveDecks();
+      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    });
+  });
 }
 function renderCardsList(){
   const cardsList=$('#cardsList'); if(!cardsList) return;
@@ -1338,30 +1326,7 @@ async function submitQuiz(){
   const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
   const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
 
-  const row={
-    id: uid('res'),
-    clientId,
-    idempotencyKey: `${clientId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`,
-    name,
-    location: loc,
-    date: dt,
-    time: Date.now(),
-    testId: tid,
-    testName: t.name,
-    score,
-    correct,
-    of: total,
-    answers
-  };
-
-  const validationError = validateResultRow(row);
-  if(validationError){
-    alert(`Submission invalid: ${validationError}`);
-    state.quiz.submitting = false;
-    $('#submitQuizBtn')?.removeAttribute('disabled');
-    return;
-  }
-
+  const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
   state.results.push(row); saveResults();
 
   try{
