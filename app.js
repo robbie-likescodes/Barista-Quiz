@@ -411,9 +411,24 @@ function enqueueOutbox(action, payload){
   });
   persistOutbox();
 }
+function isOutboxPending(id){
+  return state.outbox.some(item => item.id === id);
+}
+function acquireOutboxLock(){
+  const now = Date.now();
+  const existing = Number(localStorage.getItem(KEYS.outboxLock) || 0);
+  if(existing && now - existing < 15000) return false;
+  localStorage.setItem(KEYS.outboxLock, String(now));
+  return true;
+}
+function releaseOutboxLock(){
+  const existing = Number(localStorage.getItem(KEYS.outboxLock) || 0);
+  if(existing) localStorage.removeItem(KEYS.outboxLock);
+}
 async function flushOutbox(forceToast=false){
   if(__outboxFlushPromise) return __outboxFlushPromise;
   if(!state.outbox.length) return;
+  if(!acquireOutboxLock()) return;
 
   __outboxFlushPromise = (async ()=>{
     const now = Date.now();
@@ -435,7 +450,10 @@ async function flushOutbox(forceToast=false){
     state.outbox = remaining;
     persistOutbox();
     if(forceToast && sent){ toast(`Synced ${sent} queued result${sent===1?'':'s'}.`); }
-  })().finally(()=>{ __outboxFlushPromise = null; });
+  })().finally(()=>{
+    releaseOutboxLock();
+    __outboxFlushPromise = null;
+  });
 
   return __outboxFlushPromise;
 }
@@ -1363,7 +1381,11 @@ async function submitQuiz(){
         <span class="tag good">Correct: ${esc(a.correct)}</span>
       </div>
     </div>`).join('');
-  toast('Submission saved');
+  if(isOutboxPending(row.id)){
+    toast('Submission queued (offline)');
+  }else{
+    toast('Submission synced');
+  }
 
   on($('#restartQuizBtn'),'click',()=>{ $('#quizFinished')?.classList.add('hidden'); $('#quizArea')?.classList.remove('hidden'); startOrRefreshQuiz(); }, { once:true });
   on($('#finishedPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); }, { once:true });
@@ -1786,6 +1808,7 @@ function ensureReportsButtons(){
 async function boot(){
   mergeDecksByName();
   normalizeTests();
+  ensureOutboxIndicator();
 
   // optional: add a small student loading banner container if not present
   if(!$('#studentLoading')){
