@@ -710,6 +710,7 @@ function renderCreate(){
   renderDeckSelect();
   renderDeckMeta();
   renderSubdeckManager();
+  renderFolderTree();
   renderCardsList();
 
   bindOnce($('#createSubdeckBtn'),'click',createSubdeck);
@@ -727,7 +728,7 @@ function renderCreate(){
 
   bindOnce($('#deckSelect'),'change',()=>{ 
     state.ui.subFilter=''; 
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList(); 
+    renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList(); 
   });
 }
 
@@ -767,7 +768,7 @@ function renderDeckMeta(){
     d.tags=(d.tags||[]).filter(t=>t!==tag);
     if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
     saveDecks();
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
   }, 'deckMetaRemove');
 
   const subSel = $('#cardsSubFilter');
@@ -777,6 +778,7 @@ function renderDeckMeta(){
     if(curr && subs.includes(curr)) subSel.value = curr; else subSel.value = '';
     subSel.onchange = ()=>{ state.ui.subFilter = subSel.value || ''; renderCardsList(); };
   }
+  renderFolderTree();
 }
 function renderSubdeckManager(){
   const list=$('#subdeckManagerList'); if(!list) return;
@@ -794,11 +796,97 @@ function renderSubdeckManager(){
     d.tags=(d.tags||[]).filter(t=>t!==tag);
     if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
     saveDecks();
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
   }, 'subdeckRemove');
+}
+function renderFolderTree(){
+  const tree = $('#folderTree'); if(!tree) return;
+  const decks = Object.values(state.decks || {});
+  if(!decks.length){ tree.innerHTML = '<div class="hint">No folders yet. Create a deck to get started.</div>'; return; }
+
+  const selectedDeck = selectedDeckId();
+  const selectedSub = (state.ui.subFilter || '').trim();
+
+  const classMap = new Map();
+  for(const d of decks){
+    const cls = (d.className || 'Uncategorized').trim() || 'Uncategorized';
+    if(!classMap.has(cls)) classMap.set(cls, []);
+    classMap.get(cls).push(d);
+  }
+
+  const classes = [...classMap.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
+  tree.innerHTML = classes.map(([cls, classDecks])=>{
+    const sortedDecks = classDecks.slice().sort((a,b)=>a.deckName.localeCompare(b.deckName));
+    const deckHtml = sortedDecks.map(d=>{
+      const subs = deckSubTags(d);
+      const totalCards = (d.cards || []).length;
+      const deckSelected = selectedDeck === d.id && !selectedSub;
+      const subsHtml = subs.map(s=>{
+        const count = (d.cards || []).filter(c=>String(c.sub||'')===String(s)).length;
+        const subSelected = selectedDeck === d.id && selectedSub === s;
+        return `<button class="folder-link sub-link ${subSelected?'selected':''}" data-deck="${d.id}" data-sub="${esc(s)}">
+          <span class="name">${esc(s)}</span><span class="count">${count}</span>
+        </button>`;
+      }).join('');
+
+      return `<div class="folder-deck">
+        <div class="folder-row">
+          <button class="folder-link deck-link ${deckSelected?'selected':''}" data-deck="${d.id}">
+            <span class="name">${esc(d.deckName)}</span>
+            <span class="meta">(${totalCards} card${totalCards!==1?'s':''})</span>
+          </button>
+          <button class="btn ghost tiny add-sub" data-deck="${d.id}">+ Subfolder</button>
+        </div>
+        ${subsHtml?`<div class="folder-subs">${subsHtml}</div>`:'<div class="hint mt-sm">No subfolders yet.</div>'}
+      </div>`;
+    }).join('');
+
+    return `<details class="folder-group" open>
+      <summary>
+        <span class="name">${esc(cls)}</span>
+        <span class="count">${sortedDecks.length} deck${sortedDecks.length!==1?'s':''}</span>
+      </summary>
+      <div class="folder-decks">${deckHtml}</div>
+    </details>`;
+  }).join('');
+
+  bindOnce(tree, 'click', (event)=>{
+    const addBtn = event.target.closest('.add-sub');
+    if(addBtn){
+      const deckId = addBtn.dataset.deck;
+      const d = state.decks[deckId];
+      if(!d) return;
+      const next = prompt('New subfolder name:');
+      if(next == null) return;
+      const name = next.trim();
+      if(!name) return alert('Subfolder name cannot be empty.');
+      d.tags = unique([...(d.tags||[]), name]);
+      saveDecks();
+      renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+      return;
+    }
+
+    const deckLink = event.target.closest('.deck-link');
+    const subLink = event.target.closest('.sub-link');
+    if(!deckLink && !subLink) return;
+    const deckId = (deckLink || subLink).dataset.deck;
+    const sub = subLink ? subLink.dataset.sub : '';
+    setSelectedFolder(deckId, sub);
+  }, 'folderTree');
+}
+function setSelectedFolder(deckId, sub){
+  const deckSelect = $('#deckSelect');
+  if(deckSelect) deckSelect.value = deckId || '';
+  state.ui.subFilter = sub || '';
+  const subSel = $('#cardsSubFilter');
+  if(subSel) subSel.value = sub || '';
+  const cardSubInput = $('#cardSubInput');
+  if(cardSubInput && sub) cardSubInput.value = sub;
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
 }
 function renderCardsList(){
   const cardsList=$('#cardsList'); if(!cardsList) return;
+  renderFolderTree();
   const id=selectedDeckId();
   if(!id){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
   const d=state.decks[id];
@@ -1034,7 +1122,7 @@ function saveTest(){
 
   if(!t){
     id = uid('test');
-    t = state.tests[id] = { id, name: typedName, title: typedName, n: 30, selections: [] };
+    t = state.tests[id] = { id, name: typedName, title: typedName, n: 30, selections: [], updatedAt: Date.now() };
     state.ui.currentTestId = id;
   } else {
     t.name = typedName;
@@ -1043,6 +1131,7 @@ function saveTest(){
   t.title = ($('#builderTitle')?.value.trim() || t.title || typedName);
   t.n = Math.max(1, +($('#builderCount')?.value) || t.n || 30);
   t.selections = dedupeSelections(readSelectionsFromUI());
+  t.updatedAt = Date.now();
 
   saveTests();
   renderTestsDatalist();
@@ -1058,6 +1147,7 @@ function renameTest(){
   if(!newName) return alert('Name cannot be empty.');
   t.name = newName;
   t.title = ($('#builderTitle')?.value.trim() || t.title || newName);
+  t.updatedAt = Date.now();
   saveTests();
   renderTestsDatalist();
   if($('#testNameInput')) $('#testNameInput').value = newName;
@@ -1153,9 +1243,10 @@ function getCurrentTestOrSave(){
     if(!match){ alert('Save the test first.'); return null; }
     t = match;
   }
-  t.title=($('#builderTitle')?.value.trim()||t.title||typedName); 
-  t.n=Math.max(1,+($('#builderCount')?.value)||t.n||30); 
-  t.selections=dedupeSelections(readSelectionsFromUI()); 
+  t.title=($('#builderTitle')?.value.trim()||t.title||typedName);
+  t.n=Math.max(1,+($('#builderCount')?.value)||t.n||30);
+  t.selections=dedupeSelections(readSelectionsFromUI());
+  t.updatedAt = Date.now();
   saveTests(); 
   return t;
 }
@@ -1181,6 +1272,7 @@ function computePoolForTest(t){
   return pool;
 }
 const deckLabel=d=>`${d.deckName} — ${d.className}`;
+const testDisplayName=t=>(t?.title || t?.name || 'Test');
 
 //////////////////////// PRACTICE ////////////////////////////////
 function renderPracticeScreen(){
@@ -1198,13 +1290,18 @@ function renderPracticeScreen(){
 }
 function fillTestsSelect(sel,lockToStudent=false){
   if(!sel) return;
-  const list=Object.entries(state.tests).sort((a,b)=>a[1].name.localeCompare(b[1].name));
+  const list=Object.entries(state.tests).sort((a,b)=>{
+    const aStamp = a[1]?.updatedAt || 0;
+    const bStamp = b[1]?.updatedAt || 0;
+    if (bStamp !== aStamp) return bStamp - aStamp;
+    return (a[1]?.name || '').localeCompare(b[1]?.name || '');
+  });
   if(state.quiz.locked && state.quiz.testId && lockToStudent){
-    const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(t.name)}</option>`:'';
+    const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(testDisplayName(t))}</option>`:'';
     sel.value=state.quiz.testId; sel.disabled=true; return;
   }
   sel.disabled=false;
-  sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('')||'';
+  sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(testDisplayName(t))}</option>`).join('')||'';
 }
 function buildPracticeDeckChecks(){
   const container=$('#practiceDeckChecks'); if(!container) return;
