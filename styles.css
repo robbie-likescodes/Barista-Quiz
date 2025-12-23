@@ -116,22 +116,6 @@ body.student .menu-item[data-route="reports"]{display:none}
 .card.primary-card{border-color:color-mix(in oklab,var(--brand) 45%,var(--line) 55%);box-shadow:0 14px 40px rgba(15,23,42,.12)}
 .card.bulk-card{background:linear-gradient(180deg,#ffffff,#f2f7f2)}
 .card.filters-card{position:sticky;top:76px;z-index:5}
-.folder-card .card-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.folder-tree{display:grid;gap:14px;margin-top:12px}
-.folder-group{border:1px solid rgba(86, 60, 40, 0.12);border-radius:14px;padding:10px 12px;background:#fff}
-.folder-group>summary{display:flex;align-items:center;justify-content:space-between;font-weight:700;cursor:pointer}
-.folder-group>summary .count{font-size:12px;color:#7f6a55}
-.folder-decks{display:grid;gap:12px;margin-top:10px}
-.folder-deck{border:1px solid rgba(86, 60, 40, 0.08);border-radius:12px;padding:10px;background:#fffdfa}
-.folder-row{display:flex;align-items:center;gap:10px;justify-content:space-between}
-.folder-link{display:inline-flex;align-items:center;gap:8px;border:1px solid transparent;background:transparent;color:#1f2937;font-weight:600;cursor:pointer;padding:6px 8px;border-radius:8px}
-.folder-link .meta{font-weight:500;color:#8b6d55;font-size:12px}
-.folder-link.selected{background:#fff3da;border-color:rgba(252, 196, 75, 0.5)}
-.folder-subs{display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:8px;margin-top:10px}
-.folder-subs .folder-link{justify-content:space-between;font-weight:500;background:#ffffff;border:1px dashed rgba(86, 60, 40, 0.16)}
-.folder-subs .folder-link.selected{background:#ffe8c3;border-style:solid}
-.folder-subs .count{background:#fff4d8;border-radius:999px;padding:2px 8px;font-size:11px;color:#7a5a44}
-.btn.tiny{padding:4px 10px;font-size:12px}
 .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .grow{flex:1}
 .mt{margin-top:14px}.mt-sm{margin-top:8px}.mt-xs{margin-top:4px}
