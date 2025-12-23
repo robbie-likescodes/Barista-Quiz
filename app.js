@@ -768,7 +768,7 @@ function renderDeckMeta(){
     d.tags=(d.tags||[]).filter(t=>t!==tag);
     if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
     saveDecks();
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
   }, 'deckMetaRemove');
 
   const subSel = $('#cardsSubFilter');
@@ -796,8 +796,93 @@ function renderSubdeckManager(){
     d.tags=(d.tags||[]).filter(t=>t!==tag);
     if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
     saveDecks();
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+    renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
   }, 'subdeckRemove');
+}
+function renderFolderTree(){
+  const tree = $('#folderTree'); if(!tree) return;
+  const decks = Object.values(state.decks || {});
+  if(!decks.length){ tree.innerHTML = '<div class="hint">No folders yet. Create a deck to get started.</div>'; return; }
+
+  const selectedDeck = selectedDeckId();
+  const selectedSub = (state.ui.subFilter || '').trim();
+
+  const classMap = new Map();
+  for(const d of decks){
+    const cls = (d.className || 'Uncategorized').trim() || 'Uncategorized';
+    if(!classMap.has(cls)) classMap.set(cls, []);
+    classMap.get(cls).push(d);
+  }
+
+  const classes = [...classMap.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
+  tree.innerHTML = classes.map(([cls, classDecks])=>{
+    const sortedDecks = classDecks.slice().sort((a,b)=>a.deckName.localeCompare(b.deckName));
+    const deckHtml = sortedDecks.map(d=>{
+      const subs = deckSubTags(d);
+      const totalCards = (d.cards || []).length;
+      const deckSelected = selectedDeck === d.id && !selectedSub;
+      const subsHtml = subs.map(s=>{
+        const count = (d.cards || []).filter(c=>String(c.sub||'')===String(s)).length;
+        const subSelected = selectedDeck === d.id && selectedSub === s;
+        return `<button class="folder-link sub-link ${subSelected?'selected':''}" data-deck="${d.id}" data-sub="${esc(s)}">
+          <span class="name">${esc(s)}</span><span class="count">${count}</span>
+        </button>`;
+      }).join('');
+
+      return `<div class="folder-deck">
+        <div class="folder-row">
+          <button class="folder-link deck-link ${deckSelected?'selected':''}" data-deck="${d.id}">
+            <span class="name">${esc(d.deckName)}</span>
+            <span class="meta">(${totalCards} card${totalCards!==1?'s':''})</span>
+          </button>
+          <button class="btn ghost tiny add-sub" data-deck="${d.id}">+ Subfolder</button>
+        </div>
+        ${subsHtml?`<div class="folder-subs">${subsHtml}</div>`:'<div class="hint mt-sm">No subfolders yet.</div>'}
+      </div>`;
+    }).join('');
+
+    return `<details class="folder-group" open>
+      <summary>
+        <span class="name">${esc(cls)}</span>
+        <span class="count">${sortedDecks.length} deck${sortedDecks.length!==1?'s':''}</span>
+      </summary>
+      <div class="folder-decks">${deckHtml}</div>
+    </details>`;
+  }).join('');
+
+  bindOnce(tree, 'click', (event)=>{
+    const addBtn = event.target.closest('.add-sub');
+    if(addBtn){
+      const deckId = addBtn.dataset.deck;
+      const d = state.decks[deckId];
+      if(!d) return;
+      const next = prompt('New subfolder name:');
+      if(next == null) return;
+      const name = next.trim();
+      if(!name) return alert('Subfolder name cannot be empty.');
+      d.tags = unique([...(d.tags||[]), name]);
+      saveDecks();
+      renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+      return;
+    }
+
+    const deckLink = event.target.closest('.deck-link');
+    const subLink = event.target.closest('.sub-link');
+    if(!deckLink && !subLink) return;
+    const deckId = (deckLink || subLink).dataset.deck;
+    const sub = subLink ? subLink.dataset.sub : '';
+    setSelectedFolder(deckId, sub);
+  }, 'folderTree');
+}
+function setSelectedFolder(deckId, sub){
+  const deckSelect = $('#deckSelect');
+  if(deckSelect) deckSelect.value = deckId || '';
+  state.ui.subFilter = sub || '';
+  const subSel = $('#cardsSubFilter');
+  if(subSel) subSel.value = sub || '';
+  const cardSubInput = $('#cardSubInput');
+  if(cardSubInput && sub) cardSubInput.value = sub;
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
 }
 function renderCardsList(){
   const cardsList=$('#cardsList'); if(!cardsList) return;

@@ -7,7 +7,7 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=20" />
+  <link rel="stylesheet" href="styles.css?v=22" />
   <script defer src="app.js?v=18"></script>
 </head>
 <body>
@@ -96,6 +96,14 @@
           placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)"></textarea>
         <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
       </details>
+
+      <div class="card folder-card">
+        <div class="card-head">
+          <strong>Folders &amp; Subfolders</strong>
+          <span class="hint">Select a folder to filter cards or add new subfolders.</span>
+        </div>
+        <div id="folderTree" class="folder-tree" aria-live="polite"></div>
+      </div>
 
       <div class="card primary-card">
         <h3>Add / Edit Card</h3>
