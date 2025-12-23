@@ -123,7 +123,12 @@ function listAll() {
   const tests = readSheet(SHEETS.TESTS);
 
   const data = { decks, cards, tests, version: getMeta('schema') || 'bq_backup_v1' };
-  cache.put(key, JSON.stringify(data), CACHE_SECONDS);
+  try{
+    const payload = JSON.stringify(data);
+    if (payload.length < 90000){
+      cache.put(key, payload, CACHE_SECONDS);
+    }
+  }catch(_){}
   return data;
 }
 
