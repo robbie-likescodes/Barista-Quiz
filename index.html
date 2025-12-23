@@ -7,7 +7,7 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=18" />
+  <link rel="stylesheet" href="styles.css?v=19" />
   <script defer src="app.js?v=18"></script>
 </head>
 <body>
@@ -26,10 +26,11 @@
         <button id="menuBtn" class="btn ghost" aria-haspopup="true" aria-expanded="false">Menu ≡</button>
         <div id="menuList" class="menu-list" role="menu" aria-label="Primary">
           <button class="menu-item active" data-route="create" role="menuitem">Create</button>
-          <button class="menu-item" data-route="build" role="menuitem">Build Test</button>
+          <button class="menu-item" data-route="build" role="menuitem">Quiz Builder</button>
           <button class="menu-item" data-route="practice" role="menuitem">Practice</button>
           <button class="menu-item" data-route="quiz" role="menuitem">Quiz</button>
           <button class="menu-item" data-route="reports" role="menuitem">Reports</button>
+          <button class="menu-item" data-route="settings" role="menuitem">Settings</button>
         </div>
       </div>
     </div>
@@ -40,16 +41,12 @@
 
     <!-- ========================= CREATE ========================= -->
     <section id="view-create" class="view active" aria-labelledby="create-title">
-      <h2 id="create-title">Create &amp; Manage Decks</h2>
+      <h2 id="create-title">Content Library</h2>
 
-      <div class="card">
+      <div class="card primary-card">
         <div class="card-head">
           <strong>Add / Select a Deck (merged by Deck Name)</strong>
           <div class="grow"></div>
-
-          <!-- Cloud sync actions (admin) -->
-          <button id="cloudPullBtn" class="btn ghost" title="Fetch Decks/Cards/Tests from Google Sheets">Pull from Cloud</button>
-          <button id="cloudPushBtn" class="btn" title="Push full backup to Google Sheets (Merge/Replace)">Push Backup</button>
 
           <!-- Deck actions -->
           <button id="renameDeckBtn" class="btn ghost">Rename</button>
@@ -92,7 +89,7 @@
         </div>
       </div>
 
-      <details class="card">
+      <details class="card bulk-card">
         <summary class="card-head">Bulk Add (tap for format)</summary>
         <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
         <textarea id="bulkTextarea" class="textarea mt" rows="5"
@@ -100,7 +97,7 @@
         <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
       </details>
 
-      <div class="card">
+      <div class="card primary-card">
         <h3>Add / Edit Card</h3>
         <div class="grid g2 mt">
           <input id="qInput" class="input" placeholder="Question" aria-label="Question">
@@ -122,7 +119,7 @@
         </details>
       </div>
 
-      <div class="card">
+      <div class="card filters-card">
         <h3>Cards in Deck</h3>
 
         <!-- Sub-deck viewer filter -->
@@ -139,7 +136,7 @@
 
     <!-- ========================= BUILD ========================= -->
     <section id="view-build" class="view" aria-labelledby="build-title">
-      <h2 id="build-title">Build Test &amp; Share</h2>
+      <h2 id="build-title">Quiz Builder &amp; Share</h2>
 
       <div class="card">
         <label class="switch">
@@ -394,6 +391,22 @@
       <div class="card">
         <h3>Most Missed Questions</h3>
         <div id="missedSummary" class="missed"></div>
+      </div>
+    </section>
+
+    <!-- ========================= SETTINGS ======================= -->
+    <section id="view-settings" class="view" aria-labelledby="settings-title">
+      <h2 id="settings-title">Settings &amp; Sync</h2>
+
+      <div class="card">
+        <div class="card-head">
+          <strong>Cloud Sync &amp; Backups</strong>
+          <div class="grow"></div>
+          <button id="cloudPullBtn" class="btn ghost" title="Fetch Decks/Cards/Tests from Google Sheets">Pull from Cloud</button>
+          <button id="cloudPushBtn" class="btn" title="Push full backup to Google Sheets (Merge/Replace)">Push Backup</button>
+          <!-- JS injects Export All / Import Backup buttons here -->
+        </div>
+        <p class="hint mt-sm">Local changes save automatically. Use Pull to refresh from Sheets or Push to back up your current library.</p>
       </div>
     </section>
   </main>
