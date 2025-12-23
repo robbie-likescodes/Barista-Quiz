@@ -34,8 +34,11 @@ const KEYS = {
   tests   : 'bq_tests_v6',
   results : 'bq_results_v6',
   archived: 'bq_results_archived_v1',
-  outbox  : 'bq_outbox_v1'
+  outbox  : 'bq_outbox_v1',
+  clientId: 'bq_client_id_v1',
+  schema  : 'bq_schema_version'
 };
+const SCHEMA_VERSION = 1;
 const ADMIN_VIEWS = new Set(['create','build','reports']);
 
 //////////////////////////// utils ///////////////////////////////
@@ -56,6 +59,34 @@ const normalizeName = raw => (decodeURIComponent(String(raw||''))
   .replace(/\s+/g, ' ')
   .trim()
   .toLowerCase());
+
+function getClientId(){
+  let id = store.get(KEYS.clientId, '');
+  if(!id){
+    id = uid('client');
+    store.set(KEYS.clientId, id);
+  }
+  return id;
+}
+
+function migrateStorage(){
+  const existing = Number(store.get(KEYS.schema, 0)) || 0;
+  if(existing >= SCHEMA_VERSION) return;
+
+  const decks = store.get(KEYS.decks, {});
+  const tests = store.get(KEYS.tests, {});
+  const results = store.get(KEYS.results, []);
+  const archived = store.get(KEYS.archived, []);
+  const outbox = store.get(KEYS.outbox, []);
+
+  if(!decks || typeof decks !== 'object' || Array.isArray(decks)) store.set(KEYS.decks, {});
+  if(!tests || typeof tests !== 'object' || Array.isArray(tests)) store.set(KEYS.tests, {});
+  if(!Array.isArray(results)) store.set(KEYS.results, []);
+  if(!Array.isArray(archived)) store.set(KEYS.archived, []);
+  if(!Array.isArray(outbox)) store.set(KEYS.outbox, []);
+
+  store.set(KEYS.schema, SCHEMA_VERSION);
+}
 
 //////////////////////// fetch helpers /////////////////////////
 // Timeout wrapper (Safari-friendly)
@@ -324,6 +355,9 @@ async function maybeHydrateFromCloud(force = false){
 /* --------------------------------------------------------------- */
 
 /////////////////////////// global state /////////////////////////
+migrateStorage();
+const clientId = getClientId();
+
 let state = {
   decks   : store.get(KEYS.decks, {}),
   tests   : store.get(KEYS.tests, {}),
@@ -365,9 +399,24 @@ function enqueueOutbox(action, payload){
   });
   persistOutbox();
 }
+function isOutboxPending(id){
+  return state.outbox.some(item => item.id === id);
+}
+function acquireOutboxLock(){
+  const now = Date.now();
+  const existing = Number(localStorage.getItem(KEYS.outboxLock) || 0);
+  if(existing && now - existing < 15000) return false;
+  localStorage.setItem(KEYS.outboxLock, String(now));
+  return true;
+}
+function releaseOutboxLock(){
+  const existing = Number(localStorage.getItem(KEYS.outboxLock) || 0);
+  if(existing) localStorage.removeItem(KEYS.outboxLock);
+}
 async function flushOutbox(forceToast=false){
   if(__outboxFlushPromise) return __outboxFlushPromise;
   if(!state.outbox.length) return;
+  if(!acquireOutboxLock()) return;
 
   __outboxFlushPromise = (async ()=>{
     const now = Date.now();
@@ -389,7 +438,10 @@ async function flushOutbox(forceToast=false){
     state.outbox = remaining;
     persistOutbox();
     if(forceToast && sent){ toast(`Synced ${sent} queued result${sent===1?'':'s'}.`); }
-  })().finally(()=>{ __outboxFlushPromise = null; });
+  })().finally(()=>{
+    releaseOutboxLock();
+    __outboxFlushPromise = null;
+  });
 
   return __outboxFlushPromise;
 }
@@ -1294,7 +1346,11 @@ async function submitQuiz(){
         <span class="tag good">Correct: ${esc(a.correct)}</span>
       </div>
     </div>`).join('');
-  toast('Submission saved');
+  if(isOutboxPending(row.id)){
+    toast('Submission queued (offline)');
+  }else{
+    toast('Submission synced');
+  }
 
   on($('#restartQuizBtn'),'click',()=>{ $('#quizFinished')?.classList.add('hidden'); $('#quizArea')?.classList.remove('hidden'); startOrRefreshQuiz(); }, { once:true });
   on($('#finishedPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); }, { once:true });
@@ -1717,6 +1773,7 @@ function ensureReportsButtons(){
 async function boot(){
   mergeDecksByName();
   normalizeTests();
+  ensureOutboxIndicator();
 
   // optional: add a small student loading banner container if not present
   if(!$('#studentLoading')){
@@ -1735,6 +1792,9 @@ async function boot(){
    ensureLoadTestsCTA(document.querySelector('#view-practice .card'));
 
   window.addEventListener('online', ()=>flushOutbox());
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'visible') flushOutbox();
+  });
   flushOutbox();
 
   $$('select').forEach(sel=>{
