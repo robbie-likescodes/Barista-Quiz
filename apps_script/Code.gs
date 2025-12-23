@@ -384,6 +384,18 @@ function sh(name){
   return s;
 }
 
+function headerForSheet(name){
+  switch(name){
+    case SHEETS.DECKS: return HEADERS.Decks;
+    case SHEETS.CARDS: return HEADERS.Cards;
+    case SHEETS.TESTS: return HEADERS.Tests;
+    case SHEETS.RESULTS: return HEADERS.Results;
+    case SHEETS.ARCHIVED: return HEADERS.Archived;
+    case SHEETS.META: return HEADERS.Meta;
+    default: return null;
+  }
+}
+
 function ensureHeaders(sheet, headerArr){
   const lastCol = sheet.getLastColumn();
   if (lastCol === 0){
@@ -411,7 +423,8 @@ function ensureHeaders(sheet, headerArr){
 
 function readSheet(name){
   const s = sh(name);
-  ensureHeaders(s, HEADERS[name.toUpperCase()] || s.getRange(1,1,1,s.getLastColumn()).getValues()[0].map(String));
+  const desired = headerForSheet(name);
+  ensureHeaders(s, desired || s.getRange(1,1,1,s.getLastColumn()).getValues()[0].map(String));
   const values = s.getDataRange().getValues();
   if (!values.length) return [];
   const hdr = values[0].map(String);
