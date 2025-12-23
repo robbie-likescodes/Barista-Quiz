@@ -36,8 +36,7 @@ const KEYS = {
   archived: 'bq_results_archived_v1',
   outbox  : 'bq_outbox_v1',
   clientId: 'bq_client_id_v1',
-  schema  : 'bq_schema_version',
-  outboxLock: 'bq_outbox_lock_v1'
+  schema  : 'bq_schema_version'
 };
 const SCHEMA_VERSION = 1;
 const ADMIN_VIEWS = new Set(['create','build','reports']);
@@ -398,25 +397,7 @@ function validateResultRow(row){
   if(!Array.isArray(row.answers)) return 'Missing answers';
   return '';
 }
-function persistOutbox(){ store.set(KEYS.outbox, state.outbox); updateOutboxIndicator(); }
-function updateOutboxIndicator(){
-  const el = document.getElementById('outboxStatus');
-  if(!el) return;
-  const count = state.outbox.length;
-  el.textContent = count ? `Pending sync: ${count}` : 'All synced';
-  el.classList.toggle('pending', count > 0);
-}
-function ensureOutboxIndicator(){
-  if(document.getElementById('outboxStatus')) return;
-  const footer = document.querySelector('.footer');
-  if(!footer) return;
-  const span = document.createElement('span');
-  span.id = 'outboxStatus';
-  span.className = 'hint';
-  span.style.marginLeft = '8px';
-  footer.appendChild(span);
-  updateOutboxIndicator();
-}
+function persistOutbox(){ store.set(KEYS.outbox, state.outbox); }
 function enqueueOutbox(action, payload){
   const exists = state.outbox.some(item => item.action === action && item.id === payload.id);
   if(exists) return;
@@ -1849,7 +1830,6 @@ async function boot(){
   document.addEventListener('visibilitychange', ()=>{
     if(document.visibilityState === 'visible') flushOutbox();
   });
-  setInterval(()=>flushOutbox(), 30000);
   flushOutbox();
 
   $$('select').forEach(sel=>{
