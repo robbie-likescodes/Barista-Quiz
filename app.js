@@ -15,6 +15,13 @@ const CLOUD = {
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const on = (el, ev, fn, opt) => el && el.addEventListener(ev, fn, opt);
+const bindOnce = (el, ev, fn, key) => {
+  if(!el) return;
+  const flag = `__bq_bound_${key || ev}`;
+  if(el[flag]) return;
+  el.addEventListener(ev, fn);
+  el[flag] = true;
+};
 
 const store = {
   get(k, f){ try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } },
@@ -27,8 +34,12 @@ const KEYS = {
   tests   : 'bq_tests_v6',
   results : 'bq_results_v6',
   archived: 'bq_results_archived_v1',
-  outbox  : 'bq_outbox_v1'
+  outbox  : 'bq_outbox_v1',
+  clientId: 'bq_client_id_v1',
+  schema  : 'bq_schema_version',
+  outboxLock: 'bq_outbox_lock_v1'
 };
+const SCHEMA_VERSION = 1;
 const ADMIN_VIEWS = new Set(['create','build','reports']);
 
 //////////////////////////// utils ///////////////////////////////
@@ -49,6 +60,34 @@ const normalizeName = raw => (decodeURIComponent(String(raw||''))
   .replace(/\s+/g, ' ')
   .trim()
   .toLowerCase());
+
+function getClientId(){
+  let id = store.get(KEYS.clientId, '');
+  if(!id){
+    id = uid('client');
+    store.set(KEYS.clientId, id);
+  }
+  return id;
+}
+
+function migrateStorage(){
+  const existing = Number(store.get(KEYS.schema, 0)) || 0;
+  if(existing >= SCHEMA_VERSION) return;
+
+  const decks = store.get(KEYS.decks, {});
+  const tests = store.get(KEYS.tests, {});
+  const results = store.get(KEYS.results, []);
+  const archived = store.get(KEYS.archived, []);
+  const outbox = store.get(KEYS.outbox, []);
+
+  if(!decks || typeof decks !== 'object' || Array.isArray(decks)) store.set(KEYS.decks, {});
+  if(!tests || typeof tests !== 'object' || Array.isArray(tests)) store.set(KEYS.tests, {});
+  if(!Array.isArray(results)) store.set(KEYS.results, []);
+  if(!Array.isArray(archived)) store.set(KEYS.archived, []);
+  if(!Array.isArray(outbox)) store.set(KEYS.outbox, []);
+
+  store.set(KEYS.schema, SCHEMA_VERSION);
+}
 
 //////////////////////// fetch helpers /////////////////////////
 // Timeout wrapper (Safari-friendly)
@@ -199,12 +238,18 @@ function makeBackupObject(){
 
 async function cloudPullHandler(){
   try{
+    const localDecks = Object.keys(state.decks || {}).length;
+    const localTests = Object.keys(state.tests || {}).length;
+    if(localDecks || localTests){
+      const ok = confirm(`Pull from Cloud?\n\nThis will replace your local decks/tests with the Cloud version.\nLocal changes not in the Cloud may be lost.\n\nLocal: ${localDecks} deck(s), ${localTests} test(s).`);
+      if(!ok) return;
+    }
     $('#cloudPullBtn')?.setAttribute('disabled','true');
     const {decks, tests} = await getAllFromCloud();
     state.decks = decks; state.tests = tests;
     mergeDecksByName(); normalizeTests();
-    store.set(KEYS.decks, state.decks);
-    store.set(KEYS.tests, state.tests);
+    saveDecks();
+    saveTests();
     renderCreate(); renderBuild(); renderReports();
     toast('Pulled from Cloud');
   }catch(err){
@@ -248,7 +293,7 @@ async function resultsRefreshFromCloud(){
       answers : (()=>{ try { return JSON.parse(r.answersJSON||'[]'); } catch { return []; }})()
     }));
 
-    store.set(KEYS.results, state.results);
+    saveResults();
     renderReports();
     toast('Results pulled from Cloud');
   }catch(err){
@@ -289,8 +334,8 @@ async function maybeHydrateFromCloud(force = false){
       if(student) setStudentLoading(true);
       const {decks, tests} = await getAllFromCloud();
       state.decks = decks; state.tests = tests;
-      store.set(KEYS.decks, decks);
-      store.set(KEYS.tests, tests);
+      saveDecks();
+      saveTests();
     }catch(err){
       console.warn('Cloud hydrate failed:', err.message||err);
       if(!student){
@@ -311,6 +356,9 @@ async function maybeHydrateFromCloud(force = false){
 /* --------------------------------------------------------------- */
 
 /////////////////////////// global state /////////////////////////
+migrateStorage();
+const clientId = getClientId();
+
 let state = {
   decks   : store.get(KEYS.decks, {}),
   tests   : store.get(KEYS.tests, {}),
@@ -319,12 +367,56 @@ let state = {
   outbox  : store.get(KEYS.outbox, []),
   practice: { cards:[], idx:0 },
   quiz    : { items:[], idx:0, n:30, locked:false, testId:'', submitting:false },
-  ui      : { currentTestId: null, subFilter: '' }
+  ui      : { currentTestId: null, subFilter: '' },
+  meta    : { decksVersion: 0, testsVersion: 0, resultsVersion: 0, archivedVersion: 0 }
 };
 
 //////////////////////////// outbox //////////////////////////////
 let __outboxFlushPromise = null;
-function persistOutbox(){ store.set(KEYS.outbox, state.outbox); }
+const cache = {
+  deckListVersion: -1,
+  deckList: [],
+  missedVersion: -1,
+  missedHtml: '',
+  locationKey: '',
+  locationHtml: ''
+};
+
+function saveDecks(){ store.set(KEYS.decks, state.decks); state.meta.decksVersion++; }
+function saveTests(){ store.set(KEYS.tests, state.tests); state.meta.testsVersion++; }
+function saveResults(){ store.set(KEYS.results, state.results); state.meta.resultsVersion++; }
+function saveArchived(){ store.set(KEYS.archived, state.archived); state.meta.archivedVersion++; }
+
+function validateResultRow(row){
+  if(!row) return 'Missing result payload';
+  if(!row.id) return 'Missing result id';
+  if(!row.name) return 'Missing name';
+  if(!row.location) return 'Missing location';
+  if(!row.date) return 'Missing date';
+  if(!row.testId) return 'Missing test id';
+  if(!row.testName) return 'Missing test name';
+  if(!Array.isArray(row.answers)) return 'Missing answers';
+  return '';
+}
+function persistOutbox(){ store.set(KEYS.outbox, state.outbox); updateOutboxIndicator(); }
+function updateOutboxIndicator(){
+  const el = document.getElementById('outboxStatus');
+  if(!el) return;
+  const count = state.outbox.length;
+  el.textContent = count ? `Pending sync: ${count}` : 'All synced';
+  el.classList.toggle('pending', count > 0);
+}
+function ensureOutboxIndicator(){
+  if(document.getElementById('outboxStatus')) return;
+  const footer = document.querySelector('.footer');
+  if(!footer) return;
+  const span = document.createElement('span');
+  span.id = 'outboxStatus';
+  span.className = 'hint';
+  span.style.marginLeft = '8px';
+  footer.appendChild(span);
+  updateOutboxIndicator();
+}
 function enqueueOutbox(action, payload){
   const exists = state.outbox.some(item => item.action === action && item.id === payload.id);
   if(exists) return;
@@ -338,9 +430,24 @@ function enqueueOutbox(action, payload){
   });
   persistOutbox();
 }
+function isOutboxPending(id){
+  return state.outbox.some(item => item.id === id);
+}
+function acquireOutboxLock(){
+  const now = Date.now();
+  const existing = Number(localStorage.getItem(KEYS.outboxLock) || 0);
+  if(existing && now - existing < 15000) return false;
+  localStorage.setItem(KEYS.outboxLock, String(now));
+  return true;
+}
+function releaseOutboxLock(){
+  const existing = Number(localStorage.getItem(KEYS.outboxLock) || 0);
+  if(existing) localStorage.removeItem(KEYS.outboxLock);
+}
 async function flushOutbox(forceToast=false){
   if(__outboxFlushPromise) return __outboxFlushPromise;
   if(!state.outbox.length) return;
+  if(!acquireOutboxLock()) return;
 
   __outboxFlushPromise = (async ()=>{
     const now = Date.now();
@@ -362,7 +469,10 @@ async function flushOutbox(forceToast=false){
     state.outbox = remaining;
     persistOutbox();
     if(forceToast && sent){ toast(`Synced ${sent} queued result${sent===1?'':'s'}.`); }
-  })().finally(()=>{ __outboxFlushPromise = null; });
+  })().finally(()=>{
+    releaseOutboxLock();
+    __outboxFlushPromise = null;
+  });
 
   return __outboxFlushPromise;
 }
@@ -440,11 +550,16 @@ function applyStudentMode(){
 
 /////////////////////// deck merge helpers ///////////////////////
 function listUniqueDecks(){
+  if(cache.deckListVersion === state.meta.decksVersion && cache.deckList.length){
+    return cache.deckList.slice();
+  }
   const seen=new Set(), arr=[];
   for(const d of Object.values(state.decks)){
     const k=deckKey(d); if(!seen.has(k)){ seen.add(k); arr.push(d); }
   }
   arr.sort((a,b)=> (a.className||'').localeCompare(b.className||'') || (a.deckName||'').localeCompare(b.deckName||'')); 
+  cache.deckListVersion = state.meta.decksVersion;
+  cache.deckList = arr.slice();
   return arr;
 }
 function deckSubTags(d){
@@ -473,8 +588,8 @@ function mergeDecksByName(){
     }
     t.selections=dedupeSelections(t.selections||[]);
   }
-  if(changed) store.set(KEYS.tests,state.tests);
-  store.set(KEYS.decks,state.decks);
+  if(changed) saveTests();
+  saveDecks();
 }
 
 // ---- Always-visible CTA to load/refresh tests from Cloud ----
@@ -495,8 +610,8 @@ async function loadTestsNow(btn){
     // Normalize + persist
     mergeDecksByName();
     normalizeTests();
-    store.set(KEYS.decks, state.decks);
-    store.set(KEYS.tests, state.tests);
+    saveDecks();
+    saveTests();
 
     // Re-render UI that depends on tests
     renderCreate();
@@ -596,23 +711,23 @@ function renderCreate(){
   renderSubdeckManager();
   renderCardsList();
 
-  on($('#createSubdeckBtn'),'click',createSubdeck);
-  on($('#toggleSubdeckBtn'),'click',toggleNewSubdeck);
-  on($('#addDeckBtn'),'click',addDeck);
-  on($('#renameDeckBtn'),'click',renameDeck);
-  on($('#editDeckMetaBtn'),'click',editDeckMeta);
-  on($('#deleteDeckBtn'),'click',deleteDeck);
-  on($('#exportDeckBtn'),'click',exportDeck);
-  on($('#importDeckBtn'),'click',()=>{ toast('Choose a JSON or TXT file to import…',1400); $('#importDeckInput')?.click(); });
-  on($('#importDeckInput'),'change',importDeckInputChange);
-  on($('#bulkSummaryBtn'),'click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
-  on($('#bulkAddBtn'),'click',bulkAddCards);
-  on($('#addCardBtn'),'click',addCard);
+  bindOnce($('#createSubdeckBtn'),'click',createSubdeck);
+  bindOnce($('#toggleSubdeckBtn'),'click',toggleNewSubdeck);
+  bindOnce($('#addDeckBtn'),'click',addDeck);
+  bindOnce($('#renameDeckBtn'),'click',renameDeck);
+  bindOnce($('#editDeckMetaBtn'),'click',editDeckMeta);
+  bindOnce($('#deleteDeckBtn'),'click',deleteDeck);
+  bindOnce($('#exportDeckBtn'),'click',exportDeck);
+  bindOnce($('#importDeckBtn'),'click',()=>{ toast('Choose a JSON or TXT file to import…',1400); $('#importDeckInput')?.click(); });
+  bindOnce($('#importDeckInput'),'change',importDeckInputChange);
+  bindOnce($('#bulkSummaryBtn'),'click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
+  bindOnce($('#bulkAddBtn'),'click',bulkAddCards);
+  bindOnce($('#addCardBtn'),'click',addCard);
 
-  on($('#cloudPullBtn'),'click',cloudPullHandler);
-  on($('#cloudPushBtn'),'click',cloudPushHandler);
+  bindOnce($('#cloudPullBtn'),'click',cloudPullHandler);
+  bindOnce($('#cloudPushBtn'),'click',cloudPushHandler);
 
-  on($('#deckSelect'),'change',()=>{ 
+  bindOnce($('#deckSelect'),'change',()=>{ 
     state.ui.subFilter=''; 
     renderDeckMeta(); renderSubdeckManager(); renderCardsList(); 
   });
@@ -640,16 +755,16 @@ function renderDeckMeta(){
   subsEl.innerHTML=subs.length?subs.map(s=>`
     <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
   `).join(''):`<span class="hint">No sub-decks yet</span>`;
-  subsEl.querySelectorAll('.remove').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const tag=btn.dataset.sub;
-      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-      d.tags=(d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-      store.set(KEYS.decks,state.decks);
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    });
-  });
+  bindOnce(subsEl, 'click', (event)=>{
+    const btn = event.target.closest('.remove');
+    if(!btn) return;
+    const tag=btn.dataset.sub;
+    const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
+    d.tags=(d.tags||[]).filter(t=>t!==tag);
+    if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
+    saveDecks();
+    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+  }, 'deckMetaRemove');
 
   const subSel = $('#cardsSubFilter');
   if(subSel){
@@ -667,16 +782,16 @@ function renderSubdeckManager(){
   list.innerHTML=subs.length?subs.map(s=>`
     <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
   `).join(''):`<span class="hint">No sub-decks yet.</span>`;
-  list.querySelectorAll('.remove').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const tag=btn.dataset.sub;
-      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-      d.tags=(d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-      store.set(KEYS.decks,state.decks);
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    });
-  });
+  bindOnce(list, 'click', (event)=>{
+    const btn = event.target.closest('.remove');
+    if(!btn) return;
+    const tag=btn.dataset.sub;
+    const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
+    d.tags=(d.tags||[]).filter(t=>t!==tag);
+    if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
+    saveDecks();
+    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+  }, 'subdeckRemove');
 }
 function renderCardsList(){
   const cardsList=$('#cardsList'); if(!cardsList) return;
@@ -695,34 +810,40 @@ function renderCardsList(){
       <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
     </div>`).join('');
 
-  cardsList.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',()=>{
+  bindOnce(cardsList, 'click', (event)=>{
+    const delBtn = event.target.closest('.btn-del');
+    const editBtn = event.target.closest('.btn-edit');
+    if(!delBtn && !editBtn) return;
     const keepDeckId = selectedDeckId(); if(!keepDeckId) return;
     const y = window.scrollY;
-    const d=state.decks[keepDeckId];
-    const cid=b.closest('.cardline').dataset.id;
-    d.cards=d.cards.filter(c=>c.id!==cid);
-    store.set(KEYS.decks,state.decks);
+    const deck = state.decks[keepDeckId];
+    const cid = event.target.closest('.cardline')?.dataset.id;
+    if(!cid || !deck) return;
 
-    renderDeckSelect();
-    const deckSelect = $('#deckSelect');
-    if (deckSelect) deckSelect.value = keepDeckId;
+    if(delBtn){
+      deck.cards = deck.cards.filter(c=>c.id!==cid);
+      saveDecks();
+      renderDeckSelect();
+      const deckSelect = $('#deckSelect');
+      if (deckSelect) deckSelect.value = keepDeckId;
+      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+      window.scrollTo(0, y);
+      toast('Card deleted');
+      return;
+    }
 
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    window.scrollTo(0, y);
-    toast('Card deleted');
-  }));
-
-  cardsList.querySelectorAll('.btn-edit').forEach(b=>b.addEventListener('click',()=>{
-    const cid=b.closest('.cardline').dataset.id; const card=d.cards.find(c=>c.id===cid); if(!card) return;
-    const q=prompt('Question:',card.q); if(q===null) return;
-    const a=prompt('Correct answer:',card.a); if(a===null) return;
-    const wrong=prompt('Wrong answers (separate by |):',(card.distractors||[]).join('|'));
-    const sub=prompt('Card sub-deck (optional):',card.sub||''); if(sub===null) return;
-    card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
-    if(card.sub){ d.tags=unique([...(d.tags||[]),card.sub]); }
-    store.set(KEYS.decks,state.decks); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    toast('Card updated');
-  }));
+    if(editBtn){
+      const card = deck.cards.find(c=>c.id===cid); if(!card) return;
+      const q=prompt('Question:',card.q); if(q===null) return;
+      const a=prompt('Correct answer:',card.a); if(a===null) return;
+      const wrong=prompt('Wrong answers (separate by |):',(card.distractors||[]).join('|'));
+      const sub=prompt('Card sub-deck (optional):',card.sub||''); if(sub===null) return;
+      card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
+      if(card.sub){ deck.tags=unique([...(deck.tags||[]),card.sub]); }
+      saveDecks(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+      toast('Card updated');
+    }
+  }, 'cardsList');
 }
 
 // CREATE handlers
@@ -730,7 +851,7 @@ function createSubdeck(){
   const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
   const name=($('#subdeckNewName')?.value||'').trim(); if(!name) return;
   const d=state.decks[id]; d.tags=unique([...(d.tags||[]),name]);
-  store.set(KEYS.decks,state.decks); $('#subdeckNewName').value='';
+  saveDecks(); $('#subdeckNewName').value='';
   renderDeckMeta(); renderSubdeckManager(); toast('Sub-deck added');
 }
 function toggleNewSubdeck(){
@@ -747,13 +868,13 @@ function addDeck(){
   let existing=Object.values(state.decks).find(d=>(d.className||'').toLowerCase()===cls.toLowerCase()&&(d.deckName||'').toLowerCase()===dnm.toLowerCase());
   if(existing){
     const deckSelect=$('#deckSelect'); if(deckSelect) deckSelect.value=existing.id;
-    if(sdn){ existing.tags=unique([...(existing.tags||[]),sdn]); store.set(KEYS.decks,state.decks); }
+    if(sdn){ existing.tags=unique([...(existing.tags||[]),sdn]); saveDecks(); }
     renderDeckMeta(); renderSubdeckManager(); renderCardsList(); renderDeckSelect();
     toast('Selected existing deck'); return;
   }
   const id=uid('deck');
   state.decks[id]={id,className:cls,deckName:dnm,cards:[],tags:sdn?[sdn]:[],createdAt:Date.now()};
-  store.set(KEYS.decks,state.decks);
+  saveDecks();
 
   if($('#newClassName')) $('#newClassName').value='';
   if($('#newDeckName'))  $('#newDeckName').value='';
@@ -769,7 +890,7 @@ function renameDeck(){
   const cls=prompt('Class:',d.className||''); if(cls===null) return;
   const dnk=prompt('Deck (by name):',d.deckName||''); if(dnk===null) return;
   d.className=cls.trim(); d.deckName=dnk.trim();
-  store.set(KEYS.decks,state.decks); mergeDecksByName();
+  saveDecks(); mergeDecksByName();
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast('Deck renamed');
 }
@@ -778,7 +899,7 @@ function editDeckMeta(){
   const d=state.decks[id];
   const cls=prompt('Edit Class:',d.className||''); if(cls===null) return;
   d.className=cls.trim();
-  store.set(KEYS.decks,state.decks); mergeDecksByName();
+  saveDecks(); mergeDecksByName();
   renderDeckSelect(); renderDeckMeta();
   toast('Meta updated');
 }
@@ -786,7 +907,7 @@ function deleteDeck(){
   const id=selectedDeckId(); if(!id) return;
   if(confirm('Delete this deck and its cards?')){
     delete state.decks[id];
-    store.set(KEYS.decks,state.decks);
+    saveDecks();
     renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
     toast('Deck deleted');
   }
@@ -818,7 +939,7 @@ async function importDeckInputChange(e){
         createdAt:Date.now()
       })));
       if(declaredTag) ex.tags=unique([...(ex.tags||[]),declaredTag]);
-      store.set(KEYS.decks,state.decks);
+      saveDecks();
       renderDeckSelect(); toast('Deck imported');
     };
     if(data && data.deckName && Array.isArray(data.cards)){ upsertDeck(data.className||'Class',data.deckName,data.cards,(data.subdeck||'').trim()); }
@@ -842,7 +963,7 @@ function bulkAddCards(){
     let sub=''; if(parts[parts.length-1].startsWith?.('#')) sub=parts.pop().slice(1);
     const [q,a,...wrongs]=parts; state.decks[id].cards.push({id:uid('card'),q,a,distractors:wrongs,sub,createdAt:Date.now()}); n++;
   }
-  store.set(KEYS.decks,state.decks); if($('#bulkTextarea')) $('#bulkTextarea').value='';
+  saveDecks(); if($('#bulkTextarea')) $('#bulkTextarea').value='';
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast(`Added ${n} card(s)`);
 }
@@ -853,7 +974,7 @@ function addCard(){
   if(!q||!a||!w1) return alert('Enter question, correct, and at least one wrong answer.');
   state.decks[id].cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
   if(sub){ const d=state.decks[id]; d.tags=unique([...(d.tags||[]),sub]); }
-  store.set(KEYS.decks,state.decks);
+  saveDecks();
   ['#qInput','#aCorrectInput','#aWrong1Input','#aWrong2Input','#aWrong3Input','#cardSubInput'].forEach(sel=>{ if($(sel)) $(sel).value=''; });
   renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast('Card saved');
@@ -872,15 +993,15 @@ function renderTestsDatalist(){
   dl.innerHTML=arr.map(t=>`<option value="${esc(t.name)}"></option>`).join('');
 }
 function bindBuildButtons(){
-  on($('#saveTestBtn'),'click',saveTest);
-  on($('#renameTestBtn'),'click',renameTest);
-  on($('#deleteTestBtn'),'click',deleteTest);
-  on($('#copyShareBtn'),'click',copyShareLink);
-  on($('#openShareBtn'),'click',openSharePreview);
-  on($('#previewToggle'),'change',syncPreview);
-  on($('#previewPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); });
-  on($('#previewQuizBtn'),'click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
-  on($('#testNameInput'),'input',handleTestNameInput);
+  bindOnce($('#saveTestBtn'),'click',saveTest);
+  bindOnce($('#renameTestBtn'),'click',renameTest);
+  bindOnce($('#deleteTestBtn'),'click',deleteTest);
+  bindOnce($('#copyShareBtn'),'click',copyShareLink);
+  bindOnce($('#openShareBtn'),'click',openSharePreview);
+  bindOnce($('#previewToggle'),'change',syncPreview);
+  bindOnce($('#previewPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); });
+  bindOnce($('#previewQuizBtn'),'click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
+  bindOnce($('#testNameInput'),'input',handleTestNameInput);
 }
 function handleTestNameInput(){
   const typed = $('#testNameInput')?.value.trim().toLowerCase();
@@ -919,7 +1040,7 @@ function saveTest(){
   t.n = Math.max(1, +($('#builderCount')?.value) || t.n || 30);
   t.selections = dedupeSelections(readSelectionsFromUI());
 
-  store.set(KEYS.tests,state.tests);
+  saveTests();
   renderTestsDatalist();
   toast(`Test “${t.name}” saved`);
 }
@@ -933,7 +1054,7 @@ function renameTest(){
   if(!newName) return alert('Name cannot be empty.');
   t.name = newName;
   t.title = ($('#builderTitle')?.value.trim() || t.title || newName);
-  store.set(KEYS.tests, state.tests);
+  saveTests();
   renderTestsDatalist();
   if($('#testNameInput')) $('#testNameInput').value = newName;
   toast('Test renamed');
@@ -950,7 +1071,7 @@ function deleteTest(){
   const name = state.tests[id]?.name || 'Test';
   if(confirm(`Delete test “${name}”?`)){
     delete state.tests[id];
-    store.set(KEYS.tests,state.tests);
+    saveTests();
     state.ui.currentTestId = null;
     if($('#testNameInput')) $('#testNameInput').value = '';
     if($('#builderTitle')) $('#builderTitle').value = '';
@@ -1031,7 +1152,7 @@ function getCurrentTestOrSave(){
   t.title=($('#builderTitle')?.value.trim()||t.title||typedName); 
   t.n=Math.max(1,+($('#builderCount')?.value)||t.n||30); 
   t.selections=dedupeSelections(readSelectionsFromUI()); 
-  store.set(KEYS.tests,state.tests); 
+  saveTests(); 
   return t;
 }
 function syncPreview(){
@@ -1065,11 +1186,11 @@ function renderPracticeScreen(){
   if(last && sel?.querySelector(`option[value="${last}"]`)) sel.value=last;
   buildPracticeDeckChecks();
 
-  on($('#practiceTestSelect'),'change',()=>{ buildPracticeDeckChecks(); store.set('bq_last_test',$('#practiceTestSelect').value); });
-  on($('#startPracticeBtn'),'click',startPractice);
-  on($('#practicePrev'),'click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
-  on($('#practiceNext'),'click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
-  on($('#practiceShuffle'),'click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
+  bindOnce($('#practiceTestSelect'),'change',()=>{ buildPracticeDeckChecks(); store.set('bq_last_test',$('#practiceTestSelect').value); });
+  bindOnce($('#startPracticeBtn'),'click',startPractice);
+  bindOnce($('#practicePrev'),'click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
+  bindOnce($('#practiceNext'),'click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
+  bindOnce($('#practiceShuffle'),'click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
 }
 function fillTestsSelect(sel,lockToStudent=false){
   if(!sel) return;
@@ -1157,10 +1278,10 @@ function renderQuizScreen(){
 
   startOrRefreshQuiz();
 
-  on($('#quizTestSelect'),'change',()=>{ startOrRefreshQuiz(); store.set('bq_last_test',$('#quizTestSelect').value); });
-  on($('#quizPrev'),'click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
-  on($('#quizNext'),'click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
-  on($('#submitQuizBtn'),'click',submitQuiz);
+  bindOnce($('#quizTestSelect'),'change',()=>{ startOrRefreshQuiz(); store.set('bq_last_test',$('#quizTestSelect').value); });
+  bindOnce($('#quizPrev'),'click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
+  bindOnce($('#quizNext'),'click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
+  bindOnce($('#submitQuizBtn'),'click',submitQuiz);
 }
 function startOrRefreshQuiz(){
   const tid=$('#quizTestSelect')?.value; const t=state.tests[tid];
@@ -1236,8 +1357,31 @@ async function submitQuiz(){
   const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
   const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
 
-  const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
-  state.results.push(row); store.set(KEYS.results,state.results);
+  const row={
+    id: uid('res'),
+    clientId,
+    idempotencyKey: `${clientId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`,
+    name,
+    location: loc,
+    date: dt,
+    time: Date.now(),
+    testId: tid,
+    testName: t.name,
+    score,
+    correct,
+    of: total,
+    answers
+  };
+
+  const validationError = validateResultRow(row);
+  if(validationError){
+    alert(`Submission invalid: ${validationError}`);
+    state.quiz.submitting = false;
+    $('#submitQuizBtn')?.removeAttribute('disabled');
+    return;
+  }
+
+  state.results.push(row); saveResults();
 
   try{
     enqueueOutbox('submitresult', row);
@@ -1256,7 +1400,11 @@ async function submitQuiz(){
         <span class="tag good">Correct: ${esc(a.correct)}</span>
       </div>
     </div>`).join('');
-  toast('Submission saved');
+  if(isOutboxPending(row.id)){
+    toast('Submission queued (offline)');
+  }else{
+    toast('Submission synced');
+  }
 
   on($('#restartQuizBtn'),'click',()=>{ $('#quizFinished')?.classList.add('hidden'); $('#quizArea')?.classList.remove('hidden'); startOrRefreshQuiz(); }, { once:true });
   on($('#finishedPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); }, { once:true });
@@ -1282,13 +1430,13 @@ function renderReports(){
 
   drawReports();
 
-  on($('#repLocation'),'change',drawReports);
-  on($('#repAttemptView'),'change',drawReports);
-  on($('#repSort'),'change',drawReports);
-  on($('#repView'),'change',drawReports);
-  on($('#repDateFrom'),'change',drawReports);
-  on($('#repDateTo'),'change',drawReports);
-  on($('#repTest'),'change',drawReports);
+  bindOnce($('#repLocation'),'change',drawReports);
+  bindOnce($('#repAttemptView'),'change',drawReports);
+  bindOnce($('#repSort'),'change',drawReports);
+  bindOnce($('#repView'),'change',drawReports);
+  bindOnce($('#repDateFrom'),'change',drawReports);
+  bindOnce($('#repDateTo'),'change',drawReports);
+  bindOnce($('#repTest'),'change',drawReports);
 }
 function drawReports(){
   const view    = ($('#repView')?.value || 'active');
@@ -1337,60 +1485,51 @@ function drawReports(){
     </td>
   </tr>`).join('');
 
-  tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
-    const id=btn.closest('tr').dataset.id; const src = view==='archived'?state.archived:state.results;
-    const r=src.find(x=>x.id===id); if(!r) return;
-    const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
-      <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
-      <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
-      <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
-    </div>`).join('');
-    const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
-    w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
-      <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
-      <div>${rows}</div>
-    </body>`);
-  }));
-  tb.querySelectorAll('button[data-act]').forEach(b=>b.addEventListener('click',async ()=>{
-    const id = b.closest('tr').dataset.id;
-    const act= b.dataset.act;
+  bindOnce(tb, 'click', async (event)=>{
+    const row = event.target.closest('tr'); if(!row) return;
+    const id = row.dataset.id;
+    const viewMode = ($('#repView')?.value || 'active');
+    if(event.target.closest('.view-btn')){
+      const src = viewMode==='archived'?state.archived:state.results;
+      const r=src.find(x=>x.id===id); if(!r) return;
+      const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
+        <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
+        <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
+        <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
+      </div>`).join('');
+      const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
+      w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
+        <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
+        <div>${rows}</div>
+      </body>`);
+      return;
+    }
 
+    const act = event.target.closest('button[data-act]')?.dataset.act;
+    if(!act) return;
     if (act==='archive'){
       if (await archiveResult(id)) toast('Result archived');
     } else if (act==='restore'){
       if (await restoreResult(id)) toast('Result restored');
     } else if (act==='delete-forever'){
       if (confirm('Delete this result permanently?')) {
-        if (await deleteForever(id, view==='archived'?'archived':'active')) toast('Result deleted');
+        if (await deleteForever(id, viewMode==='archived'?'archived':'active')) toast('Result deleted');
       }
     }
     drawReports();
-  }));
+  }, 'reportsTable');
 
   renderLocationAverages(view, loc, attempt, fromISO, toISO, testNm);
 
-  const baseRows=[...state.results];
-  const missMap=new Map();
-  for(const r of baseRows){
-    for(const a of (r.answers||[])){
-      const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
-      const m=missMap.get(k); m.total++; if(a.picked!==a.correct) m.misses++;
-    }
-  }
-  const top=[...missMap.values()].filter(x=>x.total>0).sort((a,b)=>b.misses-a.misses).slice(0,10);
-  if($('#missedSummary')) $('#missedSummary').innerHTML = top.length? top.map(m=>`
-    <div class="missrow">
-      <div class="misscount"><div>${m.misses}/${m.total}</div><div class="hint">missed</div></div>
-      <div class="missq">${esc(m.q)}</div>
-    </div>`).join('') : '<div class="hint">No data yet.</div>';
+  if($('#missedSummary')) $('#missedSummary').innerHTML = getMissedSummaryHtml();
 }
 async function archiveResult(id){
   const i = state.results.findIndex(r=>r.id===id);
   if(i>-1){
     const [row]=state.results.splice(i,1);
     state.archived.push(row);
-    store.set(KEYS.results,state.results);
-    store.set(KEYS.archived,state.archived);
+    saveResults();
+    saveArchived();
     try{ await cloudPOST('archivemove', { id, to:'archived' }); }catch(_){}
     return true;
   }
@@ -1401,8 +1540,8 @@ async function restoreResult(id){
   if(i>-1){
     const [row]=state.archived.splice(i,1);
     state.results.push(row);
-    store.set(KEYS.results,state.results);
-    store.set(KEYS.archived,state.archived);
+    saveResults();
+    saveArchived();
     try{ await cloudPOST('archivemove', { id, to:'active' }); }catch(_){}
     return true;
   }
@@ -1413,8 +1552,8 @@ async function deleteForever(id, from='active'){
   const i = list.findIndex(r=>r.id===id);
   if(i>-1){
     list.splice(i,1);
-    store.set(KEYS.results,state.results);
-    store.set(KEYS.archived,state.archived);
+    saveResults();
+    saveArchived();
     try{ await cloudPOST('deleteforever', { id, from }); }catch(_){}
     return true;
   }
@@ -1437,6 +1576,15 @@ function computeLocationAverages(rows){
 }
 function renderLocationAverages(view='active', locFilter='', attempt='all', fromISO='', toISO='', testNm=''){
   const box  = $('#locationAverages'); if(!box) return;
+  const cacheKey = [
+    state.meta.resultsVersion,
+    state.meta.archivedVersion,
+    view, locFilter, attempt, fromISO, toISO, testNm
+  ].join('|');
+  if(cache.locationKey === cacheKey && cache.locationHtml){
+    box.innerHTML = cache.locationHtml;
+    return;
+  }
   let base = view==='archived' ? [...state.archived] : [...state.results];
 
   if (locFilter) base = base.filter(r => r.location === locFilter);
@@ -1452,14 +1600,41 @@ function renderLocationAverages(view='active', locFilter='', attempt='all', from
 
   const avgs = computeLocationAverages(base);
   if (!avgs.length){
-    box.innerHTML = '<div class="hint">No data yet.</div>'; return;
+    cache.locationKey = cacheKey;
+    cache.locationHtml = '<div class="hint">No data yet.</div>';
+    box.innerHTML = cache.locationHtml;
+    return;
   }
-  box.innerHTML = avgs.map(x=>`
+  cache.locationKey = cacheKey;
+  cache.locationHtml = avgs.map(x=>`
     <div class="missrow">
       <div class="misscount"><div>${x.count}</div><div class="hint">attempts</div></div>
       <div class="missq"><strong>${esc(x.location)}</strong> — avg <strong>${Math.round(x.avg)}%</strong></div>
     </div>
   `).join('');
+  box.innerHTML = cache.locationHtml;
+}
+
+function getMissedSummaryHtml(){
+  if(cache.missedVersion === state.meta.resultsVersion && cache.missedHtml){
+    return cache.missedHtml;
+  }
+  const baseRows=[...state.results];
+  const missMap=new Map();
+  for(const r of baseRows){
+    for(const a of (r.answers||[])){
+      const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
+      const m=missMap.get(k); m.total++; if(a.picked!==a.correct) m.misses++;
+    }
+  }
+  const top=[...missMap.values()].filter(x=>x.total>0).sort((a,b)=>b.misses-a.misses).slice(0,10);
+  cache.missedVersion = state.meta.resultsVersion;
+  cache.missedHtml = top.length ? top.map(m=>`
+    <div class="missrow">
+      <div class="misscount"><div>${m.misses}/${m.total}</div><div class="hint">missed</div></div>
+      <div class="missq">${esc(m.q)}</div>
+    </div>`).join('') : '<div class="hint">No data yet.</div>';
+  return cache.missedHtml;
 }
 
 //////////////////// Full Backup / Restore //////////////////////
@@ -1511,10 +1686,10 @@ function importBackupData(data){
   }
   const modeMerge = confirm('How to apply backup?\n\nOK = MERGE into existing\nCancel = REPLACE (wipe current and restore backup)');
   if(modeMerge) mergeBackup(data); else replaceBackup(data);
-  store.set(KEYS.decks,   state.decks);
-  store.set(KEYS.tests,   state.tests);
-  store.set(KEYS.results, state.results);
-  store.set(KEYS.archived,state.archived);
+  saveDecks();
+  saveTests();
+  saveResults();
+  saveArchived();
   toast(modeMerge ? 'Backup merged' : 'Backup restored (replaced)');
   renderCreate(); renderBuild(); renderReports();
 }
@@ -1630,7 +1805,7 @@ function normalizeTests(){
     const norm=dedupeSelections(t.selections||[]);
     if(JSON.stringify(norm)!==JSON.stringify(t.selections||[])){ t.selections=norm; changed=true; }
   }
-  if(changed) store.set(KEYS.tests,state.tests);
+  if(changed) saveTests();
 }
 
 function ensureReportsButtons(){
@@ -1652,6 +1827,7 @@ function ensureReportsButtons(){
 async function boot(){
   mergeDecksByName();
   normalizeTests();
+  ensureOutboxIndicator();
 
   // optional: add a small student loading banner container if not present
   if(!$('#studentLoading')){
@@ -1670,6 +1846,10 @@ async function boot(){
    ensureLoadTestsCTA(document.querySelector('#view-practice .card'));
 
   window.addEventListener('online', ()=>flushOutbox());
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'visible') flushOutbox();
+  });
+  setInterval(()=>flushOutbox(), 30000);
   flushOutbox();
 
   $$('select').forEach(sel=>{
