@@ -6,7 +6,7 @@
 
 /* ========= Cloud API Config (EDIT AFTER REDEPLOY) ========= */
 const CLOUD = {
-  BASE: "https://script.google.com/macros/s/AKfycbztbXuLLEji2Lzm1zwq28cL1bXDzQkrDy0EvC0mgmre-NklUYichq6sbIpglFXeyDv6nA/exec",
+  BASE: "https://script.google.com/macros/s/AKfycbxmiYAOmiQRznk25Gu_rM2i5AbdWYS1zTEtNPGuNTZJ4Lbz6r9uBkOb_3IcTXKzdUnMgw/exec",
   API_KEY: "longrandomstringwhatwhat" // must match Script Property 'API_KEY'
 };
 /* ========================================================= */
@@ -36,7 +36,8 @@ const KEYS = {
   archived: 'bq_results_archived_v1',
   outbox  : 'bq_outbox_v1',
   clientId: 'bq_client_id_v1',
-  schema  : 'bq_schema_version'
+  schema  : 'bq_schema_version',
+  outboxLock: 'bq_outbox_lock_v1'
 };
 const SCHEMA_VERSION = 1;
 const ADMIN_VIEWS = new Set(['create','build','reports']);
@@ -385,7 +386,37 @@ function saveDecks(){ store.set(KEYS.decks, state.decks); state.meta.decksVersio
 function saveTests(){ store.set(KEYS.tests, state.tests); state.meta.testsVersion++; }
 function saveResults(){ store.set(KEYS.results, state.results); state.meta.resultsVersion++; }
 function saveArchived(){ store.set(KEYS.archived, state.archived); state.meta.archivedVersion++; }
-function persistOutbox(){ store.set(KEYS.outbox, state.outbox); }
+
+function validateResultRow(row){
+  if(!row) return 'Missing result payload';
+  if(!row.id) return 'Missing result id';
+  if(!row.name) return 'Missing name';
+  if(!row.location) return 'Missing location';
+  if(!row.date) return 'Missing date';
+  if(!row.testId) return 'Missing test id';
+  if(!row.testName) return 'Missing test name';
+  if(!Array.isArray(row.answers)) return 'Missing answers';
+  return '';
+}
+function persistOutbox(){ store.set(KEYS.outbox, state.outbox); updateOutboxIndicator(); }
+function updateOutboxIndicator(){
+  const el = document.getElementById('outboxStatus');
+  if(!el) return;
+  const count = state.outbox.length;
+  el.textContent = count ? `Pending sync: ${count}` : 'All synced';
+  el.classList.toggle('pending', count > 0);
+}
+function ensureOutboxIndicator(){
+  if(document.getElementById('outboxStatus')) return;
+  const footer = document.querySelector('.footer');
+  if(!footer) return;
+  const span = document.createElement('span');
+  span.id = 'outboxStatus';
+  span.className = 'hint';
+  span.style.marginLeft = '8px';
+  footer.appendChild(span);
+  updateOutboxIndicator();
+}
 function enqueueOutbox(action, payload){
   const exists = state.outbox.some(item => item.action === action && item.id === payload.id);
   if(exists) return;
@@ -724,16 +755,16 @@ function renderDeckMeta(){
   subsEl.innerHTML=subs.length?subs.map(s=>`
     <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
   `).join(''):`<span class="hint">No sub-decks yet</span>`;
-  subsEl.querySelectorAll('.remove').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const tag=btn.dataset.sub;
-      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-      d.tags=(d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-      saveDecks();
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    });
-  });
+  bindOnce(subsEl, 'click', (event)=>{
+    const btn = event.target.closest('.remove');
+    if(!btn) return;
+    const tag=btn.dataset.sub;
+    const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
+    d.tags=(d.tags||[]).filter(t=>t!==tag);
+    if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
+    saveDecks();
+    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+  }, 'deckMetaRemove');
 
   const subSel = $('#cardsSubFilter');
   if(subSel){
@@ -751,16 +782,16 @@ function renderSubdeckManager(){
   list.innerHTML=subs.length?subs.map(s=>`
     <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
   `).join(''):`<span class="hint">No sub-decks yet.</span>`;
-  list.querySelectorAll('.remove').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const tag=btn.dataset.sub;
-      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-      d.tags=(d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-      saveDecks();
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    });
-  });
+  bindOnce(list, 'click', (event)=>{
+    const btn = event.target.closest('.remove');
+    if(!btn) return;
+    const tag=btn.dataset.sub;
+    const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
+    d.tags=(d.tags||[]).filter(t=>t!==tag);
+    if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
+    saveDecks();
+    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+  }, 'subdeckRemove');
 }
 function renderCardsList(){
   const cardsList=$('#cardsList'); if(!cardsList) return;
@@ -1326,7 +1357,30 @@ async function submitQuiz(){
   const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
   const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
 
-  const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
+  const row={
+    id: uid('res'),
+    clientId,
+    idempotencyKey: `${clientId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`,
+    name,
+    location: loc,
+    date: dt,
+    time: Date.now(),
+    testId: tid,
+    testName: t.name,
+    score,
+    correct,
+    of: total,
+    answers
+  };
+
+  const validationError = validateResultRow(row);
+  if(validationError){
+    alert(`Submission invalid: ${validationError}`);
+    state.quiz.submitting = false;
+    $('#submitQuizBtn')?.removeAttribute('disabled');
+    return;
+  }
+
   state.results.push(row); saveResults();
 
   try{
@@ -1795,6 +1849,7 @@ async function boot(){
   document.addEventListener('visibilitychange', ()=>{
     if(document.visibilityState === 'visible') flushOutbox();
   });
+  setInterval(()=>flushOutbox(), 30000);
   flushOutbox();
 
   $$('select').forEach(sel=>{
