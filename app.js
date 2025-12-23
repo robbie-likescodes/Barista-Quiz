@@ -1584,7 +1584,6 @@ function drawReports(){
 
   let rows = view==='archived' ? [...state.archived] : [...state.results];
 
-  if(loc)    rows = rows.filter(r=>r.location===loc);
   if(testNm) rows = rows.filter(r=>r.testName===testNm);
   if(fromISO) rows = rows.filter(r => (r.date || '') >= fromISO);
   if(toISO)   rows = rows.filter(r => (r.date || '') <= toISO);
@@ -1595,12 +1594,20 @@ function drawReports(){
     rows=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); rows.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
   }
 
+  const baseRows = rows.slice();
+  if(loc) rows = rows.filter(r=>r.location===loc);
+
   if(sort==='date_desc') rows.sort((a,b)=>b.time-a.time);
   if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
   if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
   if(sort==='test_desc') rows.sort((a,b)=>b.testName.localeCompare(a.testName));
   if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));  
   if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));  
+
+  renderReportKpis(rows);
+  renderTestBreakdown(baseRows);
+  renderLocationCharts(baseRows, loc);
+  renderLocationTrends(baseRows);
 
   const tb=$('#repTable tbody'); if(!tb) return;
   tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
@@ -1657,6 +1664,109 @@ function drawReports(){
   renderLocationAverages(view, loc, attempt, fromISO, toISO, testNm);
 
   if($('#missedSummary')) $('#missedSummary').innerHTML = getMissedSummaryHtml();
+}
+
+function renderReportKpis(rows){
+  const attempts = rows.length;
+  const avg = attempts ? Math.round(rows.reduce((s,r)=>s+(Number(r.score)||0),0)/attempts) : 0;
+  const unique = new Set(rows.map(r=>(r.name||'').trim()).filter(Boolean)).size;
+  if($('#kpiAttempts')) $('#kpiAttempts').textContent = String(attempts);
+  if($('#kpiAverage')) $('#kpiAverage').textContent = `${avg}%`;
+  if($('#kpiUnique')) $('#kpiUnique').textContent = String(unique);
+}
+
+function renderTestBreakdown(rows){
+  const box = $('#testBreakdown'); if(!box) return;
+  if(!rows.length){
+    box.innerHTML = '<div class="hint">No attempts yet for this filter.</div>';
+    return;
+  }
+  const map = new Map();
+  for(const r of rows){
+    const key = r.testName || 'Untitled';
+    if(!map.has(key)) map.set(key, { name: key, attempts: 0, sum: 0, correct: 0, of: 0, users: new Set() });
+    const entry = map.get(key);
+    entry.attempts += 1;
+    entry.sum += Number(r.score)||0;
+    entry.correct += Number(r.correct)||0;
+    entry.of += Number(r.of)||0;
+    if(r.name) entry.users.add(r.name);
+  }
+  const out = [...map.values()].sort((a,b)=> b.attempts - a.attempts);
+  box.innerHTML = out.map(t=>{
+    const avg = t.attempts ? Math.round(t.sum / t.attempts) : 0;
+    const accuracy = t.of ? Math.round((t.correct / t.of) * 100) : 0;
+    return `<div class="report-row" data-test="${esc(t.name)}">
+      <div>
+        <strong>${esc(t.name)}</strong>
+        <div class="hint">${t.attempts} attempt${t.attempts!==1?'s':''} • ${t.users.size} barista${t.users.size!==1?'s':''}</div>
+      </div>
+      <div><div class="hint">Avg score</div><strong>${avg}%</strong></div>
+      <div><div class="hint">Accuracy</div><strong>${accuracy}%</strong></div>
+      <div><button class="btn ghost small test-focus">Open attempts</button></div>
+    </div>`;
+  }).join('');
+
+  bindOnce(box, 'click', (event)=>{
+    const btn = event.target.closest('.test-focus');
+    if(!btn) return;
+    const row = event.target.closest('.report-row');
+    const name = row?.dataset.test || '';
+    const repTest = $('#repTest');
+    if(repTest && name){
+      repTest.value = name;
+      drawReports();
+      const table = document.querySelector('#repTable');
+      if(table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, 'testBreakdown');
+}
+
+function renderLocationCharts(rows, selectedLoc){
+  const box = $('#locationCharts'); if(!box) return;
+  if(!rows.length){ box.innerHTML = '<div class="hint">No location data yet.</div>'; return; }
+  const data = computeLocationAverages(rows);
+  const maxCount = Math.max(...data.map(d=>d.count));
+  box.innerHTML = data.map(d=>{
+    const pct = maxCount ? Math.round((d.count / maxCount) * 100) : 0;
+    const avg = Math.round(d.avg);
+    const active = selectedLoc && selectedLoc === d.location;
+    return `<div class="chart-row ${active?'selected':''}">
+      <div class="chart-label">${esc(d.location)}</div>
+      <div class="chart-bar"><span style="width:${pct}%"></span></div>
+      <div class="chart-value">${avg}% • ${d.count}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderLocationTrends(rows){
+  const box = $('#locationTrends'); if(!box) return;
+  if(!rows.length){ box.innerHTML = '<div class="hint">No trend data yet.</div>'; return; }
+  const map = new Map();
+  for(const r of rows){
+    const key = (r.location || 'Unknown').trim();
+    if(!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  }
+  const out = [];
+  map.forEach((list, loc)=>{
+    const sorted = list.slice().sort((a,b)=>a.time-b.time);
+    const tail = sorted.slice(-6);
+    const maxScore = Math.max(1, ...tail.map(r=>Number(r.score)||0));
+    const bars = tail.map(r=>{
+      const height = Math.max(12, Math.round(((Number(r.score)||0) / maxScore) * 100));
+      const active = (Number(r.score)||0) >= 80;
+      return `<span class="${active?'active':''}" style="height:${height}%"></span>`;
+    }).join('');
+    out.push({ loc, bars });
+  });
+  out.sort((a,b)=>a.loc.localeCompare(b.loc));
+  box.innerHTML = out.map(d=>`
+    <div class="trend-row">
+      <div class="chart-label">${esc(d.loc)}</div>
+      <div class="sparkline" aria-hidden="true">${d.bars}</div>
+    </div>
+  `).join('');
 }
 async function archiveResult(id){
   const i = state.results.findIndex(r=>r.id===id);

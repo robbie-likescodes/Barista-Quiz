@@ -7,8 +7,8 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=24" />
-  <script defer src="app.js?v=19"></script>
+  <link rel="stylesheet" href="styles.css?v=25" />
+  <script defer src="app.js?v=20"></script>
 </head>
 <body>
   <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
@@ -396,10 +396,49 @@
         </div>
       </div>
 
+      <div class="grid g3 report-kpis">
+        <div class="card kpi-card">
+          <div class="kpi-label">Attempts</div>
+          <div class="kpi-value" id="kpiAttempts">0</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-label">Average Score</div>
+          <div class="kpi-value" id="kpiAverage">0%</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-label">Unique Baristas</div>
+          <div class="kpi-value" id="kpiUnique">0</div>
+        </div>
+      </div>
+
+      <div class="card report-panel">
+        <div class="card-head">
+          <strong>Test Breakdown</strong>
+          <span class="hint">Open any test to see the detailed attempts below.</span>
+        </div>
+        <div id="testBreakdown" class="report-list"></div>
+      </div>
+
+      <div class="card report-panel">
+        <div class="card-head">
+          <strong>Location Overview</strong>
+          <span class="hint">Attempts and average scores by location.</span>
+        </div>
+        <div id="locationCharts" class="chart-grid"></div>
+      </div>
+
       <!-- Location Averages -->
       <div class="card" id="locAvgCard">
         <h3>Location Averages</h3>
         <div id="locationAverages" class="missed"></div>
+      </div>
+
+      <div class="card report-panel">
+        <div class="card-head">
+          <strong>Location Progress</strong>
+          <span class="hint">Recent score trends by location.</span>
+        </div>
+        <div id="locationTrends" class="trend-grid"></div>
       </div>
 
       <div class="card table-wrap">

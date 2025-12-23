@@ -161,6 +161,32 @@ body.student .student-nav{display:flex}
   width:26px;height:26px;border-radius:999px;
   background:var(--brand);color:#fff;font-weight:700;font-size:13px
 }
+.report-kpis{margin-top:6px}
+.kpi-card{padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.kpi-label{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.kpi-value{font-size:26px;font-weight:700;color:var(--text)}
+.report-panel .card-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.report-list{display:grid;gap:12px;margin-top:10px}
+.report-row{
+  display:grid;grid-template-columns:1.4fr .8fr .8fr auto;gap:12px;
+  align-items:center;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--panel2)
+}
+.report-row strong{font-size:15px}
+.report-row .hint{font-size:12px}
+.report-row .btn{white-space:nowrap}
+.chart-grid{display:grid;gap:12px;margin-top:12px}
+.chart-row{display:grid;grid-template-columns:140px 1fr 90px;gap:12px;align-items:center}
+.chart-label{font-weight:600}
+.chart-bar{
+  height:12px;border-radius:999px;background:rgba(15,23,42,.08);position:relative;overflow:hidden
+}
+.chart-bar span{position:absolute;left:0;top:0;height:100%;background:var(--brand)}
+.chart-value{font-weight:600;text-align:right}
+.trend-grid{display:grid;gap:12px;margin-top:12px}
+.trend-row{display:grid;grid-template-columns:140px 1fr;gap:12px;align-items:center}
+.sparkline{display:flex;gap:6px;align-items:flex-end;height:46px}
+.sparkline span{flex:1;background:#ffd9a1;border-radius:6px;min-width:6px}
+.sparkline span.active{background:var(--brand)}
 .footer #outboxStatus{position:relative;padding-left:16px}
 .footer #outboxStatus::before{
   content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);
