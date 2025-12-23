@@ -139,6 +139,12 @@ body.student .menu-item[data-route="reports"]{display:none}
 .mt{margin-top:14px}.mt-sm{margin-top:8px}.mt-xs{margin-top:4px}
 .lead{font-size:18px}
 .hint{color:var(--muted);font-size:13px}
+.step-title{display:flex;align-items:center;gap:10px;font-size:16px;margin:8px 0 0}
+.step-title .step-num{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;border-radius:999px;
+  background:var(--brand);color:#fff;font-weight:700;font-size:13px
+}
 .footer #outboxStatus{position:relative;padding-left:16px}
 .footer #outboxStatus::before{
   content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);

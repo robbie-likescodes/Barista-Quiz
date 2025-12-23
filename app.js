@@ -1088,6 +1088,7 @@ function bindBuildButtons(){
   bindOnce($('#saveTestBtn'),'click',saveTest);
   bindOnce($('#renameTestBtn'),'click',renameTest);
   bindOnce($('#deleteTestBtn'),'click',deleteTest);
+  bindOnce($('#buildPushBtn'),'click',pushCurrentTestToCloud);
   bindOnce($('#copyShareBtn'),'click',copyShareLink);
   bindOnce($('#openShareBtn'),'click',openSharePreview);
   bindOnce($('#previewToggle'),'change',syncPreview);
@@ -1249,6 +1250,10 @@ function getCurrentTestOrSave(){
   t.updatedAt = Date.now();
   saveTests(); 
   return t;
+}
+async function pushCurrentTestToCloud(){
+  const t = getCurrentTestOrSave(); if(!t) return;
+  await cloudPushHandler();
 }
 function syncPreview(){
   const on = $('#previewToggle')?.checked;
