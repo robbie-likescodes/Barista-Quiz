@@ -107,7 +107,19 @@ body:not(.student) .menu-item[data-route="grades"]{display:none}
 body.student .menu-item[data-route="quizzes"]{display:none}
 body.student .topnav{display:none}
 body.student .student-nav{display:flex}
+body.student .admin-nav{display:none}
 
+.admin-nav{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:0 16px 12px;
+}
+.admin-nav .admin-nav-btn.active{
+  background:var(--primary);
+  color:#ffffff;
+  border-color:transparent;
+}
 .student-nav{
   display:none;
   gap:12px;

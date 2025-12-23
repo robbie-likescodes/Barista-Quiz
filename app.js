@@ -502,6 +502,7 @@ function activate(view){
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-'+view));
   $$('.menu-item').forEach(i => i.classList.toggle('active', i.dataset.route===view));
   $$('.student-nav-btn').forEach(i => i.classList.toggle('active', i.dataset.route===view));
+  $$('.admin-nav-btn').forEach(i => i.classList.toggle('active', i.dataset.route===view));
 
   if(view==='create')   renderCreate();
   if(view==='build')    renderBuild();
@@ -533,6 +534,12 @@ function toggleMenu(e){ const {btn,list}=menuEls(); if(!btn||!list) return; e&&e
     const studentBtn = e.target.closest('.student-nav-btn');
     if(!studentBtn) return;
     const route = studentBtn.dataset.route;
+    if(route){ setParams({view:route}); activate(route); }
+  });
+  document.addEventListener('click', (e)=>{
+    const adminBtn = e.target.closest('.admin-nav-btn');
+    if(!adminBtn) return;
+    const route = adminBtn.dataset.route;
     if(route){ setParams({view:route}); activate(route); }
   });
   document.addEventListener('click', e=>{ if(!e.target.closest('.menu')) closeMenu(); });
