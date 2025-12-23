@@ -40,7 +40,7 @@ const KEYS = {
   outboxLock: 'bq_outbox_lock_v1'
 };
 const SCHEMA_VERSION = 1;
-const ADMIN_VIEWS = new Set(['create','build','reports']);
+const ADMIN_VIEWS = new Set(['create','build','reports','settings']);
 
 //////////////////////////// utils ///////////////////////////////
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
@@ -507,6 +507,7 @@ function activate(view){
   if(view==='practice') renderPracticeScreen();
   if(view==='quiz')     renderQuizScreen();
   if(view==='reports')  renderReports();
+  if(view==='settings') renderSettings();
 
   closeMenu();
 }
@@ -724,13 +725,16 @@ function renderCreate(){
   bindOnce($('#bulkAddBtn'),'click',bulkAddCards);
   bindOnce($('#addCardBtn'),'click',addCard);
 
-  bindOnce($('#cloudPullBtn'),'click',cloudPullHandler);
-  bindOnce($('#cloudPushBtn'),'click',cloudPushHandler);
-
   bindOnce($('#deckSelect'),'change',()=>{ 
     state.ui.subFilter=''; 
     renderDeckMeta(); renderSubdeckManager(); renderCardsList(); 
   });
+}
+
+function renderSettings(){
+  ensureBackupButtons();
+  bindOnce($('#cloudPullBtn'),'click',cloudPullHandler);
+  bindOnce($('#cloudPushBtn'),'click',cloudPushHandler);
 }
 
 function renderDeckSelect(){
@@ -1639,7 +1643,7 @@ function getMissedSummaryHtml(){
 
 //////////////////// Full Backup / Restore //////////////////////
 function ensureBackupButtons(){
-  const hdr = $('#view-create .card .card-head'); if(!hdr) return;
+  const hdr = $('#view-settings .card .card-head'); if(!hdr) return;
 
   if(!$('#exportAllBtn')){
     const ex = document.createElement('button');
