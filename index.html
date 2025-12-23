@@ -7,8 +7,8 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=18" />
-  <script defer src="app.js?v=18"></script>
+  <link rel="stylesheet" href="styles.css?v=24" />
+  <script defer src="app.js?v=19"></script>
 </head>
 <body>
   <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
@@ -20,16 +20,24 @@
       <h1>Barista Flashcards &amp; Quizzes</h1>
     </div>
 
+    <!-- Student-only top actions -->
+    <div class="student-nav" aria-label="Student actions">
+      <button class="btn student-nav-btn" data-route="practice">Practice</button>
+      <button class="btn primary student-nav-btn" data-route="quiz">Quiz</button>
+    </div>
+
     <!-- Compact top nav: dropdown menu on mobile; all handled by CSS/JS -->
     <div class="topnav">
       <div class="menu">
         <button id="menuBtn" class="btn ghost" aria-haspopup="true" aria-expanded="false">Menu ≡</button>
         <div id="menuList" class="menu-list" role="menu" aria-label="Primary">
           <button class="menu-item active" data-route="create" role="menuitem">Create</button>
-          <button class="menu-item" data-route="build" role="menuitem">Build Test</button>
+          <button class="menu-item" data-route="build" role="menuitem">Quiz Builder</button>
           <button class="menu-item" data-route="practice" role="menuitem">Practice</button>
           <button class="menu-item" data-route="quiz" role="menuitem">Quiz</button>
           <button class="menu-item" data-route="reports" role="menuitem">Reports</button>
+          <button class="menu-item" data-route="grades" role="menuitem">Grades</button>
+          <button class="menu-item" data-route="settings" role="menuitem">Settings</button>
         </div>
       </div>
     </div>
@@ -40,16 +48,12 @@
 
     <!-- ========================= CREATE ========================= -->
     <section id="view-create" class="view active" aria-labelledby="create-title">
-      <h2 id="create-title">Create &amp; Manage Decks</h2>
+      <h2 id="create-title">Content Library</h2>
 
-      <div class="card">
+      <div class="card primary-card">
         <div class="card-head">
           <strong>Add / Select a Deck (merged by Deck Name)</strong>
           <div class="grow"></div>
-
-          <!-- Cloud sync actions (admin) -->
-          <button id="cloudPullBtn" class="btn ghost" title="Fetch Decks/Cards/Tests from Google Sheets">Pull from Cloud</button>
-          <button id="cloudPushBtn" class="btn" title="Push full backup to Google Sheets (Merge/Replace)">Push Backup</button>
 
           <!-- Deck actions -->
           <button id="renameDeckBtn" class="btn ghost">Rename</button>
@@ -92,7 +96,7 @@
         </div>
       </div>
 
-      <details class="card">
+      <details class="card bulk-card">
         <summary class="card-head">Bulk Add (tap for format)</summary>
         <div class="mt-sm"><button id="bulkSummaryBtn" class="btn ghost small">Show format</button></div>
         <textarea id="bulkTextarea" class="textarea mt" rows="5"
@@ -100,7 +104,15 @@
         <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
       </details>
 
-      <div class="card">
+      <div class="card folder-card">
+        <div class="card-head">
+          <strong>Folders &amp; Subfolders</strong>
+          <span class="hint">Select a folder to filter cards or add new subfolders.</span>
+        </div>
+        <div id="folderTree" class="folder-tree" aria-live="polite"></div>
+      </div>
+
+      <div class="card primary-card">
         <h3>Add / Edit Card</h3>
         <div class="grid g2 mt">
           <input id="qInput" class="input" placeholder="Question" aria-label="Question">
@@ -122,7 +134,7 @@
         </details>
       </div>
 
-      <div class="card">
+      <div class="card filters-card">
         <h3>Cards in Deck</h3>
 
         <!-- Sub-deck viewer filter -->
@@ -139,7 +151,7 @@
 
     <!-- ========================= BUILD ========================= -->
     <section id="view-build" class="view" aria-labelledby="build-title">
-      <h2 id="build-title">Build Test &amp; Share</h2>
+      <h2 id="build-title">Quiz Builder &amp; Share</h2>
 
       <div class="card">
         <label class="switch">
@@ -147,6 +159,7 @@
           <span>Preview as Barista</span>
         </label>
 
+        <h3 class="step-title"><span class="step-num">1</span>Name the Test</h3>
         <div class="grid g3 mt">
           <div>
             <label class="label" for="testNameInput">Create or select a Test</label>
@@ -168,18 +181,25 @@
           </div>
         </div>
 
-        <div class="mt">
-          <h4>Share</h4>
+        <h3 class="step-title mt"><span class="step-num">2</span>Select decks &amp; sub-decks</h3>
+        <details id="deckChooser" class="card mt" open>
+          <summary class="card-head">Choose decks (✓ whole deck or expand to pick sub-decks)</summary>
+          <div id="deckPickList" class="deck-pick"></div>
+        </details>
+
+        <h3 class="step-title mt"><span class="step-num">3</span>Save &amp; push to Cloud</h3>
+        <div class="mt-sm">
+          <button id="buildPushBtn" class="btn success">Push Test to Cloud</button>
+          <p class="hint mt-sm">This saves your test and syncs it to Google Sheets so baristas can access it on their devices.</p>
+        </div>
+
+        <h3 class="step-title mt"><span class="step-num">4</span>Share the barista link</h3>
+        <div class="mt-sm">
           <button id="copyShareBtn" class="btn success">Copy Student Link</button>
           <button id="openShareBtn" class="btn">Open Student Preview</button>
           <p class="hint mt-sm">Student link is restricted: no Create/Build/Reports; only the shared Test is visible.</p>
         </div>
       </div>
-
-      <details id="deckChooser" class="card" open>
-        <summary class="card-head">Choose decks (✓ whole deck or expand to pick sub-decks)</summary>
-        <div id="deckPickList" class="deck-pick"></div>
-      </details>
 
       <div id="previewPanel" class="card hidden">
         <h3 id="previewTitle">Preview</h3>
@@ -299,6 +319,15 @@
       </div>
     </section>
 
+    <!-- ========================= GRADES ======================== -->
+    <section id="view-grades" class="view" aria-labelledby="grades-title">
+      <h2 id="grades-title">Grades</h2>
+      <div class="card">
+        <p class="hint">This history is saved only on this device.</p>
+        <div id="gradesList" class="list mt" aria-live="polite"></div>
+      </div>
+    </section>
+
     <!-- ========================= REPORTS ======================= -->
     <section id="view-reports" class="view" aria-labelledby="reports-title">
       <h2 id="reports-title">Reports</h2>
@@ -394,6 +423,22 @@
       <div class="card">
         <h3>Most Missed Questions</h3>
         <div id="missedSummary" class="missed"></div>
+      </div>
+    </section>
+
+    <!-- ========================= SETTINGS ======================= -->
+    <section id="view-settings" class="view" aria-labelledby="settings-title">
+      <h2 id="settings-title">Settings &amp; Sync</h2>
+
+      <div class="card">
+        <div class="card-head">
+          <strong>Cloud Sync &amp; Backups</strong>
+          <div class="grow"></div>
+          <button id="cloudPullBtn" class="btn ghost" title="Fetch Decks/Cards/Tests from Google Sheets">Pull from Cloud</button>
+          <button id="cloudPushBtn" class="btn" title="Push full backup to Google Sheets (Merge/Replace)">Push Backup</button>
+          <!-- JS injects Export All / Import Backup buttons here -->
+        </div>
+        <p class="hint mt-sm">Local changes save automatically. Use Pull to refresh from Sheets or Push to back up your current library.</p>
       </div>
     </section>
   </main>
