@@ -101,7 +101,23 @@ h1{margin:0;font-size:28px;letter-spacing:.3px}
 /* Hide admin routes in student mode */
 body.student .menu-item[data-route="create"],
 body.student .menu-item[data-route="build"],
-body.student .menu-item[data-route="reports"]{display:none}
+body.student .menu-item[data-route="reports"],
+body.student .menu-item[data-route="settings"]{display:none}
+body:not(.student) .menu-item[data-route="grades"]{display:none}
+body.student .topnav{display:none}
+body.student .student-nav{display:flex}
+
+.student-nav{
+  display:none;
+  gap:12px;
+  align-items:center;
+}
+.student-nav .student-nav-btn{
+  padding:10px 18px;
+  font-size:16px;
+  border-radius:999px;
+  box-shadow:0 8px 18px rgba(15,23,42,.12);
+}
 
 /* ============================ Views ========================== */
 .view{display:none}

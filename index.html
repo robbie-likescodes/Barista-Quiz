@@ -7,8 +7,8 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=23" />
-  <script defer src="app.js?v=18"></script>
+  <link rel="stylesheet" href="styles.css?v=24" />
+  <script defer src="app.js?v=19"></script>
 </head>
 <body>
   <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
@@ -18,6 +18,12 @@
     <div class="brand">
       <span class="logo" aria-hidden="true">☕</span>
       <h1>Barista Flashcards &amp; Quizzes</h1>
+    </div>
+
+    <!-- Student-only top actions -->
+    <div class="student-nav" aria-label="Student actions">
+      <button class="btn student-nav-btn" data-route="practice">Practice</button>
+      <button class="btn primary student-nav-btn" data-route="quiz">Quiz</button>
     </div>
 
     <!-- Compact top nav: dropdown menu on mobile; all handled by CSS/JS -->
@@ -30,6 +36,7 @@
           <button class="menu-item" data-route="practice" role="menuitem">Practice</button>
           <button class="menu-item" data-route="quiz" role="menuitem">Quiz</button>
           <button class="menu-item" data-route="reports" role="menuitem">Reports</button>
+          <button class="menu-item" data-route="grades" role="menuitem">Grades</button>
           <button class="menu-item" data-route="settings" role="menuitem">Settings</button>
         </div>
       </div>
@@ -309,6 +316,15 @@
           <button id="restartQuizBtn" class="btn">Restart with fresh questions</button>
           <button id="finishedPracticeBtn" class="btn ghost">Go to Practice</button>
         </div>
+      </div>
+    </section>
+
+    <!-- ========================= GRADES ======================== -->
+    <section id="view-grades" class="view" aria-labelledby="grades-title">
+      <h2 id="grades-title">Grades</h2>
+      <div class="card">
+        <p class="hint">This history is saved only on this device.</p>
+        <div id="gradesList" class="list mt" aria-live="polite"></div>
       </div>
     </section>
 

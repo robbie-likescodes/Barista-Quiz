@@ -506,6 +506,7 @@ function activate(view){
   if(view==='build')    renderBuild();
   if(view==='practice') renderPracticeScreen();
   if(view==='quiz')     renderQuizScreen();
+  if(view==='grades')   renderGrades();
   if(view==='reports')  renderReports();
   if(view==='settings') renderSettings();
 
@@ -525,6 +526,12 @@ function toggleMenu(e){ const {btn,list}=menuEls(); if(!btn||!list) return; e&&e
     const item = e.target.closest('.menu-item'); if(!item) return;
     const route = item.dataset.route; if(route){ setParams({view:route}); activate(route); }
     closeMenu();
+  });
+  document.addEventListener('click', (e)=>{
+    const studentBtn = e.target.closest('.student-nav-btn');
+    if(!studentBtn) return;
+    const route = studentBtn.dataset.route;
+    if(route){ setParams({view:route}); activate(route); }
   });
   document.addEventListener('click', e=>{ if(!e.target.closest('.menu')) closeMenu(); });
   document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeMenu(); });
@@ -936,6 +943,28 @@ function renderCardsList(){
       toast('Card updated');
     }
   }, 'cardsList');
+}
+
+function renderGrades(){
+  const list = $('#gradesList'); if(!list) return;
+  const local = (state.results || []).filter(r => !r.clientId || r.clientId === clientId);
+  if(!local.length){
+    list.innerHTML = '<div class="hint">No grades yet. Submit a quiz to see your results here.</div>';
+    return;
+  }
+  const rows = local
+    .slice()
+    .sort((a,b)=> (b.time || b.timeEpoch || 0) - (a.time || a.timeEpoch || 0))
+    .map(r=>{
+      const when = r.date || (r.time || r.timeEpoch ? new Date(r.time || r.timeEpoch).toLocaleDateString() : '');
+      const score = typeof r.score === 'number' ? `${r.score}%` : '';
+      const of = Number.isFinite(r.correct) && Number.isFinite(r.of) ? ` (${r.correct}/${r.of})` : '';
+      return `<div class="cardline">
+        <div><strong>${esc(r.testName || 'Quiz')}</strong><div class="hint">${esc(when)}</div></div>
+        <div><strong>${esc(score)}</strong>${esc(of)}</div>
+      </div>`;
+    }).join('');
+  list.innerHTML = rows;
 }
 
 // CREATE handlers
