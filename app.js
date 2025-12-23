@@ -40,7 +40,7 @@ const KEYS = {
   outboxLock: 'bq_outbox_lock_v1'
 };
 const SCHEMA_VERSION = 1;
-const ADMIN_VIEWS = new Set(['create','build','reports','settings']);
+const ADMIN_VIEWS = new Set(['create','build','quizzes','reports','settings']);
 
 //////////////////////////// utils ///////////////////////////////
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
@@ -501,12 +501,14 @@ function activate(view){
 
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-'+view));
   $$('.menu-item').forEach(i => i.classList.toggle('active', i.dataset.route===view));
+  $$('.student-nav-btn').forEach(i => i.classList.toggle('active', i.dataset.route===view));
 
   if(view==='create')   renderCreate();
   if(view==='build')    renderBuild();
   if(view==='practice') renderPracticeScreen();
   if(view==='quiz')     renderQuizScreen();
   if(view==='grades')   renderGrades();
+  if(view==='quizzes')  renderQuizzes();
   if(view==='reports')  renderReports();
   if(view==='settings') renderSettings();
 
@@ -743,6 +745,7 @@ function renderSettings(){
   ensureBackupButtons();
   bindOnce($('#cloudPullBtn'),'click',cloudPullHandler);
   bindOnce($('#cloudPushBtn'),'click',cloudPushHandler);
+  bindOnce($('#bulkGlobalAddBtn'),'click',bulkAddGlobalCards);
 }
 
 function renderDeckSelect(){
@@ -967,6 +970,67 @@ function renderGrades(){
   list.innerHTML = rows;
 }
 
+function renderQuizzes(){
+  const sel = $('#quizShareSelect');
+  const list = $('#quizShareList');
+  const tests = Object.values(state.tests || {}).slice().sort((a,b)=>testDisplayName(a).localeCompare(testDisplayName(b)));
+
+  if(sel){
+    if(!tests.length){
+      sel.innerHTML = '<option value="">No quizzes yet</option>';
+    } else {
+      sel.innerHTML = tests.map(t=>`<option value="${esc(t.id)}">${esc(testDisplayName(t))}</option>`).join('');
+    }
+  }
+
+  if(list){
+    if(!tests.length){
+      list.innerHTML = '<div class="hint">No quizzes yet. Build a quiz first.</div>';
+    } else {
+      list.innerHTML = tests.map(t=>`
+        <div class="cardline" data-id="${t.id}">
+          <div><strong>${esc(testDisplayName(t))}</strong><div class="hint">${esc(t.name || '')}</div></div>
+          <div><span class="hint">Questions:</span> ${t.n || 0}</div>
+          <div class="actions">
+            <button class="btn ghost btn-copy-link">Copy Link</button>
+            <button class="btn btn-open-link">Open</button>
+          </div>
+        </div>
+      `).join('');
+    }
+  }
+
+  bindOnce($('#quizShareCopyBtn'),'click',()=>copyShareLinkForId(sel?.value));
+  bindOnce($('#quizShareOpenBtn'),'click',()=>openShareLinkForId(sel?.value));
+  if(list){
+    bindOnce(list, 'click', (event)=>{
+      const row = event.target.closest('.cardline'); if(!row) return;
+      const id = row.dataset.id;
+      if(event.target.closest('.btn-copy-link')) return copyShareLinkForId(id);
+      if(event.target.closest('.btn-open-link')) return openShareLinkForId(id);
+    }, 'quizShareList');
+  }
+}
+
+function buildShareUrlForTest(t){
+  const url=new URL(location.href);
+  url.searchParams.set('mode','student');
+  url.searchParams.set('test',t.name);
+  url.searchParams.set('view','practice');
+  return url.toString();
+}
+function copyShareLinkForId(id){
+  const t = state.tests?.[id];
+  if(!t) return alert('Select a quiz first.');
+  navigator.clipboard.writeText(buildShareUrlForTest(t));
+  toast('Quiz link copied');
+}
+function openShareLinkForId(id){
+  const t = state.tests?.[id];
+  if(!t) return alert('Select a quiz first.');
+  open(buildShareUrlForTest(t),'_blank');
+}
+
 // CREATE handlers
 function createSubdeck(){
   const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
@@ -1087,6 +1151,46 @@ function bulkAddCards(){
   saveDecks(); if($('#bulkTextarea')) $('#bulkTextarea').value='';
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast(`Added ${n} card(s)`);
+}
+
+function bulkAddGlobalCards(){
+  const txt=$('#bulkGlobalTextarea')?.value.trim(); if(!txt) return alert('Paste at least one line.');
+  let n=0; let createdDecks=0;
+
+  const findOrCreateDeck = (cls, name)=>{
+    let ex=Object.values(state.decks).find(d=>
+      (d.className||'').toLowerCase()===cls.toLowerCase() &&
+      (d.deckName||'').toLowerCase()===name.toLowerCase()
+    );
+    if(!ex){
+      const id=uid('deck');
+      ex=state.decks[id]={id,className:cls,deckName:name,cards:[],tags:[],createdAt:Date.now()};
+      createdDecks++;
+    }
+    return ex;
+  };
+
+  for(const rawLine of txt.split(/\r?\n/)){
+    const line = rawLine.trim();
+    if(!line) continue;
+    const parts=line.split('|').map(s=>s.trim()).filter(Boolean);
+    if(parts.length<4) continue;
+    let sub='';
+    if(parts[parts.length-1].startsWith?.('#')) sub=parts.pop().slice(1).trim();
+    if(parts.length<4) continue;
+    const [cls, deck, q, a, ...wrongs]=parts;
+    if(!cls || !deck || !q || !a || wrongs.length===0) continue;
+
+    const target = findOrCreateDeck(cls, deck);
+    target.cards.push({id:uid('card'),q,a,distractors:wrongs,sub,createdAt:Date.now()});
+    if(sub) target.tags=unique([...(target.tags||[]),sub]);
+    n++;
+  }
+
+  saveDecks();
+  if($('#bulkGlobalTextarea')) $('#bulkGlobalTextarea').value='';
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast(`Added ${n} card(s)${createdDecks?` • ${createdDecks} new deck${createdDecks===1?'':'s'}`:''}`);
 }
 function addCard(){
   const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
