@@ -113,8 +113,8 @@ body.student .menu-item[data-route="reports"]{display:none}
   border:1px solid var(--line);border-radius:14px;padding:16px;margin:16px 0;
   box-shadow:0 10px 30px rgba(15,23,42,.08)
 }
-.card.primary-card{border-color:color-mix(in oklab,var(--brand) 45%,var(--line) 55%);box-shadow:0 14px 40px rgba(15,23,42,.12)}
-.card.bulk-card{background:linear-gradient(180deg,#ffffff,#f2f7f2)}
+.card.primary-card{border-color:color-mix(in oklab,var(--brand) 55%,var(--line) 45%);box-shadow:0 14px 40px rgba(0,0,0,.35)}
+.card.bulk-card{background:linear-gradient(180deg,#18213b,#141a2e)}
 .card.filters-card{position:sticky;top:76px;z-index:5}
 .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .grow{flex:1}
@@ -176,7 +176,7 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
   display:grid;grid-template-columns:1.3fr 1fr auto;gap:12px;
   padding:12px;border-radius:10px;background:var(--panel2);margin:10px 0
 }
-.list .cardline:nth-child(even){background:#f4f7f9}
+.list .cardline:nth-child(even){background:#1a2240}
 .list .actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
 @media (max-width:800px){.list .cardline{grid-template-columns:1fr}}
 
@@ -225,6 +225,9 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 @media (max-width:720px){
   .option{padding:14px 12px;font-size:16px}
 }
+@media (max-width:720px){
+  .option{padding:14px 12px;font-size:16px}
+}
 .option.correct{border-color:#2bd4a9;background:rgba(43,212,169,.08)}
 .option.incorrect{border-color:#e87070;background:rgba(232,112,112,.08)}
 .option.disabled{opacity:.7;pointer-events:none}
@@ -244,7 +247,7 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .table th,.table td{border-bottom:1px solid rgba(255,255,255,.05);padding:10px 8px;text-align:left;vertical-align:middle}
 .table th{
   color:color-mix(in oklab,var(--muted) 85%,white 15%);font-weight:600;font-size:12px;
-  text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;background:#f1f5f9
+  text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;background:#141a2e
 }
 .table .view-btn{white-space:nowrap}
 
