@@ -1060,6 +1060,7 @@ function renderQuizzes(){
           <div class="actions">
             <button class="btn ghost btn-copy-link">Copy Link</button>
             <button class="btn btn-open-link">Open</button>
+            <button class="btn danger btn-delete-quiz">Delete</button>
           </div>
         </div>
       `).join('');
@@ -1074,6 +1075,16 @@ function renderQuizzes(){
       const id = row.dataset.id;
       if(event.target.closest('.btn-copy-link')) return copyShareLinkForId(id);
       if(event.target.closest('.btn-open-link')) return openShareLinkForId(id);
+      if(event.target.closest('.btn-delete-quiz')){
+        const t = state.tests?.[id];
+        const name = t?.name || 'Quiz';
+        if(confirm(`Delete quiz “${name}”?`)){
+          delete state.tests[id];
+          saveTests();
+          renderQuizzes();
+          toast('Quiz deleted');
+        }
+      }
     }, 'quizShareList');
   }
 }
@@ -1472,6 +1483,7 @@ function bindBuildButtons(){
   bindOnce($('#previewPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); });
   bindOnce($('#previewQuizBtn'),'click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
   bindOnce($('#testNameInput'),'input',handleTestNameInput);
+  bindOnce($('#builderClassSelect'),'change',renderDeckPickList);
 }
 function handleTestNameInput(){
   const typed = $('#testNameInput')?.value.trim().toLowerCase();
@@ -1556,12 +1568,21 @@ function deleteTest(){
 function renderDeckPickList(){
   const wrap = $('#deckPickList'); if(!wrap) return;
   const decks=listUniqueDecks();
+  const classSel = $('#builderClassSelect');
+  const classes = unique(decks.map(d=>d.className).filter(Boolean)).sort((a,b)=>a.localeCompare(b));
+  if(classSel){
+    const current = classSel.value || '';
+    classSel.innerHTML = `<option value="">All classes</option>` + classes.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    if(current && classes.includes(current)) classSel.value = current;
+  }
+  const classFilter = classSel?.value || '';
+  const visibleDecks = classFilter ? decks.filter(d=>d.className===classFilter) : decks;
   const typedName=$('#testNameInput')?.value.trim().toLowerCase();
   const selected = state.ui.currentTestId ? state.tests[state.ui.currentTestId]
                 : Object.values(state.tests).find(t=>t.name.toLowerCase()===typedName);
 
   const selMap=new Map((selected?.selections||[]).map(s=>[s.deckId,s]));
-  wrap.innerHTML=decks.map(d=>{
+  wrap.innerHTML=visibleDecks.map(d=>{
     const subs=deckSubTags(d);
     const saved=selMap.get(d.id);
     const whole=saved?!!saved.whole:true; const savedSubs=new Set(saved?.subs||[]);
@@ -1727,6 +1748,13 @@ function startPractice(){
   const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
   if(!filtered.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){
