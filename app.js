@@ -756,7 +756,9 @@ function renderCreate(){
   bindOnce($('#importDeckInput'),'change',importDeckInputChange);
   bindOnce($('#bulkSummaryBtn'),'click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
   bindOnce($('#bulkAddBtn'),'click',bulkAddCards);
-  bindOnce($('#addCardBtn'),'click',addCard);
+  bindOnce($('#addCardBtn'),'click',()=>saveCard(false));
+  bindOnce($('#saveCardCloudBtn'),'click',()=>saveCard(true));
+  bindOnce($('#cancelCardEditBtn'),'click',cancelCardEdit);
   bindOnce($('#deleteDeckHardBtn'),'click',deleteSelectedDeckHard);
   bindOnce($('#deleteSubdeckBtn'),'click',deleteSelectedSubdeck);
   bindOnce($('#deleteClassBtn'),'click',deleteSelectedClass);
@@ -972,22 +974,25 @@ function renderCardsList(){
       renderDeckSelect();
       const deckSelect = $('#deckSelect');
       if (deckSelect) deckSelect.value = keepDeckId;
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+      renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
       window.scrollTo(0, y);
       toast('Card deleted');
+      promptPushChanges();
       return;
     }
 
     if(editBtn){
       const card = deck.cards.find(c=>c.id===cid); if(!card) return;
-      const q=prompt('Question:',card.q); if(q===null) return;
-      const a=prompt('Correct answer:',card.a); if(a===null) return;
-      const wrong=prompt('Wrong answers (separate by |):',(card.distractors||[]).join('|'));
-      const sub=prompt('Card sub-deck (optional):',card.sub||''); if(sub===null) return;
-      card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
-      if(card.sub){ deck.tags=unique([...(deck.tags||[]),card.sub]); }
-      saveDecks(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-      toast('Card updated');
+      $('#qInput').value = card.q || '';
+      $('#aCorrectInput').value = card.a || '';
+      $('#aWrong1Input').value = (card.distractors||[])[0] || '';
+      $('#aWrong2Input').value = (card.distractors||[])[1] || '';
+      $('#aWrong3Input').value = (card.distractors||[])[2] || '';
+      $('#cardSubInput').value = card.sub || '';
+      state.ui.editCardId = card.id;
+      $('#addCardBtn').textContent = 'Update Card';
+      $('#cancelCardEditBtn')?.classList.remove('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, 'cardsList');
 }
@@ -1299,6 +1304,11 @@ function bulkAddCards(){
   toast(`Added ${n} card(s)`);
 }
 
+function promptPushChanges(){
+  const ok = confirm('Push these changes to the Cloud now?\n\nOK = open the Cloud push dialog.\nChoose REPLACE there if you want Sheets to exactly match local.');
+  if(ok) cloudPushHandler();
+}
+
 function maybePushDeleteToCloud(){
   const ok = confirm('Push this deletion to the Cloud?\n\nChoose OK to open the Cloud push dialog.\nPick REPLACE in the next prompt to remove deleted items from Sheets.');
   if(ok) cloudPushHandler();
@@ -1405,17 +1415,38 @@ function bulkAddGlobalCards(){
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
   toast(`Added ${n} card(s)${createdDecks?` • ${createdDecks} new deck${createdDecks===1?'':'s'}`:''}`);
 }
-function addCard(){
+function saveCard(pushAfter=false){
   const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
   const q=$('#qInput')?.value.trim(), a=$('#aCorrectInput')?.value.trim(), w1=$('#aWrong1Input')?.value.trim(),
         w2=$('#aWrong2Input')?.value.trim(), w3=$('#aWrong3Input')?.value.trim(), sub=$('#cardSubInput')?.value.trim();
   if(!q||!a||!w1) return alert('Enter question, correct, and at least one wrong answer.');
-  state.decks[id].cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
-  if(sub){ const d=state.decks[id]; d.tags=unique([...(d.tags||[]),sub]); }
+  const deck = state.decks[id];
+  const editId = state.ui.editCardId;
+  if(editId){
+    const card = deck.cards.find(c=>c.id===editId); if(!card) return;
+    card.q=q; card.a=a; card.distractors=[w1,w2,w3].filter(Boolean); card.sub=sub;
+    toast('Card updated');
+  } else {
+    deck.cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
+    toast('Card saved');
+  }
+  if(sub){ deck.tags=unique([...(deck.tags||[]),sub]); }
   saveDecks();
+  clearCardForm();
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  if(pushAfter) cloudPushHandler();
+}
+
+function clearCardForm(){
   ['#qInput','#aCorrectInput','#aWrong1Input','#aWrong2Input','#aWrong3Input','#cardSubInput'].forEach(sel=>{ if($(sel)) $(sel).value=''; });
-  renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-  toast('Card saved');
+  state.ui.editCardId = null;
+  $('#addCardBtn')?.textContent = 'Save Card';
+  $('#cancelCardEditBtn')?.classList.add('hidden');
+}
+
+function cancelCardEdit(){
+  clearCardForm();
+  toast('Edit cancelled');
 }
 
 //////////////////////////// BUILD //////////////////////////////
@@ -1696,6 +1727,13 @@ function startPractice(){
   const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
   if(!filtered.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){

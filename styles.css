@@ -273,6 +273,7 @@ select.input{-webkit-appearance: menulist;appearance: menulist}
 .btn.danger{background:var(--danger);color:#ffffff;border-color:transparent}
 .btn.ghost{background:transparent;border-color:var(--line)}
 .btn.small{padding:7px 10px;font-size:13px}
+.actions-row{display:flex;gap:10px;flex-wrap:wrap}
 
 /* Subtle icon spacing if you add icons later */
 .btn .ico{display:inline-block;margin-right:8px;line-height:0}

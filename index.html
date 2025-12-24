@@ -7,8 +7,8 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=36" />
-  <script defer src="app.js?v=31"></script>
+  <link rel="stylesheet" href="styles.css?v=37" />
+  <script defer src="app.js?v=32"></script>
 </head>
 <body>
   <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
@@ -128,7 +128,11 @@
       </div>
 
       <div class="card primary-card">
-        <h3>Add / Edit Card</h3>
+        <div class="card-head">
+          <h3>Add / Edit Card</h3>
+          <div class="grow"></div>
+          <button id="cancelCardEditBtn" class="btn ghost small hidden">Cancel Edit</button>
+        </div>
         <div class="grid g2 mt">
           <input id="qInput" class="input" placeholder="Question" aria-label="Question">
           <input id="aCorrectInput" class="input" placeholder="Correct answer" aria-label="Correct answer">
@@ -137,7 +141,10 @@
           <input id="aWrong3Input" class="input" placeholder="Wrong answer 3 (optional)" aria-label="Wrong answer 3">
           <input id="cardSubInput" class="input" placeholder="Card sub-deck (optional)" aria-label="Card sub-deck">
         </div>
-        <div class="mt"><button id="addCardBtn" class="btn primary">Save Card</button></div>
+        <div class="mt actions-row">
+          <button id="addCardBtn" class="btn primary">Save Card</button>
+          <button id="saveCardCloudBtn" class="btn">Save + Push to Cloud</button>
+        </div>
 
         <details class="mt card" id="subdeckManager" open>
           <summary class="card-head">Sub-decks in this Deck</summary>
