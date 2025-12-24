@@ -599,7 +599,7 @@ function deckSubTags(d){
   const fromCards=(d.cards||[]).map(c=>c.sub||'').filter(Boolean);
   const declared=(d.tags||[]);
   const legacy=d.subdeck?[d.subdeck]:[];
-  return unique([...fromCards,...declared,...legacy]).sort((a,b)=>a.localeCompare(b));
+  return unique([...fromCards,...declared,...legacy]).sort((a,b)=>String(a).localeCompare(String(b)));
 }
 function mergeDecksByName(){
   const mapByKey=new Map(), idRemap=new Map();
@@ -1131,15 +1131,29 @@ function updateLeaderboardsFromResults(rows){
     if(!rows.length){
       locBox.innerHTML = '<div class="hint">No location data yet.</div>';
     }else{
-      const avgs = computeLocationAverages(rows).sort((a,b)=>b.avg - a.avg);
-      locBox.innerHTML = avgs.map(x=>`
-        <div class="report-row">
-          <div><strong>${esc(x.location)}</strong><div class="hint">${x.count} submission${x.count!==1?'s':''}</div></div>
-          <div><div class="hint">Average score</div><strong>${Math.round(x.avg)}%</strong></div>
-          <div><div class="hint">Rank</div><strong>#${avgs.indexOf(x)+1}</strong></div>
-          <div></div>
-        </div>
-      `).join('');
+      const avgs = computeLocationAverages(rows);
+      const topCounts = avgs.slice().sort((a,b)=>b.count - a.count);
+      const topAvgs = avgs.slice().sort((a,b)=>b.avg - a.avg);
+      locBox.innerHTML = `
+        <h4>Most Responses</h4>
+        ${topCounts.map((x,idx)=>`
+          <div class="report-row">
+            <div><strong>${esc(x.location)}</strong><div class="hint">${x.count} submission${x.count!==1?'s':''}</div></div>
+            <div><div class="hint">Rank</div><strong>#${idx+1}</strong></div>
+            <div></div>
+            <div></div>
+          </div>
+        `).join('')}
+        <h4 class="mt">Top Average Scores</h4>
+        ${topAvgs.map((x,idx)=>`
+          <div class="report-row">
+            <div><strong>${esc(x.location)}</strong></div>
+            <div><div class="hint">Average score</div><strong>${Math.round(x.avg)}%</strong></div>
+            <div><div class="hint">Rank</div><strong>#${idx+1}</strong></div>
+            <div></div>
+          </div>
+        `).join('')}
+      `;
     }
   }
 }
@@ -1806,11 +1820,11 @@ function updateQuizNavState(){
 async function submitQuiz(){
   if(state.quiz.submitting) return;
   if(state.quiz.items.some(x=>!x.picked)){
-    alert('Some questions have been left unanswered.');
+    toast('Some questions have been left unanswered.');
     return;
   }
   if(state.quiz.idx !== state.quiz.items.length - 1){
-    alert('Some questions have been left unanswered.');
+    toast('Some questions have been left unanswered.');
     return;
   }
   state.quiz.submitting = true;
