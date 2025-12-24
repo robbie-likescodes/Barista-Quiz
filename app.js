@@ -31,13 +31,67 @@ const getResultAnswers = r => {
   }
   return [];
 };
+const findCardMatch = answer => {
+  const q = (answer?.q || '').trim().toLowerCase();
+  const a = (answer?.correct || '').trim().toLowerCase();
+  if (!q || !a) return null;
+  for (const deck of Object.values(state.decks || {})) {
+    const card = (deck.cards || []).find(c =>
+      (c.q || '').trim().toLowerCase() === q &&
+      (c.a || '').trim().toLowerCase() === a
+    );
+    if (card) return { deckId: deck.id, cardId: card.id };
+  }
+  return null;
+};
+const buildEditCardUrl = (deckId, cardId) => {
+  const url = new URL(location.href);
+  url.searchParams.set('view', 'create');
+  url.searchParams.set('deckId', deckId);
+  url.searchParams.set('editCardId', cardId);
+  return url.toString();
+};
+const startEditCard = card => {
+  if (!card) return;
+  $('#qInput').value = card.q || '';
+  $('#aCorrectInput').value = card.a || '';
+  $('#aWrong1Input').value = (card.distractors || [])[0] || '';
+  $('#aWrong2Input').value = (card.distractors || [])[1] || '';
+  $('#aWrong3Input').value = (card.distractors || [])[2] || '';
+  $('#cardSubInput').value = card.sub || '';
+  state.ui.editCardId = card.id;
+  $('#addCardBtn').textContent = 'Update Card';
+  $('#cancelCardEditBtn')?.classList.remove('hidden');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+const maybeHandleEditParams = () => {
+  const p = qs();
+  const deckId = p.get('deckId');
+  const cardId = p.get('editCardId');
+  if (!deckId || !cardId) return;
+  const deck = state.decks?.[deckId];
+  const card = deck?.cards?.find(c => c.id === cardId);
+  if (!deck || !card) return;
+  const deckSelect = $('#deckSelect');
+  if (deckSelect) deckSelect.value = deckId;
+  state.ui.subFilter = '';
+  state.ui.classFilter = '';
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  startEditCard(card);
+};
 const openResultDetails = r => {
   const answers = getResultAnswers(r);
-  const rows = answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
-    <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
+  const rows = answers.map(a=>{
+    const match = findCardMatch(a);
+    const editLink = match
+      ? `<a href="${buildEditCardUrl(match.deckId, match.cardId)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;">Edit card</a>`
+      : `<span style="font-size:12px;color:#666;">Card not found</span>`;
+    return `<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
+    <div style="font-weight:600;margin-bottom:4px">${esc(a.q)} <span style="margin-left:8px;">${editLink}</span></div>
     <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
     <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
-  </div>`).join('');
+  </div>`;
+  }).join('');
   const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
   w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
     <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
@@ -534,6 +588,7 @@ function activate(view){
   if(view==='quizzes')  renderQuizzes();
   if(view==='reports')  renderReports();
   if(view==='settings') renderSettings();
+  if(view==='create')   maybeHandleEditParams();
 
   closeMenu();
 }
@@ -995,16 +1050,7 @@ function renderCardsList(){
 
     if(editBtn){
       const card = deck.cards.find(c=>c.id===cid); if(!card) return;
-      $('#qInput').value = card.q || '';
-      $('#aCorrectInput').value = card.a || '';
-      $('#aWrong1Input').value = (card.distractors||[])[0] || '';
-      $('#aWrong2Input').value = (card.distractors||[])[1] || '';
-      $('#aWrong3Input').value = (card.distractors||[])[2] || '';
-      $('#cardSubInput').value = card.sub || '';
-      state.ui.editCardId = card.id;
-      $('#addCardBtn').textContent = 'Update Card';
-      $('#cancelCardEditBtn')?.classList.remove('hidden');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      startEditCard(card);
     }
   }, 'cardsList');
 }
@@ -1787,6 +1833,13 @@ function startPractice(){
   const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
   if(!filtered.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){
