@@ -547,7 +547,7 @@ function toggleMenu(e){
   const {btn,list}=menuEls(); if(!btn||!list) return;
   if(e){
     e.stopPropagation();
-    if(e.type==='touchstart' || e.type==='pointerdown') e.preventDefault();
+    if(e.type==='touchstart' || e.type==='pointerdown' || e.type==='click') e.preventDefault();
   }
   list.classList.contains('open')?closeMenu():openMenu();
 }
@@ -1159,8 +1159,34 @@ function updateLeaderboardsFromResults(rows){
       const avgs = computeLocationAverages(rows);
       const topCounts = avgs.slice().sort((a,b)=>b.count - a.count);
       const topAvgs = avgs.slice().sort((a,b)=>b.avg - a.avg);
+      const bestByCount = topCounts[0];
+      const bestByAvg = topAvgs[0];
+
+      const bestSummary = `
+        <h4>Best Performing Location</h4>
+        <div class="report-row">
+          <div>
+            <strong>${esc(bestByAvg?.location || '—')}</strong>
+            <div class="hint">${bestByAvg ? `${Math.round(bestByAvg.avg)}% average score` : 'No scores yet'}</div>
+          </div>
+          <div>
+            <div class="hint">Submissions</div>
+            <strong>${bestByAvg ? bestByAvg.count : 0}</strong>
+          </div>
+          <div>
+            <div class="hint">Most responses</div>
+            <strong>${esc(bestByCount?.location || '—')}</strong>
+          </div>
+          <div>
+            <div class="hint">Count</div>
+            <strong>${bestByCount ? bestByCount.count : 0}</strong>
+          </div>
+        </div>
+      `;
+
       locBox.innerHTML = `
-        <h4>Most Responses</h4>
+        ${bestSummary}
+        <h4 class="mt">Most Responses</h4>
         ${topCounts.map((x,idx)=>`
           <div class="report-row">
             <div><strong>${esc(x.location)}</strong><div class="hint">${x.count} submission${x.count!==1?'s':''}</div></div>
@@ -1758,6 +1784,13 @@ function startPractice(){
   const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
   if(!filtered.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){
