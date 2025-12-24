@@ -23,6 +23,28 @@ const bindOnce = (el, ev, fn, key) => {
   el[flag] = true;
 };
 
+const getResultId = r => String(r?.id || r?.resId || '');
+const getResultAnswers = r => {
+  if (Array.isArray(r?.answers)) return r.answers;
+  if (typeof r?.answersJSON === 'string') {
+    try { return JSON.parse(r.answersJSON) || []; } catch { return []; }
+  }
+  return [];
+};
+const openResultDetails = r => {
+  const answers = getResultAnswers(r);
+  const rows = answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
+    <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
+    <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
+    <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
+  </div>`).join('');
+  const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
+  w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
+    <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
+    <div>${rows}</div>
+  </body>`);
+};
+
 const store = {
   get(k, f){ try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } },
   set(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
@@ -509,6 +531,7 @@ function activate(view){
   if(view==='practice') renderPracticeScreen();
   if(view==='quiz')     renderQuizScreen();
   if(view==='grades')   renderGrades();
+  if(view==='leaderboards') renderLeaderboards();
   if(view==='quizzes')  renderQuizzes();
   if(view==='reports')  renderReports();
   if(view==='settings') renderSettings();
@@ -975,9 +998,21 @@ function renderGrades(){
       return `<div class="cardline">
         <div><strong>${esc(r.testName || 'Quiz')}</strong><div class="hint">${esc(when)}</div></div>
         <div><strong>${esc(score)}</strong>${esc(of)}</div>
+        <div class="actions">
+          <button class="btn ghost btn-open-grade" data-id="${esc(getResultId(r))}">Open</button>
+        </div>
       </div>`;
     }).join('');
   list.innerHTML = rows;
+
+  bindOnce(list, 'click', (event)=>{
+    const btn = event.target.closest('.btn-open-grade');
+    if(!btn) return;
+    const id = btn.dataset.id;
+    const r = local.find(x => getResultId(x) === id);
+    if(!r) return;
+    openResultDetails(r);
+  }, 'gradesList');
 }
 
 function renderQuizzes(){
@@ -1019,6 +1054,77 @@ function renderQuizzes(){
       if(event.target.closest('.btn-copy-link')) return copyShareLinkForId(id);
       if(event.target.closest('.btn-open-link')) return openShareLinkForId(id);
     }, 'quizShareList');
+  }
+}
+
+function renderLeaderboards(){
+  bindOnce($('#leaderboardRefreshBtn'),'click',refreshLeaderboards);
+  updateLeaderboardsFromResults(state.results || []);
+}
+
+async function refreshLeaderboards(){
+  const btn = $('#leaderboardRefreshBtn');
+  if(btn) btn.disabled = true;
+  try{
+    const rows = await cloudGET({action:'results',limit:500});
+    if(!Array.isArray(rows)) throw new Error('Bad results response');
+    state.results = rows.map(r=>({
+      id      : r.resId || r.id || uid('res'),
+      name    : r.name || '',
+      location: r.location || '',
+      date    : r.date || '',
+      time    : Number(r.timeEpoch || r.time || Date.now()),
+      testId  : r.testId || '',
+      testName: r.testName || '',
+      score   : Number(r.score || 0),
+      correct : Number(r.correct || 0),
+      of      : Number(r.of || 0),
+      answers : getResultAnswers(r)
+    }));
+    saveResults();
+    updateLeaderboardsFromResults(state.results);
+    toast('Leaderboards refreshed');
+  }catch(err){
+    alert('Failed to refresh leaderboards: '+(err.message||err));
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+function updateLeaderboardsFromResults(rows){
+  const list = $('#leaderboardList');
+  const locBox = $('#leaderboardLocations');
+  if(list){
+    if(!rows.length){
+      list.innerHTML = '<div class="hint">No results yet.</div>';
+    }else{
+      const top = rows.slice().sort((a,b)=>{
+        if(b.score !== a.score) return b.score - a.score;
+        return (b.time||0) - (a.time||0);
+      }).slice(0,10);
+      list.innerHTML = top.map((r,idx)=>`
+        <div class="cardline">
+          <div><strong>#${idx+1} ${esc(r.name || 'Barista')}</strong><div class="hint">${esc(r.testName || '')}</div></div>
+          <div>${esc(r.location || '')}</div>
+          <div><strong>${Math.round(Number(r.score)||0)}%</strong></div>
+        </div>
+      `).join('');
+    }
+  }
+  if(locBox){
+    if(!rows.length){
+      locBox.innerHTML = '<div class="hint">No location data yet.</div>';
+    }else{
+      const avgs = computeLocationAverages(rows).sort((a,b)=>b.avg - a.avg);
+      locBox.innerHTML = avgs.map(x=>`
+        <div class="report-row">
+          <div><strong>${esc(x.location)}</strong><div class="hint">${x.count} submission${x.count!==1?'s':''}</div></div>
+          <div><div class="hint">Average score</div><strong>${Math.round(x.avg)}%</strong></div>
+          <div><div class="hint">Rank</div><strong>#${avgs.indexOf(x)+1}</strong></div>
+          <div></div>
+        </div>
+      `).join('');
+    }
   }
 }
 
@@ -1496,8 +1602,10 @@ function renderPracticeScreen(){
   const sel=$('#practiceTestSelect');
   if(last && sel?.querySelector(`option[value="${last}"]`)) sel.value=last;
   buildPracticeDeckChecks();
+  updatePracticeTitle();
 
   bindOnce($('#practiceTestSelect'),'change',()=>{ buildPracticeDeckChecks(); store.set('bq_last_test',$('#practiceTestSelect').value); });
+  bindOnce($('#practiceSubdeckSelect'),'change',buildPracticeDeckChecks);
   bindOnce($('#startPracticeBtn'),'click',startPractice);
   bindOnce($('#practicePrev'),'click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
   bindOnce($('#practiceNext'),'click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
@@ -1521,11 +1629,15 @@ function fillTestsSelect(sel,lockToStudent=false){
 function buildPracticeDeckChecks(){
   const container=$('#practiceDeckChecks'); if(!container) return;
   const tid=$('#practiceTestSelect')?.value; const t=state.tests[tid]; container.innerHTML='';
+  updatePracticeTitle();
   if(!t){ container.innerHTML='<span class="hint">No test selected.</span>'; return; }
   const seen=new Set(), chips=[];
+  const subdeckSelect = $('#practiceSubdeckSelect');
+  const subdeckSet = new Set();
   for(const sel of dedupeSelections(t.selections||[])){
     if(seen.has(sel.deckId)) continue; seen.add(sel.deckId);
     const d=state.decks[sel.deckId]; if(!d) continue;
+    (d.cards || []).forEach(c=>{ if(c.sub) subdeckSet.add(c.sub); });
     const chip=document.createElement('label'); chip.className='chip';
     const ck=document.createElement('input'); ck.type='checkbox'; ck.dataset.deck=sel.deckId; ck.checked=true; chip.appendChild(ck);
     const span=document.createElement('span'); span.textContent=deckLabel(d); chip.appendChild(span);
@@ -1533,18 +1645,34 @@ function buildPracticeDeckChecks(){
   }
   if(chips.length) chips.forEach(c=>container.appendChild(c));
   else container.innerHTML='<span class="hint">This test has no decks selected.</span>';
+
+  if(subdeckSelect){
+    const current = subdeckSelect.value || '';
+    const subs = [...subdeckSet].sort();
+    subdeckSelect.innerHTML = `<option value="">All sub-decks</option>` + subs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    if(current && subs.includes(current)) subdeckSelect.value = current;
+  }
 }
 function startPractice(){
   const tid=$('#practiceTestSelect')?.value; const t=state.tests[tid]; if(!t) return alert('Pick a test.');
+  const subFilter = ($('#practiceSubdeckSelect')?.value || '').trim();
   const chosen=new Set([...$('#practiceDeckChecks')?.querySelectorAll('input[type=checkbox]:checked')||[]].map(i=>i.dataset.deck));
   const pool=[];
   for(const sel of dedupeSelections(t.selections||[])){
     if(!chosen.has(sel.deckId)) continue;
     const d=state.decks[sel.deckId]; if(!d) continue;
-    if(sel.whole) pool.push(...d.cards); else pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||'')));
+    if(sel.whole) pool.push(...d.cards);
+    else pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||'')));
   }
-  if(!pool.length) return alert('No cards to practice.');
-  state.practice.cards=shuffle(pool); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+  const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
+  if(!filtered.length) return alert('No cards to practice.');
+  state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
 }
 function showPractice(){
   const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx]; if(!c) return;
@@ -1626,7 +1754,7 @@ function drawQuiz(){
       <span><kbd>${idx+1}</kbd> ${esc(opt)}</span>
     </label>
   `).join('');
-  quizOptions.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',()=>{ it.picked=r.value; }));
+  quizOptions.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',()=>{ it.picked=r.value; updateQuizNavState(); }));
   const handler=(e)=>{
     if(e.target.tagName==='INPUT') return;
     const n=e.keyCode-49;
@@ -1640,9 +1768,34 @@ function drawQuiz(){
   window.removeEventListener('keydown', window.__bqQuizKeys__);
   window.__bqQuizKeys__=handler;
   window.addEventListener('keydown', handler);
+  updateQuizNavState();
+}
+
+function updateQuizNavState(){
+  const total = state.quiz.items.length;
+  const idx = state.quiz.idx;
+  const it = state.quiz.items[idx];
+  const allAnswered = state.quiz.items.every(x => x.picked);
+  const isLast = idx === total - 1;
+  const nextBtn = $('#quizNext');
+  const prevBtn = $('#quizPrev');
+  const submitBtn = $('#submitQuizBtn');
+  if(prevBtn) prevBtn.disabled = idx === 0;
+  if(nextBtn) nextBtn.disabled = !it?.picked || isLast;
+  if(submitBtn){
+    submitBtn.disabled = !isLast || !allAnswered || state.quiz.submitting;
+  }
 }
 async function submitQuiz(){
   if(state.quiz.submitting) return;
+  if(state.quiz.items.some(x=>!x.picked)){
+    alert('Some questions have been left unanswered.');
+    return;
+  }
+  if(state.quiz.idx !== state.quiz.items.length - 1){
+    alert('Some questions have been left unanswered.');
+    return;
+  }
   state.quiz.submitting = true;
   $('#submitQuizBtn')?.setAttribute('disabled','true');
   const name=$('#studentName')?.value.trim();
@@ -1791,14 +1944,6 @@ function drawReports(){
   renderLocationTrends(baseRows);
 
   const tb=$('#repTable tbody'); if(!tb) return;
-  const getResultId = r => String(r.id || r.resId || '');
-  const getResultAnswers = r => {
-    if (Array.isArray(r.answers)) return r.answers;
-    if (typeof r.answersJSON === 'string') {
-      try { return JSON.parse(r.answersJSON) || []; } catch { return []; }
-    }
-    return [];
-  };
   tb.innerHTML=rows.map(r=>`<tr data-id="${esc(getResultId(r))}">
     <td>${new Date(r.time).toLocaleString()}</td>
     <td>${esc(r.name)}</td>
@@ -1823,17 +1968,7 @@ function drawReports(){
     if(event.target.closest('.view-btn')){
       const src = viewMode==='archived'?state.archived:state.results;
       const r=src.find(x=>getResultId(x)===id); if(!r) return;
-      const answers = getResultAnswers(r);
-      const rows=answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
-        <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
-        <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
-        <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
-      </div>`).join('');
-      const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
-      w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
-        <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
-        <div>${rows}</div>
-      </body>`);
+      openResultDetails(r);
       return;
     }
 
