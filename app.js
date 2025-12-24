@@ -1865,6 +1865,13 @@ function updatePracticeTitle(){
   if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
   if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
+}
 function showPractice(){
   const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx]; if(!c) return;
   if($('#practiceLabel')) $('#practiceLabel').textContent=`Card ${idx+1} of ${total}`;
