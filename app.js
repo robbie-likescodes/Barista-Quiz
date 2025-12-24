@@ -953,15 +953,16 @@ function renderCardsList(){
   const subFilter = ($('#cardsSubFilter')?.value || state.ui.subFilter || '').trim();
   let list = [];
   if(d){
-    list = subFilter ? (d.cards||[]).filter(c => (c.sub||'') === subFilter) : (d.cards||[]);
+    list = (subFilter ? (d.cards||[]).filter(c => (c.sub||'') === subFilter) : (d.cards||[]))
+      .map(c => ({...c, deckId: d.id}));
   }else if(classFilter){
     const decks = Object.values(state.decks || {}).filter(x => (x.className || '').trim() === classFilter);
-    list = decks.flatMap(x => x.cards || []);
+    list = decks.flatMap(x => (x.cards || []).map(c => ({...c, deckId: x.id})));
   }
 
   if(!list.length){ cardsList.innerHTML='<div class="hint">No cards yet—add your first one above.</div>'; return; }
   cardsList.innerHTML=list.map(c=>`
-    <div class="cardline" data-id="${c.id}">
+    <div class="cardline" data-id="${c.id}" data-deck="${c.deckId || ''}">
       <div><strong>Q:</strong> ${esc(c.q)}</div>
       <div><strong>Correct:</strong> ${esc(c.a)}<br><span class="hint">Wrong:</span> ${esc((c.distractors||[]).join(' | '))}${c.sub? `<br><span class="hint">Sub-deck: ${esc(c.sub)}</span>`:''}</div>
       <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
@@ -971,10 +972,12 @@ function renderCardsList(){
     const delBtn = event.target.closest('.btn-del');
     const editBtn = event.target.closest('.btn-edit');
     if(!delBtn && !editBtn) return;
-    const keepDeckId = selectedDeckId(); if(!keepDeckId) return;
+    const row = event.target.closest('.cardline');
+    const keepDeckId = row?.dataset.deck || selectedDeckId();
+    if(!keepDeckId) return;
     const y = window.scrollY;
     const deck = state.decks[keepDeckId];
-    const cid = event.target.closest('.cardline')?.dataset.id;
+    const cid = row?.dataset.id;
     if(!cid || !deck) return;
 
     if(delBtn){
@@ -1159,8 +1162,34 @@ function updateLeaderboardsFromResults(rows){
       const avgs = computeLocationAverages(rows);
       const topCounts = avgs.slice().sort((a,b)=>b.count - a.count);
       const topAvgs = avgs.slice().sort((a,b)=>b.avg - a.avg);
+      const bestByCount = topCounts[0];
+      const bestByAvg = topAvgs[0];
+
+      const bestSummary = `
+        <h4>Best Performing Location</h4>
+        <div class="report-row">
+          <div>
+            <strong>${esc(bestByAvg?.location || '—')}</strong>
+            <div class="hint">${bestByAvg ? `${Math.round(bestByAvg.avg)}% average score` : 'No scores yet'}</div>
+          </div>
+          <div>
+            <div class="hint">Submissions</div>
+            <strong>${bestByAvg ? bestByAvg.count : 0}</strong>
+          </div>
+          <div>
+            <div class="hint">Most responses</div>
+            <strong>${esc(bestByCount?.location || '—')}</strong>
+          </div>
+          <div>
+            <div class="hint">Count</div>
+            <strong>${bestByCount ? bestByCount.count : 0}</strong>
+          </div>
+        </div>
+      `;
+
       locBox.innerHTML = `
-        <h4>Most Responses</h4>
+        ${bestSummary}
+        <h4 class="mt">Most Responses</h4>
         ${topCounts.map((x,idx)=>`
           <div class="report-row">
             <div><strong>${esc(x.location)}</strong><div class="hint">${x.count} submission${x.count!==1?'s':''}</div></div>
@@ -1758,6 +1787,13 @@ function startPractice(){
   const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
   if(!filtered.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){
