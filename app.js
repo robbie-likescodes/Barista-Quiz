@@ -389,7 +389,7 @@ let state = {
   outbox  : store.get(KEYS.outbox, []),
   practice: { cards:[], idx:0 },
   quiz    : { items:[], idx:0, n:30, locked:false, testId:'', submitting:false },
-  ui      : { currentTestId: null, subFilter: '' },
+  ui      : { currentTestId: null, subFilter: '', classFilter: '' },
   meta    : { decksVersion: 0, testsVersion: 0, resultsVersion: 0, archivedVersion: 0 }
 };
 
@@ -524,7 +524,6 @@ function activate(view){
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-'+view));
   $$('.menu-item').forEach(i => i.classList.toggle('active', i.dataset.route===view));
   $$('.student-nav-btn').forEach(i => i.classList.toggle('active', i.dataset.route===view));
-  $$('.admin-nav-btn').forEach(i => i.classList.toggle('active', i.dataset.route===view));
 
   if(view==='create')   renderCreate();
   if(view==='build')    renderBuild();
@@ -557,12 +556,6 @@ function toggleMenu(e){ const {btn,list}=menuEls(); if(!btn||!list) return; e&&e
     const studentBtn = e.target.closest('.student-nav-btn');
     if(!studentBtn) return;
     const route = studentBtn.dataset.route;
-    if(route){ setParams({view:route}); activate(route); }
-  });
-  document.addEventListener('click', (e)=>{
-    const adminBtn = e.target.closest('.admin-nav-btn');
-    if(!adminBtn) return;
-    const route = adminBtn.dataset.route;
     if(route){ setParams({view:route}); activate(route); }
   });
   document.addEventListener('click', e=>{ if(!e.target.closest('.menu')) closeMenu(); });
@@ -849,6 +842,7 @@ function renderFolderTree(){
 
   const selectedDeck = selectedDeckId();
   const selectedSub = (state.ui.subFilter || '').trim();
+  const selectedClass = (state.ui.classFilter || '').trim();
 
   const classMap = new Map();
   for(const d of decks){
@@ -860,6 +854,7 @@ function renderFolderTree(){
   const classes = [...classMap.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
   tree.innerHTML = classes.map(([cls, classDecks])=>{
     const sortedDecks = classDecks.slice().sort((a,b)=>a.deckName.localeCompare(b.deckName));
+    const classSelected = selectedClass === cls && !selectedDeck;
     const deckHtml = sortedDecks.map(d=>{
       const subs = deckSubTags(d);
       const totalCards = (d.cards || []).length;
@@ -886,7 +881,9 @@ function renderFolderTree(){
 
     return `<details class="folder-group" open>
       <summary>
-        <span class="name">${esc(cls)}</span>
+        <button class="folder-link class-link ${classSelected?'selected':''}" data-class="${esc(cls)}">
+          <span class="name">${esc(cls)}</span>
+        </button>
         <span class="count">${sortedDecks.length} deck${sortedDecks.length!==1?'s':''}</span>
       </summary>
       <div class="folder-decks">${deckHtml}</div>
@@ -909,18 +906,25 @@ function renderFolderTree(){
       return;
     }
 
+    const classLink = event.target.closest('.class-link');
     const deckLink = event.target.closest('.deck-link');
     const subLink = event.target.closest('.sub-link');
+    if(classLink){
+      const cls = classLink.dataset.class || '';
+      setSelectedFolder('', '', cls);
+      return;
+    }
     if(!deckLink && !subLink) return;
     const deckId = (deckLink || subLink).dataset.deck;
     const sub = subLink ? subLink.dataset.sub : '';
-    setSelectedFolder(deckId, sub);
+    setSelectedFolder(deckId, sub, '');
   }, 'folderTree');
 }
-function setSelectedFolder(deckId, sub){
+function setSelectedFolder(deckId, sub, cls){
   const deckSelect = $('#deckSelect');
   if(deckSelect) deckSelect.value = deckId || '';
   state.ui.subFilter = sub || '';
+  state.ui.classFilter = cls || '';
   const subSel = $('#cardsSubFilter');
   if(subSel) subSel.value = sub || '';
   const cardSubInput = $('#cardSubInput');
@@ -931,11 +935,18 @@ function renderCardsList(){
   const cardsList=$('#cardsList'); if(!cardsList) return;
   renderFolderTree();
   const id=selectedDeckId();
-  if(!id){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
-  const d=state.decks[id];
+  const classFilter = (state.ui.classFilter || '').trim();
+  if(!id && !classFilter){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
+  const d = id ? state.decks[id] : null;
 
   const subFilter = ($('#cardsSubFilter')?.value || state.ui.subFilter || '').trim();
-  const list = subFilter ? (d.cards||[]).filter(c => (c.sub||'') === subFilter) : (d.cards||[]);
+  let list = [];
+  if(d){
+    list = subFilter ? (d.cards||[]).filter(c => (c.sub||'') === subFilter) : (d.cards||[]);
+  }else if(classFilter){
+    const decks = Object.values(state.decks || {}).filter(x => (x.className || '').trim() === classFilter);
+    list = decks.flatMap(x => x.cards || []);
+  }
 
   if(!list.length){ cardsList.innerHTML='<div class="hint">No cards yet—add your first one above.</div>'; return; }
   cardsList.innerHTML=list.map(c=>`
@@ -1018,7 +1029,12 @@ function renderGrades(){
 function renderQuizzes(){
   const sel = $('#quizShareSelect');
   const list = $('#quizShareList');
-  const tests = Object.values(state.tests || {}).slice().sort((a,b)=>testDisplayName(a).localeCompare(testDisplayName(b)));
+  const tests = Object.values(state.tests || {}).slice().sort((a,b)=>{
+    const aStamp = a?.updatedAt || 0;
+    const bStamp = b?.updatedAt || 0;
+    if(bStamp !== aStamp) return bStamp - aStamp;
+    return testDisplayName(a).localeCompare(testDisplayName(b));
+  });
 
   if(sel){
     if(!tests.length){
