@@ -6,7 +6,7 @@
 
 /* ========= Cloud API Config (EDIT AFTER REDEPLOY) ========= */
 const CLOUD = {
-  BASE: "https://script.google.com/macros/s/AKfycbztbXuLLEji2Lzm1zwq28cL1bXDzQkrDy0EvC0mgmre-NklUYichq6sbIpglFXeyDv6nA/exec",
+  BASE: "https://script.google.com/macros/s/AKfycbyd2qWD-0n_FXIXzRmOdb1L17Vy0CiCYKHtiyz5_BsqBRsYCmiOfuxiATErvD3c-wjvtg/exec",
   API_KEY: "longrandomstringwhatwhat" // must match Script Property 'API_KEY'
 };
 /* ========================================================= */
@@ -15,6 +15,35 @@ const CLOUD = {
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const on = (el, ev, fn, opt) => el && el.addEventListener(ev, fn, opt);
+const bindOnce = (el, ev, fn, key) => {
+  if(!el) return;
+  const flag = `__bq_bound_${key || ev}`;
+  if(el[flag]) return;
+  el.addEventListener(ev, fn);
+  el[flag] = true;
+};
+
+const getResultId = r => String(r?.id || r?.resId || '');
+const getResultAnswers = r => {
+  if (Array.isArray(r?.answers)) return r.answers;
+  if (typeof r?.answersJSON === 'string') {
+    try { return JSON.parse(r.answersJSON) || []; } catch { return []; }
+  }
+  return [];
+};
+const openResultDetails = r => {
+  const answers = getResultAnswers(r);
+  const rows = answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
+    <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
+    <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
+    <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
+  </div>`).join('');
+  const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
+  w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
+    <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
+    <div>${rows}</div>
+  </body>`);
+};
 
 const store = {
   get(k, f){ try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } },
@@ -26,9 +55,14 @@ const KEYS = {
   decks   : 'bq_decks_v6',
   tests   : 'bq_tests_v6',
   results : 'bq_results_v6',
-  archived: 'bq_results_archived_v1'
+  archived: 'bq_results_archived_v1',
+  outbox  : 'bq_outbox_v1',
+  clientId: 'bq_client_id_v1',
+  schema  : 'bq_schema_version',
+  outboxLock: 'bq_outbox_lock_v1'
 };
-const ADMIN_VIEWS = new Set(['create','build','reports']);
+const SCHEMA_VERSION = 1;
+const ADMIN_VIEWS = new Set(['create','build','quizzes','reports','settings']);
 
 //////////////////////////// utils ///////////////////////////////
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
@@ -48,6 +82,34 @@ const normalizeName = raw => (decodeURIComponent(String(raw||''))
   .replace(/\s+/g, ' ')
   .trim()
   .toLowerCase());
+
+function getClientId(){
+  let id = store.get(KEYS.clientId, '');
+  if(!id){
+    id = uid('client');
+    store.set(KEYS.clientId, id);
+  }
+  return id;
+}
+
+function migrateStorage(){
+  const existing = Number(store.get(KEYS.schema, 0)) || 0;
+  if(existing >= SCHEMA_VERSION) return;
+
+  const decks = store.get(KEYS.decks, {});
+  const tests = store.get(KEYS.tests, {});
+  const results = store.get(KEYS.results, []);
+  const archived = store.get(KEYS.archived, []);
+  const outbox = store.get(KEYS.outbox, []);
+
+  if(!decks || typeof decks !== 'object' || Array.isArray(decks)) store.set(KEYS.decks, {});
+  if(!tests || typeof tests !== 'object' || Array.isArray(tests)) store.set(KEYS.tests, {});
+  if(!Array.isArray(results)) store.set(KEYS.results, []);
+  if(!Array.isArray(archived)) store.set(KEYS.archived, []);
+  if(!Array.isArray(outbox)) store.set(KEYS.outbox, []);
+
+  store.set(KEYS.schema, SCHEMA_VERSION);
+}
 
 //////////////////////// fetch helpers /////////////////////////
 // Timeout wrapper (Safari-friendly)
@@ -95,20 +157,33 @@ async function cloudGET(params={}){
 
 async function cloudPOST(action, payload={}){
   if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
-  const params = new URLSearchParams();
-  params.set('action', action);
-  if (CLOUD.API_KEY) params.set('key', CLOUD.API_KEY);
-  for (const [k,v] of Object.entries(payload)){
-    params.set(k, (v && typeof v === 'object') ? JSON.stringify(v) : String(v));
+  const makeParams = () => {
+    const params = new URLSearchParams();
+    params.set('action', action);
+    if (CLOUD.API_KEY) params.set('key', CLOUD.API_KEY);
+    for (const [k,v] of Object.entries(payload)){
+      params.set(k, (v && typeof v === 'object') ? JSON.stringify(v) : String(v));
+    }
+    return params;
+  };
+
+  const tryOnce = async () => {
+    const r = await fetchWithTimeout(CLOUD.BASE, { method: 'POST', body: makeParams() }, 8000);
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const json = await r.json();
+    if(json && typeof json === 'object' && 'ok' in json){
+      if(json.ok) return json.data;
+      throw new Error(json.error || 'Server error');
+    }
+    return json;
+  };
+
+  try{
+    return await tryOnce();
+  }catch(err){
+    await new Promise(res => setTimeout(res, 500 + Math.random()*500));
+    return await tryOnce();
   }
-  const r = await fetchWithTimeout(CLOUD.BASE, { method: 'POST', body: params }, 8000);
-  if(!r.ok) throw new Error(`HTTP ${r.status}`);
-  const json = await r.json();
-  if(json && typeof json === 'object' && 'ok' in json){
-    if(json.ok) return json.data;
-    throw new Error(json.error || 'Server error');
-  }
-  return json;
 }
 
 // GET list() → {decks, cards, tests}
@@ -185,12 +260,18 @@ function makeBackupObject(){
 
 async function cloudPullHandler(){
   try{
+    const localDecks = Object.keys(state.decks || {}).length;
+    const localTests = Object.keys(state.tests || {}).length;
+    if(localDecks || localTests){
+      const ok = confirm(`Pull from Cloud?\n\nThis will replace your local decks/tests with the Cloud version.\nLocal changes not in the Cloud may be lost.\n\nLocal: ${localDecks} deck(s), ${localTests} test(s).`);
+      if(!ok) return;
+    }
     $('#cloudPullBtn')?.setAttribute('disabled','true');
     const {decks, tests} = await getAllFromCloud();
     state.decks = decks; state.tests = tests;
     mergeDecksByName(); normalizeTests();
-    store.set(KEYS.decks, state.decks);
-    store.set(KEYS.tests, state.tests);
+    saveDecks();
+    saveTests();
     renderCreate(); renderBuild(); renderReports();
     toast('Pulled from Cloud');
   }catch(err){
@@ -234,7 +315,7 @@ async function resultsRefreshFromCloud(){
       answers : (()=>{ try { return JSON.parse(r.answersJSON||'[]'); } catch { return []; }})()
     }));
 
-    store.set(KEYS.results, state.results);
+    saveResults();
     renderReports();
     toast('Results pulled from Cloud');
   }catch(err){
@@ -275,8 +356,8 @@ async function maybeHydrateFromCloud(force = false){
       if(student) setStudentLoading(true);
       const {decks, tests} = await getAllFromCloud();
       state.decks = decks; state.tests = tests;
-      store.set(KEYS.decks, decks);
-      store.set(KEYS.tests, tests);
+      saveDecks();
+      saveTests();
     }catch(err){
       console.warn('Cloud hydrate failed:', err.message||err);
       if(!student){
@@ -297,15 +378,126 @@ async function maybeHydrateFromCloud(force = false){
 /* --------------------------------------------------------------- */
 
 /////////////////////////// global state /////////////////////////
+migrateStorage();
+const clientId = getClientId();
+
 let state = {
   decks   : store.get(KEYS.decks, {}),
   tests   : store.get(KEYS.tests, {}),
   results : store.get(KEYS.results, []),
   archived: store.get(KEYS.archived, []),
+  outbox  : store.get(KEYS.outbox, []),
   practice: { cards:[], idx:0 },
-  quiz    : { items:[], idx:0, n:30, locked:false, testId:'' },
-  ui      : { currentTestId: null, subFilter: '' }
+  quiz    : { items:[], idx:0, n:30, locked:false, testId:'', submitting:false },
+  ui      : { currentTestId: null, subFilter: '', classFilter: '' },
+  meta    : { decksVersion: 0, testsVersion: 0, resultsVersion: 0, archivedVersion: 0 }
 };
+
+//////////////////////////// outbox //////////////////////////////
+let __outboxFlushPromise = null;
+const cache = {
+  deckListVersion: -1,
+  deckList: [],
+  missedVersion: -1,
+  missedHtml: '',
+  locationKey: '',
+  locationHtml: ''
+};
+
+function saveDecks(){ store.set(KEYS.decks, state.decks); state.meta.decksVersion++; }
+function saveTests(){ store.set(KEYS.tests, state.tests); state.meta.testsVersion++; }
+function saveResults(){ store.set(KEYS.results, state.results); state.meta.resultsVersion++; }
+function saveArchived(){ store.set(KEYS.archived, state.archived); state.meta.archivedVersion++; }
+
+function validateResultRow(row){
+  if(!row) return 'Missing result payload';
+  if(!row.id) return 'Missing result id';
+  if(!row.name) return 'Missing name';
+  if(!row.location) return 'Missing location';
+  if(!row.date) return 'Missing date';
+  if(!row.testId) return 'Missing test id';
+  if(!row.testName) return 'Missing test name';
+  if(!Array.isArray(row.answers)) return 'Missing answers';
+  return '';
+}
+function persistOutbox(){ store.set(KEYS.outbox, state.outbox); updateOutboxIndicator(); }
+function updateOutboxIndicator(){
+  const el = document.getElementById('outboxStatus');
+  if(!el) return;
+  const count = state.outbox.length;
+  el.textContent = count ? `Pending sync: ${count}` : 'All synced';
+  el.classList.toggle('pending', count > 0);
+}
+function ensureOutboxIndicator(){
+  if(document.getElementById('outboxStatus')) return;
+  const footer = document.querySelector('.footer');
+  if(!footer) return;
+  const span = document.createElement('span');
+  span.id = 'outboxStatus';
+  span.className = 'hint';
+  span.style.marginLeft = '8px';
+  footer.appendChild(span);
+  updateOutboxIndicator();
+}
+function enqueueOutbox(action, payload){
+  const exists = state.outbox.some(item => item.action === action && item.id === payload.id);
+  if(exists) return;
+  state.outbox.push({
+    id: payload.id,
+    action,
+    payload,
+    tries: 0,
+    nextAttemptAt: 0,
+    lastError: ''
+  });
+  persistOutbox();
+}
+function isOutboxPending(id){
+  return state.outbox.some(item => item.id === id);
+}
+function acquireOutboxLock(){
+  const now = Date.now();
+  const existing = Number(localStorage.getItem(KEYS.outboxLock) || 0);
+  if(existing && now - existing < 15000) return false;
+  localStorage.setItem(KEYS.outboxLock, String(now));
+  return true;
+}
+function releaseOutboxLock(){
+  const existing = Number(localStorage.getItem(KEYS.outboxLock) || 0);
+  if(existing) localStorage.removeItem(KEYS.outboxLock);
+}
+async function flushOutbox(forceToast=false){
+  if(__outboxFlushPromise) return __outboxFlushPromise;
+  if(!state.outbox.length) return;
+  if(!acquireOutboxLock()) return;
+
+  __outboxFlushPromise = (async ()=>{
+    const now = Date.now();
+    const remaining = [];
+    let sent = 0;
+    for(const item of state.outbox){
+      if(item.nextAttemptAt && item.nextAttemptAt > now){ remaining.push(item); continue; }
+      try{
+        await cloudPOST(item.action, item.payload);
+        sent++;
+      }catch(err){
+        item.tries = (item.tries || 0) + 1;
+        item.lastError = String(err?.message || err || 'Unknown error');
+        const backoffMs = Math.min(60000, 1000 * Math.pow(2, Math.min(item.tries, 6)));
+        item.nextAttemptAt = Date.now() + backoffMs;
+        remaining.push(item);
+      }
+    }
+    state.outbox = remaining;
+    persistOutbox();
+    if(forceToast && sent){ toast(`Synced ${sent} queued result${sent===1?'':'s'}.`); }
+  })().finally(()=>{
+    releaseOutboxLock();
+    __outboxFlushPromise = null;
+  });
+
+  return __outboxFlushPromise;
+}
 
 //////////////////////////// toasts //////////////////////////////
 function toast(msg, ms=1800){
@@ -331,12 +523,17 @@ function activate(view){
 
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-'+view));
   $$('.menu-item').forEach(i => i.classList.toggle('active', i.dataset.route===view));
+  $$('.student-nav-btn').forEach(i => i.classList.toggle('active', i.dataset.route===view));
 
   if(view==='create')   renderCreate();
   if(view==='build')    renderBuild();
   if(view==='practice') renderPracticeScreen();
   if(view==='quiz')     renderQuizScreen();
+  if(view==='grades')   renderGrades();
+  if(view==='leaderboards') renderLeaderboards();
+  if(view==='quizzes')  renderQuizzes();
   if(view==='reports')  renderReports();
+  if(view==='settings') renderSettings();
 
   closeMenu();
 }
@@ -346,14 +543,29 @@ window.addEventListener('popstate', ()=>activate(qs().get('view')||'create'));
 function menuEls(){ return { btn: $('#menuBtn'), list: $('#menuList') }; }
 function openMenu(){ const {btn,list}=menuEls(); if(!btn||!list) return; list.classList.add('open'); btn.setAttribute('aria-expanded','true'); }
 function closeMenu(){ const {btn,list}=menuEls(); if(!btn||!list) return; list.classList.remove('open'); btn.setAttribute('aria-expanded','false'); }
-function toggleMenu(e){ const {btn,list}=menuEls(); if(!btn||!list) return; e&&e.stopPropagation(); list.classList.contains('open')?closeMenu():openMenu(); }
+function toggleMenu(e){
+  const {btn,list}=menuEls(); if(!btn||!list) return;
+  if(e){
+    e.stopPropagation();
+    if(e.type==='touchstart' || e.type==='pointerdown' || e.type==='click') e.preventDefault();
+  }
+  list.classList.contains('open')?closeMenu():openMenu();
+}
 (function bindMenu(){
   const {btn,list}=menuEls(); if(!btn||!list) return;
   btn.addEventListener('click', toggleMenu);
+  btn.addEventListener('pointerdown', toggleMenu);
+  btn.addEventListener('touchstart', toggleMenu, {passive:false});
   list.addEventListener('click', (e)=>{
     const item = e.target.closest('.menu-item'); if(!item) return;
     const route = item.dataset.route; if(route){ setParams({view:route}); activate(route); }
     closeMenu();
+  });
+  document.addEventListener('click', (e)=>{
+    const studentBtn = e.target.closest('.student-nav-btn');
+    if(!studentBtn) return;
+    const route = studentBtn.dataset.route;
+    if(route){ setParams({view:route}); activate(route); }
   });
   document.addEventListener('click', e=>{ if(!e.target.closest('.menu')) closeMenu(); });
   document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeMenu(); });
@@ -380,18 +592,23 @@ function applyStudentMode(){
 
 /////////////////////// deck merge helpers ///////////////////////
 function listUniqueDecks(){
+  if(cache.deckListVersion === state.meta.decksVersion && cache.deckList.length){
+    return cache.deckList.slice();
+  }
   const seen=new Set(), arr=[];
   for(const d of Object.values(state.decks)){
     const k=deckKey(d); if(!seen.has(k)){ seen.add(k); arr.push(d); }
   }
   arr.sort((a,b)=> (a.className||'').localeCompare(b.className||'') || (a.deckName||'').localeCompare(b.deckName||'')); 
+  cache.deckListVersion = state.meta.decksVersion;
+  cache.deckList = arr.slice();
   return arr;
 }
 function deckSubTags(d){
   const fromCards=(d.cards||[]).map(c=>c.sub||'').filter(Boolean);
   const declared=(d.tags||[]);
   const legacy=d.subdeck?[d.subdeck]:[];
-  return unique([...fromCards,...declared,...legacy]).sort((a,b)=>a.localeCompare(b));
+  return unique([...fromCards,...declared,...legacy]).sort((a,b)=>String(a).localeCompare(String(b)));
 }
 function mergeDecksByName(){
   const mapByKey=new Map(), idRemap=new Map();
@@ -413,8 +630,8 @@ function mergeDecksByName(){
     }
     t.selections=dedupeSelections(t.selections||[]);
   }
-  if(changed) store.set(KEYS.tests,state.tests);
-  store.set(KEYS.decks,state.decks);
+  if(changed) saveTests();
+  saveDecks();
 }
 
 // ---- Always-visible CTA to load/refresh tests from Cloud ----
@@ -435,8 +652,8 @@ async function loadTestsNow(btn){
     // Normalize + persist
     mergeDecksByName();
     normalizeTests();
-    store.set(KEYS.decks, state.decks);
-    store.set(KEYS.tests, state.tests);
+    saveDecks();
+    saveTests();
 
     // Re-render UI that depends on tests
     renderCreate();
@@ -534,28 +751,38 @@ function renderCreate(){
   renderDeckSelect();
   renderDeckMeta();
   renderSubdeckManager();
+  renderFolderTree();
   renderCardsList();
 
-  on($('#createSubdeckBtn'),'click',createSubdeck);
-  on($('#toggleSubdeckBtn'),'click',toggleNewSubdeck);
-  on($('#addDeckBtn'),'click',addDeck);
-  on($('#renameDeckBtn'),'click',renameDeck);
-  on($('#editDeckMetaBtn'),'click',editDeckMeta);
-  on($('#deleteDeckBtn'),'click',deleteDeck);
-  on($('#exportDeckBtn'),'click',exportDeck);
-  on($('#importDeckBtn'),'click',()=>{ toast('Choose a JSON or TXT file to import…',1400); $('#importDeckInput')?.click(); });
-  on($('#importDeckInput'),'change',importDeckInputChange);
-  on($('#bulkSummaryBtn'),'click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
-  on($('#bulkAddBtn'),'click',bulkAddCards);
-  on($('#addCardBtn'),'click',addCard);
+  bindOnce($('#createSubdeckBtn'),'click',createSubdeck);
+  bindOnce($('#toggleSubdeckBtn'),'click',toggleNewSubdeck);
+  bindOnce($('#addDeckBtn'),'click',addDeck);
+  bindOnce($('#renameDeckBtn'),'click',renameDeck);
+  bindOnce($('#editDeckMetaBtn'),'click',editDeckMeta);
+  bindOnce($('#deleteDeckBtn'),'click',deleteDeck);
+  bindOnce($('#exportDeckBtn'),'click',exportDeck);
+  bindOnce($('#importDeckBtn'),'click',()=>{ toast('Choose a JSON or TXT file to import…',1400); $('#importDeckInput')?.click(); });
+  bindOnce($('#importDeckInput'),'change',importDeckInputChange);
+  bindOnce($('#bulkSummaryBtn'),'click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
+  bindOnce($('#bulkAddBtn'),'click',bulkAddCards);
+  bindOnce($('#addCardBtn'),'click',()=>saveCard(false));
+  bindOnce($('#saveCardCloudBtn'),'click',()=>saveCard(true));
+  bindOnce($('#cancelCardEditBtn'),'click',cancelCardEdit);
+  bindOnce($('#deleteDeckHardBtn'),'click',deleteSelectedDeckHard);
+  bindOnce($('#deleteSubdeckBtn'),'click',deleteSelectedSubdeck);
+  bindOnce($('#deleteClassBtn'),'click',deleteSelectedClass);
 
-  on($('#cloudPullBtn'),'click',cloudPullHandler);
-  on($('#cloudPushBtn'),'click',cloudPushHandler);
-
-  on($('#deckSelect'),'change',()=>{ 
+  bindOnce($('#deckSelect'),'change',()=>{ 
     state.ui.subFilter=''; 
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList(); 
+    renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList(); 
   });
+}
+
+function renderSettings(){
+  ensureBackupButtons();
+  bindOnce($('#cloudPullBtn'),'click',cloudPullHandler);
+  bindOnce($('#cloudPushBtn'),'click',cloudPushHandler);
+  bindOnce($('#bulkGlobalAddBtn'),'click',bulkAddGlobalCards);
 }
 
 function renderDeckSelect(){
@@ -580,16 +807,16 @@ function renderDeckMeta(){
   subsEl.innerHTML=subs.length?subs.map(s=>`
     <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
   `).join(''):`<span class="hint">No sub-decks yet</span>`;
-  subsEl.querySelectorAll('.remove').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const tag=btn.dataset.sub;
-      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-      d.tags=(d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-      store.set(KEYS.decks,state.decks);
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    });
-  });
+  bindOnce(subsEl, 'click', (event)=>{
+    const btn = event.target.closest('.remove');
+    if(!btn) return;
+    const tag=btn.dataset.sub;
+    const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
+    d.tags=(d.tags||[]).filter(t=>t!==tag);
+    if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
+    saveDecks();
+    renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  }, 'deckMetaRemove');
 
   const subSel = $('#cardsSubFilter');
   if(subSel){
@@ -598,6 +825,7 @@ function renderDeckMeta(){
     if(curr && subs.includes(curr)) subSel.value = curr; else subSel.value = '';
     subSel.onchange = ()=>{ state.ui.subFilter = subSel.value || ''; renderCardsList(); };
   }
+  renderFolderTree();
 }
 function renderSubdeckManager(){
   const list=$('#subdeckManagerList'); if(!list) return;
@@ -607,62 +835,400 @@ function renderSubdeckManager(){
   list.innerHTML=subs.length?subs.map(s=>`
     <span class="chip">${esc(s)} <button class="remove" data-sub="${esc(s)}" title="Remove tag" aria-label="Remove tag">&times;</button></span>
   `).join(''):`<span class="hint">No sub-decks yet.</span>`;
-  list.querySelectorAll('.remove').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const tag=btn.dataset.sub;
-      const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
-      d.tags=(d.tags||[]).filter(t=>t!==tag);
-      if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
-      store.set(KEYS.decks,state.decks);
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    });
-  });
+  bindOnce(list, 'click', (event)=>{
+    const btn = event.target.closest('.remove');
+    if(!btn) return;
+    const tag=btn.dataset.sub;
+    const alsoClear=confirm(`Remove sub-deck “${tag}” from deck tags?\n\nOK = also clear this tag from ALL cards.\nCancel = just remove declared tag.`);
+    d.tags=(d.tags||[]).filter(t=>t!==tag);
+    if(alsoClear){ (d.cards||[]).forEach(c=>{ if((c.sub||'')===tag) c.sub=''; }); }
+    saveDecks();
+    renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  }, 'subdeckRemove');
+}
+function renderFolderTree(){
+  const tree = $('#folderTree'); if(!tree) return;
+  const decks = Object.values(state.decks || {});
+  if(!decks.length){ tree.innerHTML = '<div class="hint">No folders yet. Create a deck to get started.</div>'; return; }
+
+  const selectedDeck = selectedDeckId();
+  const selectedSub = (state.ui.subFilter || '').trim();
+  const selectedClass = (state.ui.classFilter || '').trim();
+
+  const classMap = new Map();
+  for(const d of decks){
+    const cls = (d.className || 'Uncategorized').trim() || 'Uncategorized';
+    if(!classMap.has(cls)) classMap.set(cls, []);
+    classMap.get(cls).push(d);
+  }
+
+  const classes = [...classMap.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
+  tree.innerHTML = classes.map(([cls, classDecks])=>{
+    const sortedDecks = classDecks.slice().sort((a,b)=>a.deckName.localeCompare(b.deckName));
+    const classSelected = selectedClass === cls && !selectedDeck;
+    const deckHtml = sortedDecks.map(d=>{
+      const subs = deckSubTags(d);
+      const totalCards = (d.cards || []).length;
+      const deckSelected = selectedDeck === d.id && !selectedSub;
+      const subsHtml = subs.map(s=>{
+        const count = (d.cards || []).filter(c=>String(c.sub||'')===String(s)).length;
+        const subSelected = selectedDeck === d.id && selectedSub === s;
+        return `<button class="folder-link sub-link ${subSelected?'selected':''}" data-deck="${d.id}" data-sub="${esc(s)}">
+          <span class="name">${esc(s)}</span><span class="count">${count}</span>
+        </button>`;
+      }).join('');
+
+      return `<div class="folder-deck">
+        <div class="folder-row">
+          <button class="folder-link deck-link ${deckSelected?'selected':''}" data-deck="${d.id}">
+            <span class="name">${esc(d.deckName)}</span>
+            <span class="meta">(${totalCards} card${totalCards!==1?'s':''})</span>
+          </button>
+          <button class="btn ghost tiny add-sub" data-deck="${d.id}">+ Subfolder</button>
+        </div>
+        ${subsHtml?`<div class="folder-subs">${subsHtml}</div>`:'<div class="hint mt-sm">No subfolders yet.</div>'}
+      </div>`;
+    }).join('');
+
+    return `<details class="folder-group" open>
+      <summary>
+        <button class="folder-link class-link ${classSelected?'selected':''}" data-class="${esc(cls)}">
+          <span class="name">${esc(cls)}</span>
+        </button>
+        <span class="count">${sortedDecks.length} deck${sortedDecks.length!==1?'s':''}</span>
+      </summary>
+      <div class="folder-decks">${deckHtml}</div>
+    </details>`;
+  }).join('');
+
+  bindOnce(tree, 'click', (event)=>{
+    const addBtn = event.target.closest('.add-sub');
+    if(addBtn){
+      const deckId = addBtn.dataset.deck;
+      const d = state.decks[deckId];
+      if(!d) return;
+      const next = prompt('New subfolder name:');
+      if(next == null) return;
+      const name = next.trim();
+      if(!name) return alert('Subfolder name cannot be empty.');
+      d.tags = unique([...(d.tags||[]), name]);
+      saveDecks();
+      renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+      return;
+    }
+
+    const classLink = event.target.closest('.class-link');
+    const deckLink = event.target.closest('.deck-link');
+    const subLink = event.target.closest('.sub-link');
+    if(classLink){
+      const cls = classLink.dataset.class || '';
+      setSelectedFolder('', '', cls);
+      return;
+    }
+    if(!deckLink && !subLink) return;
+    const deckId = (deckLink || subLink).dataset.deck;
+    const sub = subLink ? subLink.dataset.sub : '';
+    setSelectedFolder(deckId, sub, '');
+  }, 'folderTree');
+}
+function setSelectedFolder(deckId, sub, cls){
+  const deckSelect = $('#deckSelect');
+  if(deckSelect) deckSelect.value = deckId || '';
+  state.ui.subFilter = sub || '';
+  state.ui.classFilter = cls || '';
+  const subSel = $('#cardsSubFilter');
+  if(subSel) subSel.value = sub || '';
+  const cardSubInput = $('#cardSubInput');
+  if(cardSubInput && sub) cardSubInput.value = sub;
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
 }
 function renderCardsList(){
   const cardsList=$('#cardsList'); if(!cardsList) return;
+  renderFolderTree();
   const id=selectedDeckId();
-  if(!id){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
-  const d=state.decks[id];
+  const classFilter = (state.ui.classFilter || '').trim();
+  if(!id && !classFilter){ cardsList.innerHTML='<div class="hint">Create a deck, then add cards.</div>'; return; }
+  const d = id ? state.decks[id] : null;
 
   const subFilter = ($('#cardsSubFilter')?.value || state.ui.subFilter || '').trim();
-  const list = subFilter ? (d.cards||[]).filter(c => (c.sub||'') === subFilter) : (d.cards||[]);
+  let list = [];
+  if(d){
+    list = (subFilter ? (d.cards||[]).filter(c => (c.sub||'') === subFilter) : (d.cards||[]))
+      .map(c => ({...c, deckId: d.id}));
+  }else if(classFilter){
+    const decks = Object.values(state.decks || {}).filter(x => (x.className || '').trim() === classFilter);
+    list = decks.flatMap(x => (x.cards || []).map(c => ({...c, deckId: x.id})));
+  }
 
   if(!list.length){ cardsList.innerHTML='<div class="hint">No cards yet—add your first one above.</div>'; return; }
   cardsList.innerHTML=list.map(c=>`
-    <div class="cardline" data-id="${c.id}">
+    <div class="cardline" data-id="${c.id}" data-deck="${c.deckId || ''}">
       <div><strong>Q:</strong> ${esc(c.q)}</div>
       <div><strong>Correct:</strong> ${esc(c.a)}<br><span class="hint">Wrong:</span> ${esc((c.distractors||[]).join(' | '))}${c.sub? `<br><span class="hint">Sub-deck: ${esc(c.sub)}</span>`:''}</div>
       <div class="actions"><button class="btn ghost btn-edit">Edit</button><button class="btn danger btn-del">Delete</button></div>
     </div>`).join('');
 
-  cardsList.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',()=>{
-    const keepDeckId = selectedDeckId(); if(!keepDeckId) return;
+  bindOnce(cardsList, 'click', (event)=>{
+    const delBtn = event.target.closest('.btn-del');
+    const editBtn = event.target.closest('.btn-edit');
+    if(!delBtn && !editBtn) return;
+    const row = event.target.closest('.cardline');
+    const keepDeckId = row?.dataset.deck || selectedDeckId();
+    if(!keepDeckId) return;
     const y = window.scrollY;
-    const d=state.decks[keepDeckId];
-    const cid=b.closest('.cardline').dataset.id;
-    d.cards=d.cards.filter(c=>c.id!==cid);
-    store.set(KEYS.decks,state.decks);
+    const deck = state.decks[keepDeckId];
+    const cid = row?.dataset.id;
+    if(!cid || !deck) return;
 
-    renderDeckSelect();
-    const deckSelect = $('#deckSelect');
-    if (deckSelect) deckSelect.value = keepDeckId;
+    if(delBtn){
+      deck.cards = deck.cards.filter(c=>c.id!==cid);
+      saveDecks();
+      renderDeckSelect();
+      const deckSelect = $('#deckSelect');
+      if (deckSelect) deckSelect.value = keepDeckId;
+      renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+      window.scrollTo(0, y);
+      toast('Card deleted');
+      promptPushChanges();
+      return;
+    }
 
-    renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    window.scrollTo(0, y);
-    toast('Card deleted');
-  }));
+    if(editBtn){
+      const card = deck.cards.find(c=>c.id===cid); if(!card) return;
+      $('#qInput').value = card.q || '';
+      $('#aCorrectInput').value = card.a || '';
+      $('#aWrong1Input').value = (card.distractors||[])[0] || '';
+      $('#aWrong2Input').value = (card.distractors||[])[1] || '';
+      $('#aWrong3Input').value = (card.distractors||[])[2] || '';
+      $('#cardSubInput').value = card.sub || '';
+      state.ui.editCardId = card.id;
+      $('#addCardBtn').textContent = 'Update Card';
+      $('#cancelCardEditBtn')?.classList.remove('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, 'cardsList');
+}
 
-  cardsList.querySelectorAll('.btn-edit').forEach(b=>b.addEventListener('click',()=>{
-    const cid=b.closest('.cardline').dataset.id; const card=d.cards.find(c=>c.id===cid); if(!card) return;
-    const q=prompt('Question:',card.q); if(q===null) return;
-    const a=prompt('Correct answer:',card.a); if(a===null) return;
-    const wrong=prompt('Wrong answers (separate by |):',(card.distractors||[]).join('|'));
-    const sub=prompt('Card sub-deck (optional):',card.sub||''); if(sub===null) return;
-    card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
-    if(card.sub){ d.tags=unique([...(d.tags||[]),card.sub]); }
-    store.set(KEYS.decks,state.decks); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-    toast('Card updated');
-  }));
+function renderGrades(){
+  const list = $('#gradesList'); if(!list) return;
+  const local = (state.results || []).filter(r => !r.clientId || r.clientId === clientId);
+  if(!local.length){
+    list.innerHTML = '<div class="hint">No grades yet. Submit a quiz to see your results here.</div>';
+    return;
+  }
+  const rows = local
+    .slice()
+    .sort((a,b)=> (b.time || b.timeEpoch || 0) - (a.time || a.timeEpoch || 0))
+    .map(r=>{
+      const when = r.date || (r.time || r.timeEpoch ? new Date(r.time || r.timeEpoch).toLocaleDateString() : '');
+      const score = typeof r.score === 'number' ? `${r.score}%` : '';
+      const of = Number.isFinite(r.correct) && Number.isFinite(r.of) ? ` (${r.correct}/${r.of})` : '';
+      return `<div class="cardline">
+        <div><strong>${esc(r.testName || 'Quiz')}</strong><div class="hint">${esc(when)}</div></div>
+        <div><strong>${esc(score)}</strong>${esc(of)}</div>
+        <div class="actions">
+          <button class="btn ghost btn-open-grade" data-id="${esc(getResultId(r))}">Open</button>
+        </div>
+      </div>`;
+    }).join('');
+  list.innerHTML = rows;
+
+  bindOnce(list, 'click', (event)=>{
+    const btn = event.target.closest('.btn-open-grade');
+    if(!btn) return;
+    const id = btn.dataset.id;
+    const r = local.find(x => getResultId(x) === id);
+    if(!r) return;
+    openResultDetails(r);
+  }, 'gradesList');
+}
+
+function renderQuizzes(){
+  const sel = $('#quizShareSelect');
+  const list = $('#quizShareList');
+  const tests = Object.values(state.tests || {}).slice().sort((a,b)=>{
+    const aStamp = a?.updatedAt || 0;
+    const bStamp = b?.updatedAt || 0;
+    if(bStamp !== aStamp) return bStamp - aStamp;
+    return testDisplayName(a).localeCompare(testDisplayName(b));
+  });
+
+  if(sel){
+    if(!tests.length){
+      sel.innerHTML = '<option value="">No quizzes yet</option>';
+    } else {
+      sel.innerHTML = tests.map(t=>`<option value="${esc(t.id)}">${esc(testDisplayName(t))}</option>`).join('');
+    }
+  }
+
+  if(list){
+    if(!tests.length){
+      list.innerHTML = '<div class="hint">No quizzes yet. Build a quiz first.</div>';
+    } else {
+      list.innerHTML = tests.map(t=>`
+        <div class="cardline" data-id="${t.id}">
+          <div><strong>${esc(testDisplayName(t))}</strong><div class="hint">${esc(t.name || '')}</div></div>
+          <div><span class="hint">Questions:</span> ${t.n || 0}</div>
+          <div class="actions">
+            <button class="btn ghost btn-copy-link">Copy Link</button>
+            <button class="btn btn-open-link">Open</button>
+            <button class="btn danger btn-delete-quiz">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+  }
+
+  bindOnce($('#quizShareCopyBtn'),'click',()=>copyShareLinkForId(sel?.value));
+  bindOnce($('#quizShareOpenBtn'),'click',()=>openShareLinkForId(sel?.value));
+  if(list){
+    bindOnce(list, 'click', (event)=>{
+      const row = event.target.closest('.cardline'); if(!row) return;
+      const id = row.dataset.id;
+      if(event.target.closest('.btn-copy-link')) return copyShareLinkForId(id);
+      if(event.target.closest('.btn-open-link')) return openShareLinkForId(id);
+      if(event.target.closest('.btn-delete-quiz')){
+        const t = state.tests?.[id];
+        const name = t?.name || 'Quiz';
+        if(confirm(`Delete quiz “${name}”?`)){
+          delete state.tests[id];
+          saveTests();
+          renderQuizzes();
+          toast('Quiz deleted');
+        }
+      }
+    }, 'quizShareList');
+  }
+}
+
+function renderLeaderboards(){
+  bindOnce($('#leaderboardRefreshBtn'),'click',refreshLeaderboards);
+  updateLeaderboardsFromResults(state.results || []);
+}
+
+async function refreshLeaderboards(){
+  const btn = $('#leaderboardRefreshBtn');
+  if(btn) btn.disabled = true;
+  try{
+    const rows = await cloudGET({action:'results',limit:500});
+    if(!Array.isArray(rows)) throw new Error('Bad results response');
+    state.results = rows.map(r=>({
+      id      : r.resId || r.id || uid('res'),
+      name    : r.name || '',
+      location: r.location || '',
+      date    : r.date || '',
+      time    : Number(r.timeEpoch || r.time || Date.now()),
+      testId  : r.testId || '',
+      testName: r.testName || '',
+      score   : Number(r.score || 0),
+      correct : Number(r.correct || 0),
+      of      : Number(r.of || 0),
+      answers : getResultAnswers(r)
+    }));
+    saveResults();
+    updateLeaderboardsFromResults(state.results);
+    toast('Leaderboards refreshed');
+  }catch(err){
+    alert('Failed to refresh leaderboards: '+(err.message||err));
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+function updateLeaderboardsFromResults(rows){
+  const list = $('#leaderboardList');
+  const locBox = $('#leaderboardLocations');
+  if(list){
+    if(!rows.length){
+      list.innerHTML = '<div class="hint">No results yet.</div>';
+    }else{
+      const top = rows.slice().sort((a,b)=>{
+        if(b.score !== a.score) return b.score - a.score;
+        return (b.time||0) - (a.time||0);
+      }).slice(0,10);
+      list.innerHTML = top.map((r,idx)=>`
+        <div class="cardline">
+          <div><strong>#${idx+1} ${esc(r.name || 'Barista')}</strong><div class="hint">${esc(r.testName || '')}</div></div>
+          <div>${esc(r.location || '')}</div>
+          <div><strong>${Math.round(Number(r.score)||0)}%</strong></div>
+        </div>
+      `).join('');
+    }
+  }
+  if(locBox){
+    if(!rows.length){
+      locBox.innerHTML = '<div class="hint">No location data yet.</div>';
+    }else{
+      const avgs = computeLocationAverages(rows);
+      const topCounts = avgs.slice().sort((a,b)=>b.count - a.count);
+      const topAvgs = avgs.slice().sort((a,b)=>b.avg - a.avg);
+      const bestByCount = topCounts[0];
+      const bestByAvg = topAvgs[0];
+
+      const bestSummary = `
+        <h4>Best Performing Location</h4>
+        <div class="report-row">
+          <div>
+            <strong>${esc(bestByAvg?.location || '—')}</strong>
+            <div class="hint">${bestByAvg ? `${Math.round(bestByAvg.avg)}% average score` : 'No scores yet'}</div>
+          </div>
+          <div>
+            <div class="hint">Submissions</div>
+            <strong>${bestByAvg ? bestByAvg.count : 0}</strong>
+          </div>
+          <div>
+            <div class="hint">Most responses</div>
+            <strong>${esc(bestByCount?.location || '—')}</strong>
+          </div>
+          <div>
+            <div class="hint">Count</div>
+            <strong>${bestByCount ? bestByCount.count : 0}</strong>
+          </div>
+        </div>
+      `;
+
+      locBox.innerHTML = `
+        ${bestSummary}
+        <h4 class="mt">Most Responses</h4>
+        ${topCounts.map((x,idx)=>`
+          <div class="report-row">
+            <div><strong>${esc(x.location)}</strong><div class="hint">${x.count} submission${x.count!==1?'s':''}</div></div>
+            <div><div class="hint">Rank</div><strong>#${idx+1}</strong></div>
+            <div></div>
+            <div></div>
+          </div>
+        `).join('')}
+        <h4 class="mt">Top Average Scores</h4>
+        ${topAvgs.map((x,idx)=>`
+          <div class="report-row">
+            <div><strong>${esc(x.location)}</strong></div>
+            <div><div class="hint">Average score</div><strong>${Math.round(x.avg)}%</strong></div>
+            <div><div class="hint">Rank</div><strong>#${idx+1}</strong></div>
+            <div></div>
+          </div>
+        `).join('')}
+      `;
+    }
+  }
+}
+
+function buildShareUrlForTest(t){
+  const url=new URL(location.href);
+  url.searchParams.set('mode','student');
+  url.searchParams.set('test',t.name);
+  url.searchParams.set('view','practice');
+  return url.toString();
+}
+function copyShareLinkForId(id){
+  const t = state.tests?.[id];
+  if(!t) return alert('Select a quiz first.');
+  navigator.clipboard.writeText(buildShareUrlForTest(t));
+  toast('Quiz link copied');
+}
+function openShareLinkForId(id){
+  const t = state.tests?.[id];
+  if(!t) return alert('Select a quiz first.');
+  open(buildShareUrlForTest(t),'_blank');
 }
 
 // CREATE handlers
@@ -670,7 +1236,7 @@ function createSubdeck(){
   const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
   const name=($('#subdeckNewName')?.value||'').trim(); if(!name) return;
   const d=state.decks[id]; d.tags=unique([...(d.tags||[]),name]);
-  store.set(KEYS.decks,state.decks); $('#subdeckNewName').value='';
+  saveDecks(); $('#subdeckNewName').value='';
   renderDeckMeta(); renderSubdeckManager(); toast('Sub-deck added');
 }
 function toggleNewSubdeck(){
@@ -687,13 +1253,13 @@ function addDeck(){
   let existing=Object.values(state.decks).find(d=>(d.className||'').toLowerCase()===cls.toLowerCase()&&(d.deckName||'').toLowerCase()===dnm.toLowerCase());
   if(existing){
     const deckSelect=$('#deckSelect'); if(deckSelect) deckSelect.value=existing.id;
-    if(sdn){ existing.tags=unique([...(existing.tags||[]),sdn]); store.set(KEYS.decks,state.decks); }
+    if(sdn){ existing.tags=unique([...(existing.tags||[]),sdn]); saveDecks(); }
     renderDeckMeta(); renderSubdeckManager(); renderCardsList(); renderDeckSelect();
     toast('Selected existing deck'); return;
   }
   const id=uid('deck');
   state.decks[id]={id,className:cls,deckName:dnm,cards:[],tags:sdn?[sdn]:[],createdAt:Date.now()};
-  store.set(KEYS.decks,state.decks);
+  saveDecks();
 
   if($('#newClassName')) $('#newClassName').value='';
   if($('#newDeckName'))  $('#newDeckName').value='';
@@ -709,7 +1275,7 @@ function renameDeck(){
   const cls=prompt('Class:',d.className||''); if(cls===null) return;
   const dnk=prompt('Deck (by name):',d.deckName||''); if(dnk===null) return;
   d.className=cls.trim(); d.deckName=dnk.trim();
-  store.set(KEYS.decks,state.decks); mergeDecksByName();
+  saveDecks(); mergeDecksByName();
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast('Deck renamed');
 }
@@ -718,7 +1284,7 @@ function editDeckMeta(){
   const d=state.decks[id];
   const cls=prompt('Edit Class:',d.className||''); if(cls===null) return;
   d.className=cls.trim();
-  store.set(KEYS.decks,state.decks); mergeDecksByName();
+  saveDecks(); mergeDecksByName();
   renderDeckSelect(); renderDeckMeta();
   toast('Meta updated');
 }
@@ -726,7 +1292,7 @@ function deleteDeck(){
   const id=selectedDeckId(); if(!id) return;
   if(confirm('Delete this deck and its cards?')){
     delete state.decks[id];
-    store.set(KEYS.decks,state.decks);
+    saveDecks();
     renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
     toast('Deck deleted');
   }
@@ -758,7 +1324,7 @@ async function importDeckInputChange(e){
         createdAt:Date.now()
       })));
       if(declaredTag) ex.tags=unique([...(ex.tags||[]),declaredTag]);
-      store.set(KEYS.decks,state.decks);
+      saveDecks();
       renderDeckSelect(); toast('Deck imported');
     };
     if(data && data.deckName && Array.isArray(data.cards)){ upsertDeck(data.className||'Class',data.deckName,data.cards,(data.subdeck||'').trim()); }
@@ -782,21 +1348,155 @@ function bulkAddCards(){
     let sub=''; if(parts[parts.length-1].startsWith?.('#')) sub=parts.pop().slice(1);
     const [q,a,...wrongs]=parts; state.decks[id].cards.push({id:uid('card'),q,a,distractors:wrongs,sub,createdAt:Date.now()}); n++;
   }
-  store.set(KEYS.decks,state.decks); if($('#bulkTextarea')) $('#bulkTextarea').value='';
+  saveDecks(); if($('#bulkTextarea')) $('#bulkTextarea').value='';
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast(`Added ${n} card(s)`);
 }
-function addCard(){
+
+function promptPushChanges(){
+  const ok = confirm('Push these changes to the Cloud now?\n\nOK = open the Cloud push dialog.\nChoose REPLACE there if you want Sheets to exactly match local.');
+  if(ok) cloudPushHandler();
+}
+
+function maybePushDeleteToCloud(){
+  const ok = confirm('Push this deletion to the Cloud?\n\nChoose OK to open the Cloud push dialog.\nPick REPLACE in the next prompt to remove deleted items from Sheets.');
+  if(ok) cloudPushHandler();
+}
+
+function removeDecksFromTests(deletedIds){
+  let changed = false;
+  for(const t of Object.values(state.tests || {})){
+    if(!Array.isArray(t.selections)) continue;
+    const next = t.selections.filter(sel => !deletedIds.has(sel.deckId));
+    if(next.length !== t.selections.length){
+      t.selections = next;
+      t.updatedAt = Date.now();
+      changed = true;
+    }
+  }
+  if(changed) saveTests();
+}
+
+function deleteSelectedDeckHard(){
+  const id = selectedDeckId();
+  if(!id) return alert('Select a deck first.');
+  const d = state.decks[id];
+  const name = `${d.deckName} — ${d.className}`;
+  if(!confirm(`Are you sure you want to delete this deck?\n\n${name}\nCards: ${d.cards.length}`)) return;
+  delete state.decks[id];
+  saveDecks();
+  removeDecksFromTests(new Set([id]));
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast('Deck deleted');
+  maybePushDeleteToCloud();
+}
+
+function deleteSelectedSubdeck(){
+  const id = selectedDeckId();
+  if(!id) return alert('Select a deck first.');
+  const d = state.decks[id];
+  let sub = ($('#cardsSubFilter')?.value || state.ui.subFilter || '').trim();
+  if(!sub) sub = prompt('Sub-deck name to delete:', '')?.trim() || '';
+  if(!sub) return;
+  const count = (d.cards || []).filter(c => (c.sub || '') === sub).length;
+  if(!confirm(`Are you sure you want to delete sub-deck “${sub}”?\n\nThis will clear the tag from ${count} card(s).`)) return;
+  d.tags = (d.tags || []).filter(t => t !== sub);
+  (d.cards || []).forEach(c => { if((c.sub || '') === sub) c.sub = ''; });
+  saveDecks();
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast('Sub-deck deleted');
+  maybePushDeleteToCloud();
+}
+
+function deleteSelectedClass(){
+  const id = selectedDeckId();
+  const className = id ? (state.decks[id]?.className || '') : ($('#newClassName')?.value.trim() || '');
+  if(!className) return alert('Select a deck or enter a class name first.');
+  const deckIds = Object.values(state.decks || {})
+    .filter(d => (d.className || '').toLowerCase() === className.toLowerCase())
+    .map(d => d.id);
+  if(!deckIds.length) return alert('No decks found for that class.');
+  if(!confirm(`Are you sure you want to delete the class “${className}”?\n\nThis will delete ${deckIds.length} deck(s).`)) return;
+  deckIds.forEach(id => delete state.decks[id]);
+  saveDecks();
+  removeDecksFromTests(new Set(deckIds));
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast('Class deleted');
+  maybePushDeleteToCloud();
+}
+
+function bulkAddGlobalCards(){
+  const txt=$('#bulkGlobalTextarea')?.value.trim(); if(!txt) return alert('Paste at least one line.');
+  let n=0; let createdDecks=0;
+
+  const findOrCreateDeck = (cls, name)=>{
+    let ex=Object.values(state.decks).find(d=>
+      (d.className||'').toLowerCase()===cls.toLowerCase() &&
+      (d.deckName||'').toLowerCase()===name.toLowerCase()
+    );
+    if(!ex){
+      const id=uid('deck');
+      ex=state.decks[id]={id,className:cls,deckName:name,cards:[],tags:[],createdAt:Date.now()};
+      createdDecks++;
+    }
+    return ex;
+  };
+
+  for(const rawLine of txt.split(/\r?\n/)){
+    const line = rawLine.trim();
+    if(!line) continue;
+    const parts=line.split('|').map(s=>s.trim()).filter(Boolean);
+    if(parts.length<4) continue;
+    let sub='';
+    if(parts[parts.length-1].startsWith?.('#')) sub=parts.pop().slice(1).trim();
+    if(parts.length<4) continue;
+    const [cls, deck, q, a, ...wrongs]=parts;
+    if(!cls || !deck || !q || !a || wrongs.length===0) continue;
+
+    const target = findOrCreateDeck(cls, deck);
+    target.cards.push({id:uid('card'),q,a,distractors:wrongs,sub,createdAt:Date.now()});
+    if(sub) target.tags=unique([...(target.tags||[]),sub]);
+    n++;
+  }
+
+  saveDecks();
+  if($('#bulkGlobalTextarea')) $('#bulkGlobalTextarea').value='';
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast(`Added ${n} card(s)${createdDecks?` • ${createdDecks} new deck${createdDecks===1?'':'s'}`:''}`);
+}
+function saveCard(pushAfter=false){
   const id=selectedDeckId(); if(!id) return alert('Select a deck first.');
   const q=$('#qInput')?.value.trim(), a=$('#aCorrectInput')?.value.trim(), w1=$('#aWrong1Input')?.value.trim(),
         w2=$('#aWrong2Input')?.value.trim(), w3=$('#aWrong3Input')?.value.trim(), sub=$('#cardSubInput')?.value.trim();
   if(!q||!a||!w1) return alert('Enter question, correct, and at least one wrong answer.');
-  state.decks[id].cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
-  if(sub){ const d=state.decks[id]; d.tags=unique([...(d.tags||[]),sub]); }
-  store.set(KEYS.decks,state.decks);
+  const deck = state.decks[id];
+  const editId = state.ui.editCardId;
+  if(editId){
+    const card = deck.cards.find(c=>c.id===editId); if(!card) return;
+    card.q=q; card.a=a; card.distractors=[w1,w2,w3].filter(Boolean); card.sub=sub;
+    toast('Card updated');
+  } else {
+    deck.cards.push({id:uid('card'),q,a,distractors:[w1,w2,w3].filter(Boolean),sub,createdAt:Date.now()});
+    toast('Card saved');
+  }
+  if(sub){ deck.tags=unique([...(deck.tags||[]),sub]); }
+  saveDecks();
+  clearCardForm();
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  if(pushAfter) cloudPushHandler();
+}
+
+function clearCardForm(){
   ['#qInput','#aCorrectInput','#aWrong1Input','#aWrong2Input','#aWrong3Input','#cardSubInput'].forEach(sel=>{ if($(sel)) $(sel).value=''; });
-  renderDeckMeta(); renderSubdeckManager(); renderCardsList();
-  toast('Card saved');
+  state.ui.editCardId = null;
+  const addBtn = $('#addCardBtn');
+  if (addBtn) addBtn.textContent = 'Save Card';
+  $('#cancelCardEditBtn')?.classList.add('hidden');
+}
+
+function cancelCardEdit(){
+  clearCardForm();
+  toast('Edit cancelled');
 }
 
 //////////////////////////// BUILD //////////////////////////////
@@ -812,15 +1512,17 @@ function renderTestsDatalist(){
   dl.innerHTML=arr.map(t=>`<option value="${esc(t.name)}"></option>`).join('');
 }
 function bindBuildButtons(){
-  on($('#saveTestBtn'),'click',saveTest);
-  on($('#renameTestBtn'),'click',renameTest);
-  on($('#deleteTestBtn'),'click',deleteTest);
-  on($('#copyShareBtn'),'click',copyShareLink);
-  on($('#openShareBtn'),'click',openSharePreview);
-  on($('#previewToggle'),'change',syncPreview);
-  on($('#previewPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); });
-  on($('#previewQuizBtn'),'click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
-  on($('#testNameInput'),'input',handleTestNameInput);
+  bindOnce($('#saveTestBtn'),'click',saveTest);
+  bindOnce($('#renameTestBtn'),'click',renameTest);
+  bindOnce($('#deleteTestBtn'),'click',deleteTest);
+  bindOnce($('#buildPushBtn'),'click',pushCurrentTestToCloud);
+  bindOnce($('#copyShareBtn'),'click',copyShareLink);
+  bindOnce($('#openShareBtn'),'click',openSharePreview);
+  bindOnce($('#previewToggle'),'change',syncPreview);
+  bindOnce($('#previewPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); });
+  bindOnce($('#previewQuizBtn'),'click',()=>{ setParams({view:'quiz'}); activate('quiz'); });
+  bindOnce($('#testNameInput'),'input',handleTestNameInput);
+  bindOnce($('#builderClassSelect'),'change',renderDeckPickList);
 }
 function handleTestNameInput(){
   const typed = $('#testNameInput')?.value.trim().toLowerCase();
@@ -849,7 +1551,7 @@ function saveTest(){
 
   if(!t){
     id = uid('test');
-    t = state.tests[id] = { id, name: typedName, title: typedName, n: 30, selections: [] };
+    t = state.tests[id] = { id, name: typedName, title: typedName, n: 30, selections: [], updatedAt: Date.now() };
     state.ui.currentTestId = id;
   } else {
     t.name = typedName;
@@ -858,8 +1560,9 @@ function saveTest(){
   t.title = ($('#builderTitle')?.value.trim() || t.title || typedName);
   t.n = Math.max(1, +($('#builderCount')?.value) || t.n || 30);
   t.selections = dedupeSelections(readSelectionsFromUI());
+  t.updatedAt = Date.now();
 
-  store.set(KEYS.tests,state.tests);
+  saveTests();
   renderTestsDatalist();
   toast(`Test “${t.name}” saved`);
 }
@@ -873,7 +1576,8 @@ function renameTest(){
   if(!newName) return alert('Name cannot be empty.');
   t.name = newName;
   t.title = ($('#builderTitle')?.value.trim() || t.title || newName);
-  store.set(KEYS.tests, state.tests);
+  t.updatedAt = Date.now();
+  saveTests();
   renderTestsDatalist();
   if($('#testNameInput')) $('#testNameInput').value = newName;
   toast('Test renamed');
@@ -890,7 +1594,7 @@ function deleteTest(){
   const name = state.tests[id]?.name || 'Test';
   if(confirm(`Delete test “${name}”?`)){
     delete state.tests[id];
-    store.set(KEYS.tests,state.tests);
+    saveTests();
     state.ui.currentTestId = null;
     if($('#testNameInput')) $('#testNameInput').value = '';
     if($('#builderTitle')) $('#builderTitle').value = '';
@@ -903,12 +1607,21 @@ function deleteTest(){
 function renderDeckPickList(){
   const wrap = $('#deckPickList'); if(!wrap) return;
   const decks=listUniqueDecks();
+  const classSel = $('#builderClassSelect');
+  const classes = unique(decks.map(d=>d.className).filter(Boolean)).sort((a,b)=>a.localeCompare(b));
+  if(classSel){
+    const current = classSel.value || '';
+    classSel.innerHTML = `<option value="">All classes</option>` + classes.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    if(current && classes.includes(current)) classSel.value = current;
+  }
+  const classFilter = classSel?.value || '';
+  const visibleDecks = classFilter ? decks.filter(d=>d.className===classFilter) : decks;
   const typedName=$('#testNameInput')?.value.trim().toLowerCase();
   const selected = state.ui.currentTestId ? state.tests[state.ui.currentTestId]
                 : Object.values(state.tests).find(t=>t.name.toLowerCase()===typedName);
 
   const selMap=new Map((selected?.selections||[]).map(s=>[s.deckId,s]));
-  wrap.innerHTML=decks.map(d=>{
+  wrap.innerHTML=visibleDecks.map(d=>{
     const subs=deckSubTags(d);
     const saved=selMap.get(d.id);
     const whole=saved?!!saved.whole:true; const savedSubs=new Set(saved?.subs||[]);
@@ -968,11 +1681,16 @@ function getCurrentTestOrSave(){
     if(!match){ alert('Save the test first.'); return null; }
     t = match;
   }
-  t.title=($('#builderTitle')?.value.trim()||t.title||typedName); 
-  t.n=Math.max(1,+($('#builderCount')?.value)||t.n||30); 
-  t.selections=dedupeSelections(readSelectionsFromUI()); 
-  store.set(KEYS.tests,state.tests); 
+  t.title=($('#builderTitle')?.value.trim()||t.title||typedName);
+  t.n=Math.max(1,+($('#builderCount')?.value)||t.n||30);
+  t.selections=dedupeSelections(readSelectionsFromUI());
+  t.updatedAt = Date.now();
+  saveTests(); 
   return t;
+}
+async function pushCurrentTestToCloud(){
+  const t = getCurrentTestOrSave(); if(!t) return;
+  await cloudPushHandler();
 }
 function syncPreview(){
   const on = $('#previewToggle')?.checked;
@@ -996,6 +1714,7 @@ function computePoolForTest(t){
   return pool;
 }
 const deckLabel=d=>`${d.deckName} — ${d.className}`;
+const testDisplayName=t=>(t?.title || t?.name || 'Test');
 
 //////////////////////// PRACTICE ////////////////////////////////
 function renderPracticeScreen(){
@@ -1004,26 +1723,33 @@ function renderPracticeScreen(){
   const sel=$('#practiceTestSelect');
   if(last && sel?.querySelector(`option[value="${last}"]`)) sel.value=last;
   buildPracticeDeckChecks();
+  updatePracticeTitle();
 
-  on($('#practiceTestSelect'),'change',()=>{ buildPracticeDeckChecks(); store.set('bq_last_test',$('#practiceTestSelect').value); });
-  on($('#startPracticeBtn'),'click',startPractice);
-  on($('#practicePrev'),'click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
-  on($('#practiceNext'),'click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
-  on($('#practiceShuffle'),'click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
+  bindOnce($('#practiceTestSelect'),'change',()=>{ buildPracticeDeckChecks(); store.set('bq_last_test',$('#practiceTestSelect').value); });
+  bindOnce($('#startPracticeBtn'),'click',startPractice);
+  bindOnce($('#practicePrev'),'click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
+  bindOnce($('#practiceNext'),'click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
+  bindOnce($('#practiceShuffle'),'click',()=>{ state.practice.cards=shuffle(state.practice.cards); state.practice.idx=0; showPractice(); });
 }
 function fillTestsSelect(sel,lockToStudent=false){
   if(!sel) return;
-  const list=Object.entries(state.tests).sort((a,b)=>a[1].name.localeCompare(b[1].name));
+  const list=Object.entries(state.tests).sort((a,b)=>{
+    const aStamp = a[1]?.updatedAt || 0;
+    const bStamp = b[1]?.updatedAt || 0;
+    if (bStamp !== aStamp) return bStamp - aStamp;
+    return (a[1]?.name || '').localeCompare(b[1]?.name || '');
+  });
   if(state.quiz.locked && state.quiz.testId && lockToStudent){
-    const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(t.name)}</option>`:'';
+    const t=state.tests[state.quiz.testId]; sel.innerHTML=t?`<option value="${state.quiz.testId}">${esc(testDisplayName(t))}</option>`:'';
     sel.value=state.quiz.testId; sel.disabled=true; return;
   }
   sel.disabled=false;
-  sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('')||'';
+  sel.innerHTML=list.map(([id,t])=>`<option value="${id}">${esc(testDisplayName(t))}</option>`).join('')||'';
 }
 function buildPracticeDeckChecks(){
   const container=$('#practiceDeckChecks'); if(!container) return;
   const tid=$('#practiceTestSelect')?.value; const t=state.tests[tid]; container.innerHTML='';
+  updatePracticeTitle();
   if(!t){ container.innerHTML='<span class="hint">No test selected.</span>'; return; }
   const seen=new Set(), chips=[];
   for(const sel of dedupeSelections(t.selections||[])){
@@ -1031,7 +1757,7 @@ function buildPracticeDeckChecks(){
     const d=state.decks[sel.deckId]; if(!d) continue;
     const chip=document.createElement('label'); chip.className='chip';
     const ck=document.createElement('input'); ck.type='checkbox'; ck.dataset.deck=sel.deckId; ck.checked=true; chip.appendChild(ck);
-    const span=document.createElement('span'); span.textContent=deckLabel(d); chip.appendChild(span);
+    const span=document.createElement('span'); span.textContent=`${deckLabel(d)} (${(d.cards||[]).length})`; chip.appendChild(span);
     chips.push(chip);
   }
   if(chips.length) chips.forEach(c=>container.appendChild(c));
@@ -1044,10 +1770,18 @@ function startPractice(){
   for(const sel of dedupeSelections(t.selections||[])){
     if(!chosen.has(sel.deckId)) continue;
     const d=state.decks[sel.deckId]; if(!d) continue;
-    if(sel.whole) pool.push(...d.cards); else pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||'')));
+    if(sel.whole) pool.push(...d.cards);
+    else pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||'')));
   }
   if(!pool.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(pool); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 function showPractice(){
   const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx]; if(!c) return;
@@ -1097,10 +1831,10 @@ function renderQuizScreen(){
 
   startOrRefreshQuiz();
 
-  on($('#quizTestSelect'),'change',()=>{ startOrRefreshQuiz(); store.set('bq_last_test',$('#quizTestSelect').value); });
-  on($('#quizPrev'),'click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
-  on($('#quizNext'),'click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
-  on($('#submitQuizBtn'),'click',submitQuiz);
+  bindOnce($('#quizTestSelect'),'change',()=>{ startOrRefreshQuiz(); store.set('bq_last_test',$('#quizTestSelect').value); });
+  bindOnce($('#quizPrev'),'click',()=>{ state.quiz.idx=Math.max(0,state.quiz.idx-1); drawQuiz(); });
+  bindOnce($('#quizNext'),'click',()=>{ state.quiz.idx=Math.min(state.quiz.items.length-1,state.quiz.idx+1); drawQuiz(); });
+  bindOnce($('#submitQuizBtn'),'click',submitQuiz);
 }
 function startOrRefreshQuiz(){
   const tid=$('#quizTestSelect')?.value; const t=state.tests[tid];
@@ -1129,7 +1863,7 @@ function drawQuiz(){
       <span><kbd>${idx+1}</kbd> ${esc(opt)}</span>
     </label>
   `).join('');
-  quizOptions.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',()=>{ it.picked=r.value; }));
+  quizOptions.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',()=>{ it.picked=r.value; updateQuizNavState(); }));
   const handler=(e)=>{
     if(e.target.tagName==='INPUT') return;
     const n=e.keyCode-49;
@@ -1143,8 +1877,37 @@ function drawQuiz(){
   window.removeEventListener('keydown', window.__bqQuizKeys__);
   window.__bqQuizKeys__=handler;
   window.addEventListener('keydown', handler);
+  updateQuizNavState();
+}
+
+function updateQuizNavState(){
+  const total = state.quiz.items.length;
+  const idx = state.quiz.idx;
+  const it = state.quiz.items[idx];
+  const allAnswered = state.quiz.items.every(x => x.picked);
+  const isLast = idx === total - 1;
+  const nextBtn = $('#quizNext');
+  const prevBtn = $('#quizPrev');
+  const submitBtn = $('#submitQuizBtn');
+  if(prevBtn) prevBtn.disabled = idx === 0;
+  if(nextBtn) nextBtn.disabled = !it?.picked || isLast;
+  if(submitBtn){
+    submitBtn.classList.toggle('hidden', !isLast);
+    submitBtn.disabled = !isLast || !allAnswered || state.quiz.submitting;
+  }
 }
 async function submitQuiz(){
+  if(state.quiz.submitting) return;
+  if(state.quiz.items.some(x=>!x.picked)){
+    toast('Some questions have been left unanswered.');
+    return;
+  }
+  if(state.quiz.idx !== state.quiz.items.length - 1){
+    toast('Some questions have been left unanswered.');
+    return;
+  }
+  state.quiz.submitting = true;
+  $('#submitQuizBtn')?.setAttribute('disabled','true');
   const name=$('#studentName')?.value.trim();
   const studentLocSel=$('#studentLocationSelect');
   const studentLocOther=$('#studentLocationOther');
@@ -1157,16 +1920,51 @@ async function submitQuiz(){
     loc = ($('#studentLocation')?.value || '').trim();
   }
   const dt=$('#studentDate')?.value;
-  if(!name||!loc||!dt) return alert('Name, location and date are required.');
-  const tid=$('#quizTestSelect')?.value; const t=state.tests[tid]; if(!t) return alert('No test selected.');
+  if(!name||!loc||!dt){
+    alert('Name, location and date are required.');
+    state.quiz.submitting = false;
+    $('#submitQuizBtn')?.removeAttribute('disabled');
+    return;
+  }
+  const tid=$('#quizTestSelect')?.value; const t=state.tests[tid];
+  if(!t){
+    alert('No test selected.');
+    state.quiz.submitting = false;
+    $('#submitQuizBtn')?.removeAttribute('disabled');
+    return;
+  }
   const total=state.quiz.items.length; const correct=state.quiz.items.filter(x=>x.picked===x.a).length; const score=Math.round(100*correct/Math.max(1,total));
   const answers=state.quiz.items.map((x,i)=>({i,q:x.q,correct:x.a,picked:x.picked}));
 
-  const row={id:uid('res'),name,location:loc,date:dt,time:Date.now(),testId:tid,testName:t.name,score,correct,of:total,answers};
-  state.results.push(row); store.set(KEYS.results,state.results);
+  const row={
+    id: uid('res'),
+    clientId,
+    idempotencyKey: `${clientId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`,
+    name,
+    location: loc,
+    date: dt,
+    time: Date.now(),
+    testId: tid,
+    testName: t.name,
+    score,
+    correct,
+    of: total,
+    answers
+  };
+
+  const validationError = validateResultRow(row);
+  if(validationError){
+    alert(`Submission invalid: ${validationError}`);
+    state.quiz.submitting = false;
+    $('#submitQuizBtn')?.removeAttribute('disabled');
+    return;
+  }
+
+  state.results.push(row); saveResults();
 
   try{
-    await cloudPOST('submitresult', row);
+    enqueueOutbox('submitresult', row);
+    await flushOutbox(true);
   }catch(err){
     console.warn('Cloud submit failed', err); toast('Saved locally (offline).');
   }
@@ -1181,10 +1979,17 @@ async function submitQuiz(){
         <span class="tag good">Correct: ${esc(a.correct)}</span>
       </div>
     </div>`).join('');
-  toast('Submission saved');
+  if(isOutboxPending(row.id)){
+    toast('Submission queued (offline)');
+  }else{
+    toast('Submission synced');
+  }
 
   on($('#restartQuizBtn'),'click',()=>{ $('#quizFinished')?.classList.add('hidden'); $('#quizArea')?.classList.remove('hidden'); startOrRefreshQuiz(); }, { once:true });
   on($('#finishedPracticeBtn'),'click',()=>{ setParams({view:'practice'}); activate('practice'); }, { once:true });
+
+  state.quiz.submitting = false;
+  $('#submitQuizBtn')?.removeAttribute('disabled');
 }
 
 /////////////////////////// REPORTS //////////////////////////////
@@ -1204,13 +2009,13 @@ function renderReports(){
 
   drawReports();
 
-  on($('#repLocation'),'change',drawReports);
-  on($('#repAttemptView'),'change',drawReports);
-  on($('#repSort'),'change',drawReports);
-  on($('#repView'),'change',drawReports);
-  on($('#repDateFrom'),'change',drawReports);
-  on($('#repDateTo'),'change',drawReports);
-  on($('#repTest'),'change',drawReports);
+  bindOnce($('#repLocation'),'change',drawReports);
+  bindOnce($('#repAttemptView'),'change',drawReports);
+  bindOnce($('#repSort'),'change',drawReports);
+  bindOnce($('#repView'),'change',drawReports);
+  bindOnce($('#repDateFrom'),'change',drawReports);
+  bindOnce($('#repDateTo'),'change',drawReports);
+  bindOnce($('#repTest'),'change',drawReports);
 }
 function drawReports(){
   const view    = ($('#repView')?.value || 'active');
@@ -1223,7 +2028,6 @@ function drawReports(){
 
   let rows = view==='archived' ? [...state.archived] : [...state.results];
 
-  if(loc)    rows = rows.filter(r=>r.location===loc);
   if(testNm) rows = rows.filter(r=>r.testName===testNm);
   if(fromISO) rows = rows.filter(r => (r.date || '') >= fromISO);
   if(toISO)   rows = rows.filter(r => (r.date || '') <= toISO);
@@ -1234,6 +2038,9 @@ function drawReports(){
     rows=[]; map.forEach(arr=>{ arr.sort((a,b)=>a.time-b.time); rows.push(attempt==='first'?arr[0]:arr[arr.length-1]); });
   }
 
+  const baseRows = rows.slice();
+  if(loc) rows = rows.filter(r=>r.location===loc);
+
   if(sort==='date_desc') rows.sort((a,b)=>b.time-a.time);
   if(sort==='date_asc')  rows.sort((a,b)=>a.time-b.time);
   if(sort==='test_asc')  rows.sort((a,b)=>a.testName.localeCompare(b.testName));
@@ -1241,8 +2048,13 @@ function drawReports(){
   if(sort==='loc_asc')   rows.sort((a,b)=> (a.location||'').localeCompare(b.location||''));  
   if(sort==='loc_desc')  rows.sort((a,b)=> (b.location||'').localeCompare(a.location||''));  
 
+  renderReportKpis(rows);
+  renderTestBreakdown(baseRows);
+  renderLocationCharts(baseRows, loc);
+  renderLocationTrends(baseRows);
+
   const tb=$('#repTable tbody'); if(!tb) return;
-  tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
+  tb.innerHTML=rows.map(r=>`<tr data-id="${esc(getResultId(r))}">
     <td>${new Date(r.time).toLocaleString()}</td>
     <td>${esc(r.name)}</td>
     <td>${esc(r.location)}</td>
@@ -1259,72 +2071,157 @@ function drawReports(){
     </td>
   </tr>`).join('');
 
-  tb.querySelectorAll('.view-btn').forEach(btn=>btn.addEventListener('click',()=>{
-    const id=btn.closest('tr').dataset.id; const src = view==='archived'?state.archived:state.results;
-    const r=src.find(x=>x.id===id); if(!r) return;
-    const rows=r.answers.map(a=>`<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
-      <div style="font-weight:600;margin-bottom:4px">${esc(a.q)}</div>
-      <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
-      <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
-    </div>`).join('');
-    const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
-    w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
-      <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
-      <div>${rows}</div>
-    </body>`);
-  }));
-  tb.querySelectorAll('button[data-act]').forEach(b=>b.addEventListener('click',async ()=>{
-    const id = b.closest('tr').dataset.id;
-    const act= b.dataset.act;
+  bindOnce(tb, 'click', async (event)=>{
+    const row = event.target.closest('tr'); if(!row) return;
+    const id = row.dataset.id;
+    const viewMode = ($('#repView')?.value || 'active');
+    if(event.target.closest('.view-btn')){
+      const src = viewMode==='archived'?state.archived:state.results;
+      const r=src.find(x=>getResultId(x)===id); if(!r) return;
+      openResultDetails(r);
+      return;
+    }
 
+    const act = event.target.closest('button[data-act]')?.dataset.act;
+    if(!act) return;
     if (act==='archive'){
       if (await archiveResult(id)) toast('Result archived');
     } else if (act==='restore'){
       if (await restoreResult(id)) toast('Result restored');
     } else if (act==='delete-forever'){
       if (confirm('Delete this result permanently?')) {
-        if (await deleteForever(id, view==='archived'?'archived':'active')) toast('Result deleted');
+        if (await deleteForever(id, viewMode==='archived'?'archived':'active')) toast('Result deleted');
       }
     }
     drawReports();
-  }));
+  }, 'reportsTable');
 
   renderLocationAverages(view, loc, attempt, fromISO, toISO, testNm);
 
-  const baseRows=[...state.results];
-  const missMap=new Map();
-  for(const r of baseRows){
-    for(const a of (r.answers||[])){
-      const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
-      const m=missMap.get(k); m.total++; if(a.picked!==a.correct) m.misses++;
-    }
+  if($('#missedSummary')) $('#missedSummary').innerHTML = getMissedSummaryHtml();
+}
+
+function renderReportKpis(rows){
+  const attempts = rows.length;
+  const avg = attempts ? Math.round(rows.reduce((s,r)=>s+(Number(r.score)||0),0)/attempts) : 0;
+  const unique = new Set(rows.map(r=>(r.name||'').trim()).filter(Boolean)).size;
+  if($('#kpiAttempts')) $('#kpiAttempts').textContent = String(attempts);
+  if($('#kpiAverage')) $('#kpiAverage').textContent = `${avg}%`;
+  if($('#kpiUnique')) $('#kpiUnique').textContent = String(unique);
+}
+
+function renderTestBreakdown(rows){
+  const box = $('#testBreakdown'); if(!box) return;
+  if(!rows.length){
+    box.innerHTML = '<div class="hint">No attempts yet for this filter.</div>';
+    return;
   }
-  const top=[...missMap.values()].filter(x=>x.total>0).sort((a,b)=>b.misses-a.misses).slice(0,10);
-  if($('#missedSummary')) $('#missedSummary').innerHTML = top.length? top.map(m=>`
-    <div class="missrow">
-      <div class="misscount"><div>${m.misses}/${m.total}</div><div class="hint">missed</div></div>
-      <div class="missq">${esc(m.q)}</div>
-    </div>`).join('') : '<div class="hint">No data yet.</div>';
+  const map = new Map();
+  for(const r of rows){
+    const key = r.testName || 'Untitled';
+    if(!map.has(key)) map.set(key, { name: key, attempts: 0, sum: 0, correct: 0, of: 0, users: new Set() });
+    const entry = map.get(key);
+    entry.attempts += 1;
+    entry.sum += Number(r.score)||0;
+    entry.correct += Number(r.correct)||0;
+    entry.of += Number(r.of)||0;
+    if(r.name) entry.users.add(r.name);
+  }
+  const out = [...map.values()].sort((a,b)=> b.attempts - a.attempts);
+  box.innerHTML = out.map(t=>{
+    const avg = t.attempts ? Math.round(t.sum / t.attempts) : 0;
+    const accuracy = t.of ? Math.round((t.correct / t.of) * 100) : 0;
+    return `<div class="report-row" data-test="${esc(t.name)}">
+      <div>
+        <strong>${esc(t.name)}</strong>
+        <div class="hint">${t.attempts} attempt${t.attempts!==1?'s':''} • ${t.users.size} barista${t.users.size!==1?'s':''}</div>
+      </div>
+      <div><div class="hint">Avg score</div><strong>${avg}%</strong></div>
+      <div><div class="hint">Accuracy</div><strong>${accuracy}%</strong></div>
+      <div><button class="btn ghost small test-focus">Open attempts</button></div>
+    </div>`;
+  }).join('');
+
+  bindOnce(box, 'click', (event)=>{
+    const btn = event.target.closest('.test-focus');
+    if(!btn) return;
+    const row = event.target.closest('.report-row');
+    const name = row?.dataset.test || '';
+    const repTest = $('#repTest');
+    if(repTest && name){
+      repTest.value = name;
+      drawReports();
+      const table = document.querySelector('#repTable');
+      if(table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, 'testBreakdown');
+}
+
+function renderLocationCharts(rows, selectedLoc){
+  const box = $('#locationCharts'); if(!box) return;
+  if(!rows.length){ box.innerHTML = '<div class="hint">No location data yet.</div>'; return; }
+  const data = computeLocationAverages(rows);
+  const maxCount = Math.max(...data.map(d=>d.count));
+  box.innerHTML = data.map(d=>{
+    const pct = maxCount ? Math.round((d.count / maxCount) * 100) : 0;
+    const avg = Math.round(d.avg);
+    const active = selectedLoc && selectedLoc === d.location;
+    return `<div class="chart-row ${active?'selected':''}">
+      <div class="chart-label">${esc(d.location)}</div>
+      <div class="chart-bar"><span style="width:${pct}%"></span></div>
+      <div class="chart-value">${avg}% • ${d.count}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderLocationTrends(rows){
+  const box = $('#locationTrends'); if(!box) return;
+  if(!rows.length){ box.innerHTML = '<div class="hint">No trend data yet.</div>'; return; }
+  const map = new Map();
+  for(const r of rows){
+    const key = (r.location || 'Unknown').trim();
+    if(!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  }
+  const out = [];
+  map.forEach((list, loc)=>{
+    const sorted = list.slice().sort((a,b)=>a.time-b.time);
+    const tail = sorted.slice(-6);
+    const maxScore = Math.max(1, ...tail.map(r=>Number(r.score)||0));
+    const bars = tail.map(r=>{
+      const height = Math.max(12, Math.round(((Number(r.score)||0) / maxScore) * 100));
+      const active = (Number(r.score)||0) >= 80;
+      return `<span class="${active?'active':''}" style="height:${height}%"></span>`;
+    }).join('');
+    out.push({ loc, bars });
+  });
+  out.sort((a,b)=>a.loc.localeCompare(b.loc));
+  box.innerHTML = out.map(d=>`
+    <div class="trend-row">
+      <div class="chart-label">${esc(d.loc)}</div>
+      <div class="sparkline" aria-hidden="true">${d.bars}</div>
+    </div>
+  `).join('');
 }
 async function archiveResult(id){
-  const i = state.results.findIndex(r=>r.id===id);
+  const i = state.results.findIndex(r=>String(r.id || r.resId || '')===id);
   if(i>-1){
     const [row]=state.results.splice(i,1);
     state.archived.push(row);
-    store.set(KEYS.results,state.results);
-    store.set(KEYS.archived,state.archived);
+    saveResults();
+    saveArchived();
     try{ await cloudPOST('archivemove', { id, to:'archived' }); }catch(_){}
     return true;
   }
   return false;
 }
 async function restoreResult(id){
-  const i = state.archived.findIndex(r=>r.id===id);
+  const i = state.archived.findIndex(r=>String(r.id || r.resId || '')===id);
   if(i>-1){
     const [row]=state.archived.splice(i,1);
     state.results.push(row);
-    store.set(KEYS.results,state.results);
-    store.set(KEYS.archived,state.archived);
+    saveResults();
+    saveArchived();
     try{ await cloudPOST('archivemove', { id, to:'active' }); }catch(_){}
     return true;
   }
@@ -1332,11 +2229,11 @@ async function restoreResult(id){
 }
 async function deleteForever(id, from='active'){
   const list = from==='archived' ? state.archived : state.results;
-  const i = list.findIndex(r=>r.id===id);
+  const i = list.findIndex(r=>String(r.id || r.resId || '')===id);
   if(i>-1){
     list.splice(i,1);
-    store.set(KEYS.results,state.results);
-    store.set(KEYS.archived,state.archived);
+    saveResults();
+    saveArchived();
     try{ await cloudPOST('deleteforever', { id, from }); }catch(_){}
     return true;
   }
@@ -1359,6 +2256,15 @@ function computeLocationAverages(rows){
 }
 function renderLocationAverages(view='active', locFilter='', attempt='all', fromISO='', toISO='', testNm=''){
   const box  = $('#locationAverages'); if(!box) return;
+  const cacheKey = [
+    state.meta.resultsVersion,
+    state.meta.archivedVersion,
+    view, locFilter, attempt, fromISO, toISO, testNm
+  ].join('|');
+  if(cache.locationKey === cacheKey && cache.locationHtml){
+    box.innerHTML = cache.locationHtml;
+    return;
+  }
   let base = view==='archived' ? [...state.archived] : [...state.results];
 
   if (locFilter) base = base.filter(r => r.location === locFilter);
@@ -1374,19 +2280,49 @@ function renderLocationAverages(view='active', locFilter='', attempt='all', from
 
   const avgs = computeLocationAverages(base);
   if (!avgs.length){
-    box.innerHTML = '<div class="hint">No data yet.</div>'; return;
+    cache.locationKey = cacheKey;
+    cache.locationHtml = '<div class="hint">No data yet.</div>';
+    box.innerHTML = cache.locationHtml;
+    return;
   }
-  box.innerHTML = avgs.map(x=>`
+  cache.locationKey = cacheKey;
+  cache.locationHtml = avgs.map(x=>`
     <div class="missrow">
       <div class="misscount"><div>${x.count}</div><div class="hint">attempts</div></div>
-      <div class="missq"><strong>${esc(x.location)}</strong> — avg <strong>${Math.round(x.avg)}%</strong></div>
+      <div class="missq">
+        <div><strong>${esc(x.location)}</strong> — avg <strong>${Math.round(x.avg)}%</strong></div>
+        <div class="avgbar"><span style="width:${Math.max(2, Math.round(x.avg))}%"></span></div>
+      </div>
     </div>
   `).join('');
+  box.innerHTML = cache.locationHtml;
+}
+
+function getMissedSummaryHtml(){
+  if(cache.missedVersion === state.meta.resultsVersion && cache.missedHtml){
+    return cache.missedHtml;
+  }
+  const baseRows=[...state.results];
+  const missMap=new Map();
+  for(const r of baseRows){
+    for(const a of getResultAnswers(r)){
+      const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
+      const m=missMap.get(k); m.total++; if(a.picked!==a.correct) m.misses++;
+    }
+  }
+  const top=[...missMap.values()].filter(x=>x.total>0).sort((a,b)=>b.misses-a.misses).slice(0,10);
+  cache.missedVersion = state.meta.resultsVersion;
+  cache.missedHtml = top.length ? top.map(m=>`
+    <div class="missrow">
+      <div class="misscount"><div>${m.misses}/${m.total}</div><div class="hint">missed</div></div>
+      <div class="missq">${esc(m.q)}</div>
+    </div>`).join('') : '<div class="hint">No data yet.</div>';
+  return cache.missedHtml;
 }
 
 //////////////////// Full Backup / Restore //////////////////////
 function ensureBackupButtons(){
-  const hdr = $('#view-create .card .card-head'); if(!hdr) return;
+  const hdr = $('#view-settings .card .card-head'); if(!hdr) return;
 
   if(!$('#exportAllBtn')){
     const ex = document.createElement('button');
@@ -1433,10 +2369,10 @@ function importBackupData(data){
   }
   const modeMerge = confirm('How to apply backup?\n\nOK = MERGE into existing\nCancel = REPLACE (wipe current and restore backup)');
   if(modeMerge) mergeBackup(data); else replaceBackup(data);
-  store.set(KEYS.decks,   state.decks);
-  store.set(KEYS.tests,   state.tests);
-  store.set(KEYS.results, state.results);
-  store.set(KEYS.archived,state.archived);
+  saveDecks();
+  saveTests();
+  saveResults();
+  saveArchived();
   toast(modeMerge ? 'Backup merged' : 'Backup restored (replaced)');
   renderCreate(); renderBuild(); renderReports();
 }
@@ -1552,7 +2488,7 @@ function normalizeTests(){
     const norm=dedupeSelections(t.selections||[]);
     if(JSON.stringify(norm)!==JSON.stringify(t.selections||[])){ t.selections=norm; changed=true; }
   }
-  if(changed) store.set(KEYS.tests,state.tests);
+  if(changed) saveTests();
 }
 
 function ensureReportsButtons(){
@@ -1574,6 +2510,7 @@ function ensureReportsButtons(){
 async function boot(){
   mergeDecksByName();
   normalizeTests();
+  ensureOutboxIndicator();
 
   // optional: add a small student loading banner container if not present
   if(!$('#studentLoading')){
@@ -1591,6 +2528,12 @@ async function boot(){
 
    ensureLoadTestsCTA(document.querySelector('#view-practice .card'));
 
+  window.addEventListener('online', ()=>flushOutbox());
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'visible') flushOutbox();
+  });
+  setInterval(()=>flushOutbox(), 30000);
+  flushOutbox();
 
   $$('select').forEach(sel=>{
     sel.style.pointerEvents='auto';
