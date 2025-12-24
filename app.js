@@ -1749,9 +1749,12 @@ function buildPracticeDeckChecks(){
   updatePracticeTitle();
   if(!t){ container.innerHTML='<span class="hint">No test selected.</span>'; return; }
   const seen=new Set(), chips=[];
+  const subdeckSelect = $('#practiceSubdeckSelect');
+  const subdeckSet = new Set();
   for(const sel of dedupeSelections(t.selections||[])){
     if(seen.has(sel.deckId)) continue; seen.add(sel.deckId);
     const d=state.decks[sel.deckId]; if(!d) continue;
+    (d.cards || []).forEach(c=>{ if(c.sub) subdeckSet.add(c.sub); });
     const chip=document.createElement('label'); chip.className='chip';
     const ck=document.createElement('input'); ck.type='checkbox'; ck.dataset.deck=sel.deckId; ck.checked=true; chip.appendChild(ck);
     const span=document.createElement('span'); span.textContent=`${deckLabel(d)} (${(d.cards||[]).length})`; chip.appendChild(span);
@@ -1759,9 +1762,17 @@ function buildPracticeDeckChecks(){
   }
   if(chips.length) chips.forEach(c=>container.appendChild(c));
   else container.innerHTML='<span class="hint">This test has no decks selected.</span>';
+
+  if(subdeckSelect){
+    const current = subdeckSelect.value || '';
+    const subs = [...subdeckSet].sort();
+    subdeckSelect.innerHTML = `<option value="">All sub-decks</option>` + subs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    if(current && subs.includes(current)) subdeckSelect.value = current;
+  }
 }
 function startPractice(){
   const tid=$('#practiceTestSelect')?.value; const t=state.tests[tid]; if(!t) return alert('Pick a test.');
+  const subFilter = ($('#practiceSubdeckSelect')?.value || '').trim();
   const chosen=new Set([...$('#practiceDeckChecks')?.querySelectorAll('input[type=checkbox]:checked')||[]].map(i=>i.dataset.deck));
   const pool=[];
   for(const sel of dedupeSelections(t.selections||[])){
@@ -1770,8 +1781,65 @@ function startPractice(){
     if(sel.whole) pool.push(...d.cards);
     else pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||'')));
   }
-  if(!pool.length) return alert('No cards to practice.');
-  state.practice.cards=shuffle(pool); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+  const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
+  if(!filtered.length) return alert('No cards to practice.');
+  state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){
