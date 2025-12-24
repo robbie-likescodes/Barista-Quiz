@@ -1656,7 +1656,7 @@ function buildPracticeDeckChecks(){
     (d.cards || []).forEach(c=>{ if(c.sub) subdeckSet.add(c.sub); });
     const chip=document.createElement('label'); chip.className='chip';
     const ck=document.createElement('input'); ck.type='checkbox'; ck.dataset.deck=sel.deckId; ck.checked=true; chip.appendChild(ck);
-    const span=document.createElement('span'); span.textContent=deckLabel(d); chip.appendChild(span);
+    const span=document.createElement('span'); span.textContent=`${deckLabel(d)} (${(d.cards||[]).length})`; chip.appendChild(span);
     chips.push(chip);
   }
   if(chips.length) chips.forEach(c=>container.appendChild(c));
@@ -1689,6 +1689,7 @@ function updatePracticeTitle(){
   const tid=$('#practiceTestSelect')?.value;
   const t=state.tests?.[tid];
   if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 function showPractice(){
   const idx=state.practice.idx, total=state.practice.cards.length, c=state.practice.cards[idx]; if(!c) return;
