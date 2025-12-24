@@ -162,6 +162,7 @@ body.student .admin-nav{display:none}
 }
 .card.primary-card{border-color:color-mix(in oklab,var(--brand) 45%,var(--line) 55%);box-shadow:0 14px 40px rgba(15,23,42,.12)}
 .card.bulk-card{background:linear-gradient(180deg,#ffffff,#f2f7f2)}
+.card.danger-card{background:linear-gradient(180deg,#fff5f5,#ffecec);border-color:rgba(239,68,68,.2)}
 .card.filters-card{position:sticky;top:76px;z-index:5}
 .folder-card{background:linear-gradient(180deg,#ffffff,#fff7ea)}
 .folder-card .card-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}

@@ -7,8 +7,8 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=29" />
-  <script defer src="app.js?v=24"></script>
+  <link rel="stylesheet" href="styles.css?v=30" />
+  <script defer src="app.js?v=25"></script>
 </head>
 <body>
   <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
@@ -110,6 +110,18 @@
           placeholder="Question | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)"></textarea>
         <div class="mt"><button id="bulkAddBtn" class="btn primary">Add to Deck</button></div>
       </details>
+
+      <div class="card danger-card">
+        <div class="card-head">
+          <strong>Delete (Decks / Sub-decks / Classes)</strong>
+          <span class="hint">Removes items from local storage. You can optionally push deletions to the Cloud.</span>
+        </div>
+        <div class="grid g3 mt">
+          <button id="deleteDeckHardBtn" class="btn danger">Delete Selected Deck</button>
+          <button id="deleteSubdeckBtn" class="btn danger">Delete Selected Sub-deck</button>
+          <button id="deleteClassBtn" class="btn danger">Delete Selected Class</button>
+        </div>
+      </div>
 
       <div class="card folder-card">
         <div class="card-head">

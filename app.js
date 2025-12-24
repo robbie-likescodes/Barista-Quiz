@@ -741,6 +741,9 @@ function renderCreate(){
   bindOnce($('#bulkSummaryBtn'),'click',()=>setTimeout(()=>toast('Format: Q | Correct | Wrong1 | Wrong2 | Wrong3 | #Sub-deck(optional)'),60));
   bindOnce($('#bulkAddBtn'),'click',bulkAddCards);
   bindOnce($('#addCardBtn'),'click',addCard);
+  bindOnce($('#deleteDeckHardBtn'),'click',deleteSelectedDeckHard);
+  bindOnce($('#deleteSubdeckBtn'),'click',deleteSelectedSubdeck);
+  bindOnce($('#deleteClassBtn'),'click',deleteSelectedClass);
 
   bindOnce($('#deckSelect'),'change',()=>{ 
     state.ui.subFilter=''; 
@@ -1158,6 +1161,73 @@ function bulkAddCards(){
   saveDecks(); if($('#bulkTextarea')) $('#bulkTextarea').value='';
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast(`Added ${n} card(s)`);
+}
+
+function maybePushDeleteToCloud(){
+  const ok = confirm('Push this deletion to the Cloud?\n\nChoose OK to open the Cloud push dialog.\nPick REPLACE in the next prompt to remove deleted items from Sheets.');
+  if(ok) cloudPushHandler();
+}
+
+function removeDecksFromTests(deletedIds){
+  let changed = false;
+  for(const t of Object.values(state.tests || {})){
+    if(!Array.isArray(t.selections)) continue;
+    const next = t.selections.filter(sel => !deletedIds.has(sel.deckId));
+    if(next.length !== t.selections.length){
+      t.selections = next;
+      t.updatedAt = Date.now();
+      changed = true;
+    }
+  }
+  if(changed) saveTests();
+}
+
+function deleteSelectedDeckHard(){
+  const id = selectedDeckId();
+  if(!id) return alert('Select a deck first.');
+  const d = state.decks[id];
+  const name = `${d.deckName} — ${d.className}`;
+  if(!confirm(`Are you sure you want to delete this deck?\n\n${name}\nCards: ${d.cards.length}`)) return;
+  delete state.decks[id];
+  saveDecks();
+  removeDecksFromTests(new Set([id]));
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast('Deck deleted');
+  maybePushDeleteToCloud();
+}
+
+function deleteSelectedSubdeck(){
+  const id = selectedDeckId();
+  if(!id) return alert('Select a deck first.');
+  const d = state.decks[id];
+  let sub = ($('#cardsSubFilter')?.value || state.ui.subFilter || '').trim();
+  if(!sub) sub = prompt('Sub-deck name to delete:', '')?.trim() || '';
+  if(!sub) return;
+  const count = (d.cards || []).filter(c => (c.sub || '') === sub).length;
+  if(!confirm(`Are you sure you want to delete sub-deck “${sub}”?\n\nThis will clear the tag from ${count} card(s).`)) return;
+  d.tags = (d.tags || []).filter(t => t !== sub);
+  (d.cards || []).forEach(c => { if((c.sub || '') === sub) c.sub = ''; });
+  saveDecks();
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast('Sub-deck deleted');
+  maybePushDeleteToCloud();
+}
+
+function deleteSelectedClass(){
+  const id = selectedDeckId();
+  const className = id ? (state.decks[id]?.className || '') : ($('#newClassName')?.value.trim() || '');
+  if(!className) return alert('Select a deck or enter a class name first.');
+  const deckIds = Object.values(state.decks || {})
+    .filter(d => (d.className || '').toLowerCase() === className.toLowerCase())
+    .map(d => d.id);
+  if(!deckIds.length) return alert('No decks found for that class.');
+  if(!confirm(`Are you sure you want to delete the class “${className}”?\n\nThis will delete ${deckIds.length} deck(s).`)) return;
+  deckIds.forEach(id => delete state.decks[id]);
+  saveDecks();
+  removeDecksFromTests(new Set(deckIds));
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast('Class deleted');
+  maybePushDeleteToCloud();
 }
 
 function bulkAddGlobalCards(){
