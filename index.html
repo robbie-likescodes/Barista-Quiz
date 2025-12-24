@@ -7,8 +7,8 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=34" />
-  <script defer src="app.js?v=29"></script>
+  <link rel="stylesheet" href="styles.css?v=36" />
+  <script defer src="app.js?v=31"></script>
 </head>
 <body>
   <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
@@ -242,14 +242,8 @@
             <div class="micro mt-xs">Hotkeys: <kbd>Space</kbd> flip • <kbd>←</kbd>/<kbd>→</kbd> prev/next</div>
           </div>
         </div>
-        <div class="select-wrap mt-sm">
-          <label class="label" for="practiceSubdeckSelect">Sub-deck focus</label>
-          <select id="practiceSubdeckSelect" class="input" aria-label="Filter practice by sub-deck">
-            <option value="">All sub-decks</option>
-          </select>
-        </div>
         <details class="mt" id="practiceDeckChooser">
-          <summary class="card-head">Choose decks to study</summary>
+          <summary class="card-head btn-like">Choose decks to study</summary>
           <div id="practiceDeckChecks" class="chips mt"></div>
         </details>
         <button id="startPracticeBtn" class="btn primary mt">Start Practice</button>

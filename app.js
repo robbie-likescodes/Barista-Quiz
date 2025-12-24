@@ -972,9 +972,10 @@ function renderCardsList(){
       renderDeckSelect();
       const deckSelect = $('#deckSelect');
       if (deckSelect) deckSelect.value = keepDeckId;
-      renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+      renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
       window.scrollTo(0, y);
       toast('Card deleted');
+      promptPushChanges();
       return;
     }
 
@@ -986,8 +987,9 @@ function renderCardsList(){
       const sub=prompt('Card sub-deck (optional):',card.sub||''); if(sub===null) return;
       card.q=q.trim(); card.a=a.trim(); card.distractors=(wrong||'').split('|').map(s=>s.trim()).filter(Boolean); card.sub=sub.trim();
       if(card.sub){ deck.tags=unique([...(deck.tags||[]),card.sub]); }
-      saveDecks(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
+      saveDecks(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
       toast('Card updated');
+      promptPushChanges();
     }
   }, 'cardsList');
 }
@@ -1297,6 +1299,11 @@ function bulkAddCards(){
   saveDecks(); if($('#bulkTextarea')) $('#bulkTextarea').value='';
   renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderCardsList();
   toast(`Added ${n} card(s)`);
+}
+
+function promptPushChanges(){
+  const ok = confirm('Push these changes to the Cloud now?\n\nOK = open the Cloud push dialog.\nChoose REPLACE there if you want Sheets to exactly match local.');
+  if(ok) cloudPushHandler();
 }
 
 function maybePushDeleteToCloud(){
@@ -1635,7 +1642,6 @@ function renderPracticeScreen(){
   updatePracticeTitle();
 
   bindOnce($('#practiceTestSelect'),'change',()=>{ buildPracticeDeckChecks(); store.set('bq_last_test',$('#practiceTestSelect').value); });
-  bindOnce($('#practiceSubdeckSelect'),'change',buildPracticeDeckChecks);
   bindOnce($('#startPracticeBtn'),'click',startPractice);
   bindOnce($('#practicePrev'),'click',()=>{ state.practice.idx=Math.max(0,state.practice.idx-1); showPractice(); });
   bindOnce($('#practiceNext'),'click',()=>{ state.practice.idx=Math.min(state.practice.cards.length-1,state.practice.idx+1); showPractice(); });
@@ -1697,6 +1703,13 @@ function startPractice(){
   const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
   if(!filtered.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){
@@ -2210,7 +2223,10 @@ function renderLocationAverages(view='active', locFilter='', attempt='all', from
   cache.locationHtml = avgs.map(x=>`
     <div class="missrow">
       <div class="misscount"><div>${x.count}</div><div class="hint">attempts</div></div>
-      <div class="missq"><strong>${esc(x.location)}</strong> — avg <strong>${Math.round(x.avg)}%</strong></div>
+      <div class="missq">
+        <div><strong>${esc(x.location)}</strong> — avg <strong>${Math.round(x.avg)}%</strong></div>
+        <div class="avgbar"><span style="width:${Math.max(2, Math.round(x.avg))}%"></span></div>
+      </div>
     </div>
   `).join('');
   box.innerHTML = cache.locationHtml;
@@ -2223,7 +2239,7 @@ function getMissedSummaryHtml(){
   const baseRows=[...state.results];
   const missMap=new Map();
   for(const r of baseRows){
-    for(const a of (r.answers||[])){
+    for(const a of getResultAnswers(r)){
       const k=a.q; if(!missMap.has(k)) missMap.set(k,{q:k,misses:0,total:0});
       const m=missMap.get(k); m.total++; if(a.picked!==a.correct) m.misses++;
     }
