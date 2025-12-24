@@ -543,10 +543,15 @@ window.addEventListener('popstate', ()=>activate(qs().get('view')||'create'));
 function menuEls(){ return { btn: $('#menuBtn'), list: $('#menuList') }; }
 function openMenu(){ const {btn,list}=menuEls(); if(!btn||!list) return; list.classList.add('open'); btn.setAttribute('aria-expanded','true'); }
 function closeMenu(){ const {btn,list}=menuEls(); if(!btn||!list) return; list.classList.remove('open'); btn.setAttribute('aria-expanded','false'); }
-function toggleMenu(e){ const {btn,list}=menuEls(); if(!btn||!list) return; e&&e.stopPropagation(); list.classList.contains('open')?closeMenu():openMenu(); }
+function toggleMenu(e){
+  const {btn,list}=menuEls(); if(!btn||!list) return;
+  if(e){ e.stopPropagation(); if(e.type==='touchstart') e.preventDefault(); }
+  list.classList.contains('open')?closeMenu():openMenu();
+}
 (function bindMenu(){
   const {btn,list}=menuEls(); if(!btn||!list) return;
   btn.addEventListener('click', toggleMenu);
+  btn.addEventListener('touchstart', toggleMenu, {passive:false});
   list.addEventListener('click', (e)=>{
     const item = e.target.closest('.menu-item'); if(!item) return;
     const route = item.dataset.route; if(route){ setParams({view:route}); activate(route); }
@@ -1748,6 +1753,13 @@ function startPractice(){
   const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
   if(!filtered.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){
