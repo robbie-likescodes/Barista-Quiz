@@ -137,6 +137,25 @@ const normalizeName = raw => (decodeURIComponent(String(raw||''))
   .trim()
   .toLowerCase());
 
+function getStudentQuizTitle(){
+  const lockedId = state.quiz?.testId;
+  const fromLocked = lockedId ? state.tests?.[lockedId] : null;
+  if (fromLocked) return fromLocked.title || fromLocked.name || '';
+  const selId = $('#quizTestSelect')?.value || $('#practiceTestSelect')?.value;
+  const t = selId ? state.tests?.[selId] : null;
+  return t?.title || t?.name || '';
+}
+
+function updateDocumentTitle(){
+  if(isStudent()){
+    const title = getStudentQuizTitle();
+    if(title) document.title = title;
+    else document.title = 'Barista Flashcards & Quizzes';
+  }else{
+    document.title = 'Barista Flashcards & Quizzes';
+  }
+}
+
 function getClientId(){
   let id = store.get(KEYS.clientId, '');
   if(!id){
@@ -589,6 +608,7 @@ function activate(view){
   if(view==='reports')  renderReports();
   if(view==='settings') renderSettings();
   if(view==='create')   maybeHandleEditParams();
+  updateDocumentTitle();
 
   closeMenu();
 }
@@ -1184,11 +1204,18 @@ async function refreshLeaderboards(){
 function updateLeaderboardsFromResults(rows){
   const list = $('#leaderboardList');
   const locBox = $('#leaderboardLocations');
+  const localTests = new Set((state.results || [])
+    .filter(r => !r.clientId || r.clientId === clientId)
+    .map(r => r.testId || '')
+    .filter(Boolean));
   if(list){
     if(!rows.length){
       list.innerHTML = '<div class="hint">No results yet.</div>';
     }else{
       const top = rows.slice().sort((a,b)=>{
+        const aPref = localTests.has(a.testId);
+        const bPref = localTests.has(b.testId);
+        if (aPref !== bPref) return aPref ? -1 : 1;
         if(b.score !== a.score) return b.score - a.score;
         return (b.time||0) - (a.time||0);
       }).slice(0,10);
@@ -1833,6 +1860,13 @@ function startPractice(){
   const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
   if(!filtered.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
+}
+
+function updatePracticeTitle(){
+  const tid=$('#practiceTestSelect')?.value;
+  const t=state.tests?.[tid];
+  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
+  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){
