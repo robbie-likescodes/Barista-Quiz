@@ -26,6 +26,9 @@ const bindOnce = (el, ev, fn, key) => {
 const getResultId = r => String(r?.id || r?.resId || '');
 const getResultAnswers = r => {
   if (Array.isArray(r?.answers)) return r.answers;
+  if (typeof r?.answers === 'string') {
+    try { return JSON.parse(r.answers) || []; } catch { return []; }
+  }
   if (typeof r?.answersJSON === 'string') {
     try { return JSON.parse(r.answersJSON) || []; } catch { return []; }
   }
@@ -64,6 +67,168 @@ const startEditCard = card => {
   $('#cancelCardEditBtn')?.classList.remove('hidden');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 };
+let quizEditState = { testId: '', items: [], idx: 0 };
+function ensureQuizEditModal(){
+  let modal = document.getElementById('quizEditModal');
+  if(modal) return modal;
+
+  modal = document.createElement('div');
+  modal.id = 'quizEditModal';
+  modal.className = 'modal hidden';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'quizEditTitle');
+  modal.innerHTML = `
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title" id="quizEditTitle">Quiz editor</div>
+          <div class="hint" id="quizEditMeta"></div>
+        </div>
+        <button class="btn ghost" type="button" data-close>Close</button>
+      </div>
+      <div class="modal-body quiz-edit-body">
+        <div class="quiz-edit-toolbar">
+          <div class="hint" id="quizEditProgress"></div>
+          <div class="actions-row">
+            <button class="btn ghost" type="button" data-prev>Prev</button>
+            <button class="btn ghost" type="button" data-next>Next</button>
+          </div>
+        </div>
+        <div id="quizEditCard" class="flip quiz-edit-card" tabindex="0">
+          <div class="front">
+            <div class="fc-title">Question</div>
+            <div class="fc-text" id="quizEditQuestion"></div>
+          </div>
+          <div class="back">
+            <div class="fc-title">Correct answer</div>
+            <div class="fc-text" id="quizEditAnswer"></div>
+          </div>
+        </div>
+        <div class="quiz-edit-wrongs">
+          <div class="label">Wrong answers</div>
+          <div id="quizEditWrongs" class="wrong-list"></div>
+        </div>
+        <div class="quiz-edit-actions">
+          <button class="btn danger" type="button" data-remove>Remove from quiz</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const close = () => modal.classList.add('hidden');
+  modal.addEventListener('click', (event) => {
+    if(event.target === modal || event.target.closest('[data-close]')) close();
+  });
+  document.addEventListener('keydown', (event) => {
+    if(event.key === 'Escape' && !modal.classList.contains('hidden')) close();
+  });
+
+  modal.addEventListener('click', (event) => {
+    if(event.target.closest('[data-prev]')) changeQuizEditIndex(-1);
+    if(event.target.closest('[data-next]')) changeQuizEditIndex(1);
+    if(event.target.closest('[data-remove]')) removeQuizEditCard();
+  });
+
+  return modal;
+}
+
+function buildQuizEditItems(t){
+  if(!t) return [];
+  const excluded = new Set(t.excludedCardIds || []);
+  const items = [];
+  for(const sel of dedupeSelections(t.selections || [])){
+    const d = state.decks[sel.deckId]; if(!d) continue;
+    const cards = sel.whole
+      ? d.cards || []
+      : (d.cards || []).filter(c => sel.subs?.includes(c.sub || ''));
+    for(const card of cards){
+      if(card?.id && !excluded.has(card.id)) items.push({ card, deckId: d.id });
+    }
+  }
+  return items;
+}
+
+function openQuizEditor(testId){
+  const t = state.tests?.[testId];
+  if(!t) return;
+  quizEditState = { testId, items: buildQuizEditItems(t), idx: 0 };
+  renderQuizEditor();
+  const modal = ensureQuizEditModal();
+  modal.classList.remove('hidden');
+}
+
+function renderQuizEditor(){
+  const t = state.tests?.[quizEditState.testId];
+  const modal = ensureQuizEditModal();
+  const title = modal.querySelector('#quizEditTitle');
+  const meta = modal.querySelector('#quizEditMeta');
+  const progress = modal.querySelector('#quizEditProgress');
+  const card = modal.querySelector('#quizEditCard');
+  const question = modal.querySelector('#quizEditQuestion');
+  const answer = modal.querySelector('#quizEditAnswer');
+  const wrongs = modal.querySelector('#quizEditWrongs');
+  const total = quizEditState.items.length;
+
+  if(title) title.textContent = t ? `Edit ${testDisplayName(t)}` : 'Quiz editor';
+  if(meta){
+    const eligible = total;
+    meta.textContent = t ? `${eligible} question${eligible===1?'':'s'} in this quiz` : '';
+  }
+
+  if(!total){
+    if(progress) progress.textContent = 'No questions available for this quiz.';
+    if(question) question.textContent = '';
+    if(answer) answer.textContent = '';
+    if(wrongs) wrongs.innerHTML = '<div class="hint">No wrong answers to show.</div>';
+    if(card) card.classList.remove('flipped');
+    return;
+  }
+
+  quizEditState.idx = Math.max(0, Math.min(quizEditState.idx, total - 1));
+  const current = quizEditState.items[quizEditState.idx]?.card;
+  if(progress) progress.textContent = `Card ${quizEditState.idx + 1} of ${total} • Click to flip`;
+  if(question) question.textContent = current?.q || '';
+  if(answer) answer.textContent = current?.a || '';
+  if(wrongs){
+    const wrongList = (current?.distractors || []).filter(Boolean);
+    wrongs.innerHTML = wrongList.length
+      ? wrongList.map(w => `<span class="wrong-chip">${esc(w)}</span>`).join('')
+      : '<div class="hint">No wrong answers saved for this card.</div>';
+  }
+  if(card){
+    card.classList.remove('flipped');
+    card.onclick = () => card.classList.toggle('flipped');
+  }
+}
+
+function changeQuizEditIndex(delta){
+  if(!quizEditState.items.length) return;
+  quizEditState.idx = Math.max(0, Math.min(quizEditState.idx + delta, quizEditState.items.length - 1));
+  renderQuizEditor();
+}
+
+async function removeQuizEditCard(){
+  const t = state.tests?.[quizEditState.testId];
+  const current = quizEditState.items[quizEditState.idx]?.card;
+  if(!t || !current?.id) return;
+  if(!confirm('Remove this question from the quiz?')) return;
+  t.excludedCardIds ||= [];
+  if(!t.excludedCardIds.includes(current.id)) t.excludedCardIds.push(current.id);
+  t.updatedAt = Date.now();
+  saveTests();
+  quizEditState.items = buildQuizEditItems(t);
+  quizEditState.idx = Math.min(quizEditState.idx, Math.max(0, quizEditState.items.length - 1));
+  renderQuizEditor();
+  renderQuizzes();
+  toast('Question removed from quiz');
+  try{
+    await cloudPushHandler();
+  }catch(err){
+    console.warn('Cloud push failed', err);
+  }
+}
 const maybeHandleEditParams = () => {
   const p = qs();
   const deckId = p.get('deckId');
@@ -444,7 +609,7 @@ async function resultsRefreshFromCloud(){
       score   : Number(r.score || 0),
       correct : Number(r.correct || 0),
       of      : Number(r.of || 0),
-      answers : (()=>{ try { return JSON.parse(r.answersJSON||'[]'); } catch { return []; }})()
+      answers : getResultAnswers(r)
     }));
 
     saveResults();
@@ -1195,6 +1360,7 @@ function renderQuizzes(){
           <div class="actions">
             <button class="btn ghost btn-copy-link">Copy Link</button>
             <button class="btn btn-open-link">Open</button>
+            <button class="btn btn-edit-quiz">Edit</button>
             <button class="btn danger btn-delete-quiz">Delete</button>
           </div>
         </div>
@@ -1210,6 +1376,7 @@ function renderQuizzes(){
       const id = row.dataset.id;
       if(event.target.closest('.btn-copy-link')) return copyShareLinkForId(id);
       if(event.target.closest('.btn-open-link')) return openShareLinkForId(id);
+      if(event.target.closest('.btn-edit-quiz')) return openQuizEditor(id);
       if(event.target.closest('.btn-delete-quiz')){
         const t = state.tests?.[id];
         const name = t?.name || 'Quiz';
@@ -1835,11 +2002,14 @@ function syncPreview(){
 }
 function computePoolForTest(t){
   const normalized=dedupeSelections(t.selections||[]);
+  const excluded = new Set(t.excludedCardIds || []);
   const pool=[];
   for(const sel of normalized){
     const d=state.decks[sel.deckId]; if(!d) continue;
-    if(sel.whole){ pool.push(...d.cards); }
-    else if(sel.subs?.length){ pool.push(...d.cards.filter(c=>sel.subs.includes(c.sub||''))); }
+    if(sel.whole){ pool.push(...(d.cards || []).filter(c => !excluded.has(c.id))); }
+    else if(sel.subs?.length){
+      pool.push(...(d.cards || []).filter(c=>sel.subs.includes(c.sub||'') && !excluded.has(c.id)));
+    }
   }
   return pool;
 }
@@ -2182,7 +2352,8 @@ async function submitQuiz(){
     score,
     correct,
     of: total,
-    answers
+    answers,
+    answersJSON: JSON.stringify(answers)
   };
 
   const validationError = validateResultRow(row);

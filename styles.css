@@ -279,6 +279,16 @@ body.student .student-nav{display:flex}
 .answer-footer a{color:var(--primary);font-weight:600;text-decoration:none}
 .answer-footer a:hover{text-decoration:underline}
 .muted{color:var(--muted)}
+.quiz-edit-body{display:grid;gap:16px}
+.quiz-edit-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.quiz-edit-card{min-height:200px}
+.quiz-edit-wrongs{display:grid;gap:8px}
+.wrong-list{display:flex;flex-wrap:wrap;gap:8px}
+.wrong-chip{
+  font-size:12px;padding:4px 10px;border-radius:999px;
+  border:1px solid var(--line);background:#fff;
+}
+.quiz-edit-actions{display:flex;justify-content:flex-end}
 
 /* Avoid overflow of action buttons on small screens */
 .card .card-head .btn{white-space:nowrap}
