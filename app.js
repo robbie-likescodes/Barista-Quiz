@@ -79,24 +79,83 @@ const maybeHandleEditParams = () => {
   renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
   startEditCard(card);
 };
+function ensureResultDetailModal(){
+  let modal = document.getElementById('resultDetailModal');
+  if(modal) return modal;
+
+  modal = document.createElement('div');
+  modal.id = 'resultDetailModal';
+  modal.className = 'modal hidden';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'resultDetailTitle');
+  modal.innerHTML = `
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title" id="resultDetailTitle">Quiz attempt</div>
+          <div class="hint" id="resultDetailMeta"></div>
+        </div>
+        <button class="btn ghost" type="button" data-close>Close</button>
+      </div>
+      <div id="resultDetailBody" class="modal-body"></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const close = () => modal.classList.add('hidden');
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal || event.target.closest('[data-close]')) close();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !modal.classList.contains('hidden')) close();
+  });
+
+  return modal;
+}
+
 const openResultDetails = r => {
+  const modal = ensureResultDetailModal();
   const answers = getResultAnswers(r);
-  const rows = answers.map(a=>{
-    const match = findCardMatch(a);
-    const editLink = match
-      ? `<a href="${buildEditCardUrl(match.deckId, match.cardId)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;">Edit card</a>`
-      : `<span style="font-size:12px;color:#666;">Card not found</span>`;
-    return `<div style="border:1px solid #ddd;padding:8px;margin:8px 0;border-radius:8px;">
-    <div style="font-weight:600;margin-bottom:4px">${esc(a.q)} <span style="margin-left:8px;">${editLink}</span></div>
-    <div><span style="background:#fee;border:1px solid #e88;border-radius:999px;padding:2px 6px;">Your: ${esc(a.picked??'—')}</span>
-    <span style="background:#efe;border:1px solid #2c8;border-radius:999px;padding:2px 6px;margin-left:6px;">Correct: ${esc(a.correct)}</span></div>
-  </div>`;
-  }).join('');
-  const w=open('', '_blank','width=760,height=900,scrollbars=yes'); if(!w) return;
-  w.document.write(`<title>${esc(r.name)} • ${esc(r.testName)}</title><body style="font-family:system-ui;padding:16px;background:#fff;color:#222">
-    <h3>${esc(r.name)} @ ${esc(r.location)} — ${esc(r.testName)} (${r.score}% | ${r.correct}/${r.of})</h3>
-    <div>${rows}</div>
-  </body>`);
+  const header = `${esc(r.name)} @ ${esc(r.location)}`;
+  const meta = `${esc(r.testName)} • ${r.score}% (${r.correct}/${r.of}) • ${new Date(r.time).toLocaleString()}`;
+  const body = document.getElementById('resultDetailBody');
+  const title = document.getElementById('resultDetailTitle');
+  const metaEl = document.getElementById('resultDetailMeta');
+
+  if(title) title.textContent = header || 'Quiz attempt';
+  if(metaEl) metaEl.textContent = meta;
+
+  if(!answers.length){
+    if(body) body.innerHTML = '<div class="hint">No answer details were saved for this submission.</div>';
+    modal.classList.remove('hidden');
+    return;
+  }
+
+  if(body){
+    body.innerHTML = answers.map(a=>{
+      const isCorrect = a.picked === a.correct;
+      const match = findCardMatch(a);
+      const editLink = match
+        ? `<a href="${buildEditCardUrl(match.deckId, match.cardId)}" target="_blank" rel="noopener noreferrer">Edit card</a>`
+        : `<span class="muted">Card not found</span>`;
+      return `
+        <div class="answer-row ${isCorrect ? 'correct' : 'incorrect'}">
+          <div class="answer-header">
+            <div class="answer-question">${esc(a.q)}</div>
+            <div class="answer-status ${isCorrect ? 'good' : 'bad'}">${isCorrect ? 'Correct' : 'Incorrect'}</div>
+          </div>
+          <div class="answer-body">
+            <span class="answer-chip">Your: ${esc(a.picked ?? '—')}</span>
+            <span class="answer-chip">Correct: ${esc(a.correct)}</span>
+          </div>
+          <div class="answer-footer">${editLink}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  modal.classList.remove('hidden');
 };
 
 const store = {
@@ -622,15 +681,13 @@ function toggleMenu(e){
   const {btn,list}=menuEls(); if(!btn||!list) return;
   if(e){
     e.stopPropagation();
-    if(e.type==='touchstart' || e.type==='pointerdown' || e.type==='click') e.preventDefault();
+    if(e.type==='click') e.preventDefault();
   }
   list.classList.contains('open')?closeMenu():openMenu();
 }
 (function bindMenu(){
   const {btn,list}=menuEls(); if(!btn||!list) return;
   btn.addEventListener('click', toggleMenu);
-  btn.addEventListener('pointerdown', toggleMenu);
-  btn.addEventListener('touchstart', toggleMenu, {passive:false});
   list.addEventListener('click', (e)=>{
     const item = e.target.closest('.menu-item'); if(!item) return;
     const route = item.dataset.route; if(route){ setParams({view:route}); activate(route); }
