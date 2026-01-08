@@ -105,6 +105,17 @@ function ensureQuizEditModal(){
             <div class="fc-text" id="quizEditAnswer"></div>
           </div>
         </div>
+        <div class="quiz-edit-form">
+          <label class="label" for="quizEditQuestionInput">Question</label>
+          <textarea id="quizEditQuestionInput" class="textarea" rows="2"></textarea>
+          <label class="label" for="quizEditAnswerInput">Correct answer</label>
+          <input id="quizEditAnswerInput" class="input" type="text">
+          <label class="label" for="quizEditWrongsInput">Wrong answers (one per line)</label>
+          <textarea id="quizEditWrongsInput" class="textarea" rows="3"></textarea>
+          <div class="quiz-edit-actions">
+            <button class="btn success" type="button" data-update>Update question</button>
+          </div>
+        </div>
         <div class="quiz-edit-wrongs">
           <div class="label">Wrong answers</div>
           <div id="quizEditWrongs" class="wrong-list"></div>
@@ -129,6 +140,7 @@ function ensureQuizEditModal(){
     if(event.target.closest('[data-prev]')) changeQuizEditIndex(-1);
     if(event.target.closest('[data-next]')) changeQuizEditIndex(1);
     if(event.target.closest('[data-remove]')) removeQuizEditCard();
+    if(event.target.closest('[data-update]')) updateQuizEditCard();
   });
 
   return modal;
@@ -169,6 +181,9 @@ function renderQuizEditor(){
   const question = modal.querySelector('#quizEditQuestion');
   const answer = modal.querySelector('#quizEditAnswer');
   const wrongs = modal.querySelector('#quizEditWrongs');
+  const questionInput = modal.querySelector('#quizEditQuestionInput');
+  const answerInput = modal.querySelector('#quizEditAnswerInput');
+  const wrongsInput = modal.querySelector('#quizEditWrongsInput');
   const total = quizEditState.items.length;
 
   if(title) title.textContent = t ? `Edit ${testDisplayName(t)}` : 'Quiz editor';
@@ -182,6 +197,9 @@ function renderQuizEditor(){
     if(question) question.textContent = '';
     if(answer) answer.textContent = '';
     if(wrongs) wrongs.innerHTML = '<div class="hint">No wrong answers to show.</div>';
+    if(questionInput) questionInput.value = '';
+    if(answerInput) answerInput.value = '';
+    if(wrongsInput) wrongsInput.value = '';
     if(card) card.classList.remove('flipped');
     return;
   }
@@ -191,6 +209,9 @@ function renderQuizEditor(){
   if(progress) progress.textContent = `Card ${quizEditState.idx + 1} of ${total} • Click to flip`;
   if(question) question.textContent = current?.q || '';
   if(answer) answer.textContent = current?.a || '';
+  if(questionInput) questionInput.value = current?.q || '';
+  if(answerInput) answerInput.value = current?.a || '';
+  if(wrongsInput) wrongsInput.value = (current?.distractors || []).filter(Boolean).join('\n');
   if(wrongs){
     const wrongList = (current?.distractors || []).filter(Boolean);
     wrongs.innerHTML = wrongList.length
@@ -223,6 +244,45 @@ async function removeQuizEditCard(){
   renderQuizEditor();
   renderQuizzes();
   toast('Question removed from quiz');
+  try{
+    await cloudPushHandler();
+  }catch(err){
+    console.warn('Cloud push failed', err);
+  }
+}
+
+async function updateQuizEditCard(){
+  const entry = quizEditState.items[quizEditState.idx];
+  if(!entry?.card || !entry?.deckId) return;
+  const modal = ensureQuizEditModal();
+  const qInput = modal.querySelector('#quizEditQuestionInput');
+  const aInput = modal.querySelector('#quizEditAnswerInput');
+  const wInput = modal.querySelector('#quizEditWrongsInput');
+  const deck = state.decks?.[entry.deckId];
+  if(!deck) return;
+  const card = deck.cards?.find(c => c.id === entry.card.id);
+  if(!card) return;
+
+  const q = (qInput?.value || '').trim();
+  const a = (aInput?.value || '').trim();
+  const wrongs = (wInput?.value || '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  if(!q || !a){
+    alert('Question and correct answer are required.');
+    return;
+  }
+
+  card.q = q;
+  card.a = a;
+  card.distractors = wrongs;
+  card.updatedAt = Date.now();
+  saveDecks();
+  entry.card = card;
+  renderQuizEditor();
+  toast('Question updated');
   try{
     await cloudPushHandler();
   }catch(err){
