@@ -107,9 +107,15 @@ function ensureQuizEditModal(){
         </div>
         <div class="quiz-edit-wrongs">
           <div class="label">Wrong answers</div>
-          <div id="quizEditWrongs" class="wrong-list"></div>
+          <div class="quiz-edit-wrong-inputs">
+            <input class="input" type="text" id="quizEditWrong1" placeholder="Wrong answer 1" />
+            <input class="input" type="text" id="quizEditWrong2" placeholder="Wrong answer 2" />
+            <input class="input" type="text" id="quizEditWrong3" placeholder="Wrong answer 3" />
+          </div>
+          <div class="hint">Edit the wrong answers here, then save.</div>
         </div>
         <div class="quiz-edit-actions">
+          <button class="btn success" type="button" data-save-wrongs>Save wrong answers</button>
           <button class="btn danger" type="button" data-remove>Remove from quiz</button>
         </div>
       </div>
@@ -128,6 +134,7 @@ function ensureQuizEditModal(){
   modal.addEventListener('click', (event) => {
     if(event.target.closest('[data-prev]')) changeQuizEditIndex(-1);
     if(event.target.closest('[data-next]')) changeQuizEditIndex(1);
+    if(event.target.closest('[data-save-wrongs]')) saveQuizEditWrongs();
     if(event.target.closest('[data-remove]')) removeQuizEditCard();
   });
 
@@ -168,7 +175,9 @@ function renderQuizEditor(){
   const card = modal.querySelector('#quizEditCard');
   const question = modal.querySelector('#quizEditQuestion');
   const answer = modal.querySelector('#quizEditAnswer');
-  const wrongs = modal.querySelector('#quizEditWrongs');
+  const wrong1 = modal.querySelector('#quizEditWrong1');
+  const wrong2 = modal.querySelector('#quizEditWrong2');
+  const wrong3 = modal.querySelector('#quizEditWrong3');
   const total = quizEditState.items.length;
 
   if(title) title.textContent = t ? `Edit ${testDisplayName(t)}` : 'Quiz editor';
@@ -181,7 +190,9 @@ function renderQuizEditor(){
     if(progress) progress.textContent = 'No questions available for this quiz.';
     if(question) question.textContent = '';
     if(answer) answer.textContent = '';
-    if(wrongs) wrongs.innerHTML = '<div class="hint">No wrong answers to show.</div>';
+    if(wrong1) wrong1.value = '';
+    if(wrong2) wrong2.value = '';
+    if(wrong3) wrong3.value = '';
     if(card) card.classList.remove('flipped');
     return;
   }
@@ -191,12 +202,10 @@ function renderQuizEditor(){
   if(progress) progress.textContent = `Card ${quizEditState.idx + 1} of ${total} • Click to flip`;
   if(question) question.textContent = current?.q || '';
   if(answer) answer.textContent = current?.a || '';
-  if(wrongs){
-    const wrongList = (current?.distractors || []).filter(Boolean);
-    wrongs.innerHTML = wrongList.length
-      ? wrongList.map(w => `<span class="wrong-chip">${esc(w)}</span>`).join('')
-      : '<div class="hint">No wrong answers saved for this card.</div>';
-  }
+  const wrongList = (current?.distractors || []).filter(Boolean);
+  if(wrong1) wrong1.value = wrongList[0] || '';
+  if(wrong2) wrong2.value = wrongList[1] || '';
+  if(wrong3) wrong3.value = wrongList[2] || '';
   if(card){
     card.classList.remove('flipped');
     card.onclick = () => card.classList.toggle('flipped');
@@ -223,6 +232,29 @@ async function removeQuizEditCard(){
   renderQuizEditor();
   renderQuizzes();
   toast('Question removed from quiz');
+  try{
+    await cloudPushHandler();
+  }catch(err){
+    console.warn('Cloud push failed', err);
+  }
+}
+
+async function saveQuizEditWrongs(){
+  const currentItem = quizEditState.items[quizEditState.idx];
+  const deck = state.decks?.[currentItem?.deckId];
+  const current = currentItem?.card;
+  if(!deck || !current?.id) return;
+  const w1 = $('#quizEditWrong1')?.value.trim() || '';
+  const w2 = $('#quizEditWrong2')?.value.trim() || '';
+  const w3 = $('#quizEditWrong3')?.value.trim() || '';
+  const wrongs = [w1, w2, w3].filter(Boolean);
+  if(!wrongs.length) return alert('Enter at least one wrong answer.');
+  current.distractors = wrongs;
+  current.updatedAt = Date.now();
+  saveDecks();
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  renderQuizEditor();
+  toast('Wrong answers updated');
   try{
     await cloudPushHandler();
   }catch(err){
