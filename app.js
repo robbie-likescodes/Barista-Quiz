@@ -118,9 +118,15 @@ function ensureQuizEditModal(){
         </div>
         <div class="quiz-edit-wrongs">
           <div class="label">Wrong answers</div>
-          <div id="quizEditWrongs" class="wrong-list"></div>
+          <div class="quiz-edit-wrong-inputs">
+            <input class="input" type="text" id="quizEditWrong1" placeholder="Wrong answer 1" />
+            <input class="input" type="text" id="quizEditWrong2" placeholder="Wrong answer 2" />
+            <input class="input" type="text" id="quizEditWrong3" placeholder="Wrong answer 3" />
+          </div>
+          <div class="hint">Edit the wrong answers here, then save.</div>
         </div>
         <div class="quiz-edit-actions">
+          <button class="btn success" type="button" data-save-wrongs>Save wrong answers</button>
           <button class="btn danger" type="button" data-remove>Remove from quiz</button>
         </div>
       </div>
@@ -139,6 +145,7 @@ function ensureQuizEditModal(){
   modal.addEventListener('click', (event) => {
     if(event.target.closest('[data-prev]')) changeQuizEditIndex(-1);
     if(event.target.closest('[data-next]')) changeQuizEditIndex(1);
+    if(event.target.closest('[data-save-wrongs]')) saveQuizEditWrongs();
     if(event.target.closest('[data-remove]')) removeQuizEditCard();
     if(event.target.closest('[data-update]')) updateQuizEditCard();
   });

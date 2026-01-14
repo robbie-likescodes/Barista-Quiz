@@ -284,12 +284,13 @@ body.student .student-nav{display:flex}
 .quiz-edit-card{min-height:200px}
 .quiz-edit-form{display:grid;gap:10px}
 .quiz-edit-wrongs{display:grid;gap:8px}
+.quiz-edit-wrong-inputs{display:grid;gap:8px}
 .wrong-list{display:flex;flex-wrap:wrap;gap:8px}
 .wrong-chip{
   font-size:12px;padding:4px 10px;border-radius:999px;
   border:1px solid var(--line);background:#fff;
 }
-.quiz-edit-actions{display:flex;justify-content:flex-end}
+.quiz-edit-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
 
 /* Avoid overflow of action buttons on small screens */
 .card .card-head .btn{white-space:nowrap}
