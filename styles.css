@@ -181,14 +181,20 @@ body.student .student-nav{display:flex}
 .folder-decks{display:grid;gap:12px;margin-top:10px}
 .folder-deck{border:1px solid rgba(86, 60, 40, 0.08);border-radius:12px;padding:10px;background:#fffdfa}
 .folder-row{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.folder-actions{display:flex;align-items:center;gap:8px}
 .folder-link{display:flex;align-items:center;gap:8px;border:1px solid transparent;background:transparent;color:#1f2937;font-weight:600;cursor:pointer;padding:8px 10px;border-radius:10px;width:100%;justify-content:space-between;transition:background .12s ease,border-color .12s ease}
 .folder-link:hover{background:#fff0d9;border-color:rgba(252, 196, 75, 0.4)}
 .folder-link .meta{font-weight:500;color:#8b6d55;font-size:12px}
 .folder-link.selected{background:#fff3da;border-color:rgba(252, 196, 75, 0.5)}
 .folder-subs{display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:8px;margin-top:10px}
+.folder-sub-row{display:flex;align-items:center;gap:8px}
+.folder-sub-row .folder-link{flex:1}
 .folder-subs .folder-link{justify-content:space-between;font-weight:500;background:#ffffff;border:1px dashed rgba(86, 60, 40, 0.16)}
 .folder-subs .folder-link.selected{background:#ffe8c3;border-style:solid}
 .folder-subs .count{background:#fff4d8;border-radius:999px;padding:2px 8px;font-size:11px;color:#7a5a44}
+.folder-summary-actions{display:flex;align-items:center;gap:10px}
+.folder-delete{color:#b45309}
+.folder-delete:hover{color:#92400e}
 .btn.tiny{padding:4px 10px;font-size:12px}
 .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .grow{flex:1}

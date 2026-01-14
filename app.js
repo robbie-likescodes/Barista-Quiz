@@ -1202,9 +1202,12 @@ function renderFolderTree(){
       const subsHtml = subs.map(s=>{
         const count = (d.cards || []).filter(c=>String(c.sub||'')===String(s)).length;
         const subSelected = selectedDeck === d.id && selectedSub === s;
-        return `<button class="folder-link sub-link ${subSelected?'selected':''}" data-deck="${d.id}" data-sub="${esc(s)}">
-          <span class="name">${esc(s)}</span><span class="count">${count}</span>
-        </button>`;
+        return `<div class="folder-sub-row">
+          <button class="folder-link sub-link ${subSelected?'selected':''}" data-deck="${d.id}" data-sub="${esc(s)}">
+            <span class="name">${esc(s)}</span><span class="count">${count}</span>
+          </button>
+          <button class="btn ghost tiny folder-delete" data-action="delete-sub" data-deck="${d.id}" data-sub="${esc(s)}" title="Delete subfolder" aria-label="Delete subfolder">Delete</button>
+        </div>`;
       }).join('');
 
       return `<div class="folder-deck">
@@ -1213,7 +1216,10 @@ function renderFolderTree(){
             <span class="name">${esc(d.deckName)}</span>
             <span class="meta">(${totalCards} card${totalCards!==1?'s':''})</span>
           </button>
-          <button class="btn ghost tiny add-sub" data-deck="${d.id}">+ Subfolder</button>
+          <div class="folder-actions">
+            <button class="btn ghost tiny add-sub" data-deck="${d.id}">+ Subfolder</button>
+            <button class="btn ghost tiny folder-delete" data-action="delete-deck" data-deck="${d.id}" title="Delete deck" aria-label="Delete deck">Delete</button>
+          </div>
         </div>
         ${subsHtml?`<div class="folder-subs">${subsHtml}</div>`:'<div class="hint mt-sm">No subfolders yet.</div>'}
       </div>`;
@@ -1224,13 +1230,25 @@ function renderFolderTree(){
         <button class="folder-link class-link ${classSelected?'selected':''}" data-class="${esc(cls)}">
           <span class="name">${esc(cls)}</span>
         </button>
-        <span class="count">${sortedDecks.length} deck${sortedDecks.length!==1?'s':''}</span>
+        <div class="folder-summary-actions">
+          <span class="count">${sortedDecks.length} deck${sortedDecks.length!==1?'s':''}</span>
+          <button class="btn ghost tiny folder-delete" data-action="delete-class" data-class="${esc(cls)}" title="Delete class" aria-label="Delete class">Delete</button>
+        </div>
       </summary>
       <div class="folder-decks">${deckHtml}</div>
     </details>`;
   }).join('');
 
   bindOnce(tree, 'click', (event)=>{
+    const deleteBtn = event.target.closest('.folder-delete');
+    if(deleteBtn){
+      const action = deleteBtn.dataset.action;
+      if(action === 'delete-deck') deleteDeckById(deleteBtn.dataset.deck);
+      if(action === 'delete-sub') deleteSubdeckByName(deleteBtn.dataset.deck, deleteBtn.dataset.sub);
+      if(action === 'delete-class') deleteClassByName(deleteBtn.dataset.class);
+      return;
+    }
+
     const addBtn = event.target.closest('.add-sub');
     if(addBtn){
       const deckId = addBtn.dataset.deck;
@@ -1692,6 +1710,50 @@ function maybePushDeleteToCloud(){
   if(ok) cloudPushHandler();
 }
 
+function deleteDeckById(deckId){
+  const d = state.decks[deckId];
+  if(!d) return;
+  const name = `${d.deckName} — ${d.className}`;
+  if(!confirm(`Are you sure you want to delete this deck?\n\n${name}\nCards: ${d.cards.length}`)) return;
+  delete state.decks[deckId];
+  saveDecks();
+  removeDecksFromTests(new Set([deckId]));
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast('Deck deleted');
+  maybePushDeleteToCloud();
+}
+
+function deleteSubdeckByName(deckId, sub){
+  const d = state.decks[deckId];
+  if(!d) return;
+  const name = (sub || '').trim();
+  if(!name) return;
+  const count = (d.cards || []).filter(c => (c.sub || '') === name).length;
+  if(!confirm(`Are you sure you want to delete sub-deck “${name}”?\n\nThis will clear the tag from ${count} card(s).`)) return;
+  d.tags = (d.tags || []).filter(t => t !== name);
+  (d.cards || []).forEach(c => { if((c.sub || '') === name) c.sub = ''; });
+  saveDecks();
+  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast('Sub-deck deleted');
+  maybePushDeleteToCloud();
+}
+
+function deleteClassByName(className){
+  const name = (className || '').trim();
+  if(!name) return;
+  const deckIds = Object.values(state.decks || {})
+    .filter(d => (d.className || '').toLowerCase() === name.toLowerCase())
+    .map(d => d.id);
+  if(!deckIds.length) return alert('No decks found for that class.');
+  if(!confirm(`Are you sure you want to delete the class “${name}”?\n\nThis will delete ${deckIds.length} deck(s).`)) return;
+  deckIds.forEach(id => delete state.decks[id]);
+  saveDecks();
+  removeDecksFromTests(new Set(deckIds));
+  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  toast('Class deleted');
+  maybePushDeleteToCloud();
+}
+
 function removeDecksFromTests(deletedIds){
   let changed = false;
   for(const t of Object.values(state.tests || {})){
@@ -1709,15 +1771,7 @@ function removeDecksFromTests(deletedIds){
 function deleteSelectedDeckHard(){
   const id = selectedDeckId();
   if(!id) return alert('Select a deck first.');
-  const d = state.decks[id];
-  const name = `${d.deckName} — ${d.className}`;
-  if(!confirm(`Are you sure you want to delete this deck?\n\n${name}\nCards: ${d.cards.length}`)) return;
-  delete state.decks[id];
-  saveDecks();
-  removeDecksFromTests(new Set([id]));
-  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
-  toast('Deck deleted');
-  maybePushDeleteToCloud();
+  deleteDeckById(id);
 }
 
 function deleteSelectedSubdeck(){
@@ -1726,32 +1780,14 @@ function deleteSelectedSubdeck(){
   const d = state.decks[id];
   let sub = ($('#cardsSubFilter')?.value || state.ui.subFilter || '').trim();
   if(!sub) sub = prompt('Sub-deck name to delete:', '')?.trim() || '';
-  if(!sub) return;
-  const count = (d.cards || []).filter(c => (c.sub || '') === sub).length;
-  if(!confirm(`Are you sure you want to delete sub-deck “${sub}”?\n\nThis will clear the tag from ${count} card(s).`)) return;
-  d.tags = (d.tags || []).filter(t => t !== sub);
-  (d.cards || []).forEach(c => { if((c.sub || '') === sub) c.sub = ''; });
-  saveDecks();
-  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
-  toast('Sub-deck deleted');
-  maybePushDeleteToCloud();
+  deleteSubdeckByName(d.id, sub);
 }
 
 function deleteSelectedClass(){
   const id = selectedDeckId();
   const className = id ? (state.decks[id]?.className || '') : ($('#newClassName')?.value.trim() || '');
   if(!className) return alert('Select a deck or enter a class name first.');
-  const deckIds = Object.values(state.decks || {})
-    .filter(d => (d.className || '').toLowerCase() === className.toLowerCase())
-    .map(d => d.id);
-  if(!deckIds.length) return alert('No decks found for that class.');
-  if(!confirm(`Are you sure you want to delete the class “${className}”?\n\nThis will delete ${deckIds.length} deck(s).`)) return;
-  deckIds.forEach(id => delete state.decks[id]);
-  saveDecks();
-  removeDecksFromTests(new Set(deckIds));
-  renderDeckSelect(); renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
-  toast('Class deleted');
-  maybePushDeleteToCloud();
+  deleteClassByName(className);
 }
 
 function bulkAddGlobalCards(){
