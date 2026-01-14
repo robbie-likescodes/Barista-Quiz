@@ -288,6 +288,7 @@ body.student .student-nav{display:flex}
 .quiz-edit-body{display:grid;gap:16px}
 .quiz-edit-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .quiz-edit-card{min-height:200px}
+.quiz-edit-form{display:grid;gap:10px}
 .quiz-edit-wrongs{display:grid;gap:8px}
 .quiz-edit-wrong-inputs{display:grid;gap:8px}
 .wrong-list{display:flex;flex-wrap:wrap;gap:8px}

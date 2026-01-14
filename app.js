@@ -105,6 +105,17 @@ function ensureQuizEditModal(){
             <div class="fc-text" id="quizEditAnswer"></div>
           </div>
         </div>
+        <div class="quiz-edit-form">
+          <label class="label" for="quizEditQuestionInput">Question</label>
+          <textarea id="quizEditQuestionInput" class="textarea" rows="2"></textarea>
+          <label class="label" for="quizEditAnswerInput">Correct answer</label>
+          <input id="quizEditAnswerInput" class="input" type="text">
+          <label class="label" for="quizEditWrongsInput">Wrong answers (one per line)</label>
+          <textarea id="quizEditWrongsInput" class="textarea" rows="3"></textarea>
+          <div class="quiz-edit-actions">
+            <button class="btn success" type="button" data-update>Update question</button>
+          </div>
+        </div>
         <div class="quiz-edit-wrongs">
           <div class="label">Wrong answers</div>
           <div class="quiz-edit-wrong-inputs">
@@ -136,6 +147,7 @@ function ensureQuizEditModal(){
     if(event.target.closest('[data-next]')) changeQuizEditIndex(1);
     if(event.target.closest('[data-save-wrongs]')) saveQuizEditWrongs();
     if(event.target.closest('[data-remove]')) removeQuizEditCard();
+    if(event.target.closest('[data-update]')) updateQuizEditCard();
   });
 
   return modal;
@@ -175,9 +187,10 @@ function renderQuizEditor(){
   const card = modal.querySelector('#quizEditCard');
   const question = modal.querySelector('#quizEditQuestion');
   const answer = modal.querySelector('#quizEditAnswer');
-  const wrong1 = modal.querySelector('#quizEditWrong1');
-  const wrong2 = modal.querySelector('#quizEditWrong2');
-  const wrong3 = modal.querySelector('#quizEditWrong3');
+  const wrongs = modal.querySelector('#quizEditWrongs');
+  const questionInput = modal.querySelector('#quizEditQuestionInput');
+  const answerInput = modal.querySelector('#quizEditAnswerInput');
+  const wrongsInput = modal.querySelector('#quizEditWrongsInput');
   const total = quizEditState.items.length;
 
   if(title) title.textContent = t ? `Edit ${testDisplayName(t)}` : 'Quiz editor';
@@ -190,9 +203,10 @@ function renderQuizEditor(){
     if(progress) progress.textContent = 'No questions available for this quiz.';
     if(question) question.textContent = '';
     if(answer) answer.textContent = '';
-    if(wrong1) wrong1.value = '';
-    if(wrong2) wrong2.value = '';
-    if(wrong3) wrong3.value = '';
+    if(wrongs) wrongs.innerHTML = '<div class="hint">No wrong answers to show.</div>';
+    if(questionInput) questionInput.value = '';
+    if(answerInput) answerInput.value = '';
+    if(wrongsInput) wrongsInput.value = '';
     if(card) card.classList.remove('flipped');
     return;
   }
@@ -202,10 +216,15 @@ function renderQuizEditor(){
   if(progress) progress.textContent = `Card ${quizEditState.idx + 1} of ${total} • Click to flip`;
   if(question) question.textContent = current?.q || '';
   if(answer) answer.textContent = current?.a || '';
-  const wrongList = (current?.distractors || []).filter(Boolean);
-  if(wrong1) wrong1.value = wrongList[0] || '';
-  if(wrong2) wrong2.value = wrongList[1] || '';
-  if(wrong3) wrong3.value = wrongList[2] || '';
+  if(questionInput) questionInput.value = current?.q || '';
+  if(answerInput) answerInput.value = current?.a || '';
+  if(wrongsInput) wrongsInput.value = (current?.distractors || []).filter(Boolean).join('\n');
+  if(wrongs){
+    const wrongList = (current?.distractors || []).filter(Boolean);
+    wrongs.innerHTML = wrongList.length
+      ? wrongList.map(w => `<span class="wrong-chip">${esc(w)}</span>`).join('')
+      : '<div class="hint">No wrong answers saved for this card.</div>';
+  }
   if(card){
     card.classList.remove('flipped');
     card.onclick = () => card.classList.toggle('flipped');
@@ -239,22 +258,38 @@ async function removeQuizEditCard(){
   }
 }
 
-async function saveQuizEditWrongs(){
-  const currentItem = quizEditState.items[quizEditState.idx];
-  const deck = state.decks?.[currentItem?.deckId];
-  const current = currentItem?.card;
-  if(!deck || !current?.id) return;
-  const w1 = $('#quizEditWrong1')?.value.trim() || '';
-  const w2 = $('#quizEditWrong2')?.value.trim() || '';
-  const w3 = $('#quizEditWrong3')?.value.trim() || '';
-  const wrongs = [w1, w2, w3].filter(Boolean);
-  if(!wrongs.length) return alert('Enter at least one wrong answer.');
-  current.distractors = wrongs;
-  current.updatedAt = Date.now();
+async function updateQuizEditCard(){
+  const entry = quizEditState.items[quizEditState.idx];
+  if(!entry?.card || !entry?.deckId) return;
+  const modal = ensureQuizEditModal();
+  const qInput = modal.querySelector('#quizEditQuestionInput');
+  const aInput = modal.querySelector('#quizEditAnswerInput');
+  const wInput = modal.querySelector('#quizEditWrongsInput');
+  const deck = state.decks?.[entry.deckId];
+  if(!deck) return;
+  const card = deck.cards?.find(c => c.id === entry.card.id);
+  if(!card) return;
+
+  const q = (qInput?.value || '').trim();
+  const a = (aInput?.value || '').trim();
+  const wrongs = (wInput?.value || '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  if(!q || !a){
+    alert('Question and correct answer are required.');
+    return;
+  }
+
+  card.q = q;
+  card.a = a;
+  card.distractors = wrongs;
+  card.updatedAt = Date.now();
   saveDecks();
-  renderDeckMeta(); renderSubdeckManager(); renderFolderTree(); renderCardsList();
+  entry.card = card;
   renderQuizEditor();
-  toast('Wrong answers updated');
+  toast('Question updated');
   try{
     await cloudPushHandler();
   }catch(err){
