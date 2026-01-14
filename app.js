@@ -93,6 +93,7 @@ function ensureQuizEditModal(){
           <div class="actions-row">
             <button class="btn ghost" type="button" data-prev>Prev</button>
             <button class="btn ghost" type="button" data-next>Next</button>
+            <button class="btn small success" type="button" data-add aria-label="Add new flashcard">+ Add</button>
           </div>
         </div>
         <div id="quizEditCard" class="flip quiz-edit-card" tabindex="0">
@@ -128,6 +129,7 @@ function ensureQuizEditModal(){
   modal.addEventListener('click', (event) => {
     if(event.target.closest('[data-prev]')) changeQuizEditIndex(-1);
     if(event.target.closest('[data-next]')) changeQuizEditIndex(1);
+    if(event.target.closest('[data-add]')) openQuizAddCard();
     if(event.target.closest('[data-remove]')) removeQuizEditCard();
   });
 
@@ -228,6 +230,32 @@ async function removeQuizEditCard(){
   }catch(err){
     console.warn('Cloud push failed', err);
   }
+}
+
+function getQuizEditAddTarget(){
+  const currentItem = quizEditState.items[quizEditState.idx];
+  if(currentItem?.deckId){
+    return { deckId: currentItem.deckId, sub: currentItem.card?.sub || '' };
+  }
+  const t = state.tests?.[quizEditState.testId];
+  const selection = (t?.selections || []).find(sel => state.decks?.[sel.deckId]);
+  if(!selection) return { deckId: '', sub: '' };
+  const sub = (!selection.whole && Array.isArray(selection.subs) && selection.subs.length === 1)
+    ? selection.subs[0]
+    : '';
+  return { deckId: selection.deckId, sub };
+}
+
+function openQuizAddCard(){
+  const modal = ensureQuizEditModal();
+  modal.classList.add('hidden');
+  setParams({ view: 'create' });
+  activate('create');
+  const { deckId, sub } = getQuizEditAddTarget();
+  if(deckId) setSelectedFolder(deckId, sub, '');
+  const qInput = $('#qInput');
+  if(qInput) qInput.focus();
+  toast('Add a new flashcard and it will appear in this quiz.');
 }
 const maybeHandleEditParams = () => {
   const p = qs();
