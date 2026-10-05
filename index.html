@@ -7,8 +7,8 @@
   <title>Barista Flashcards & Quizzes</title>
 
   <!-- Cache-busting versions: bump when you redeploy -->
-  <link rel="stylesheet" href="styles.css?v=38" />
-  <script defer src="app.js?v=35"></script>
+  <link rel="stylesheet" href="styles.css?v=40" />
+  <script defer src="app.js?v=40"></script>
 </head>
 <body>
   <noscript><div class="noscript">This app requires JavaScript.</div></noscript>
@@ -17,7 +17,7 @@
   <header class="app-header" role="banner">
     <div class="brand">
       <span class="logo" aria-hidden="true">☕</span>
-      <h1>Barista Flashcards &amp; Quizzes</h1>
+      <div><h1>Barista Academy</h1><span class="brand-subtitle">Training, quizzes &amp; insights</span></div>
     </div>
 
     <!-- Student-only top actions -->
@@ -28,19 +28,26 @@
       <button class="btn student-nav-btn" data-route="leaderboards">Leaderboards</button>
     </div>
 
-    <!-- Compact top nav: dropdown menu on mobile; all handled by CSS/JS -->
+    <div class="creator-status" aria-label="Creator session">
+      <span id="cloudStatus" class="status-pill">● Ready</span>
+      <button id="creatorLogoutBtn" class="btn ghost small">Lock</button>
+    </div>
+
+    <!-- Creator navigation -->
     <div class="topnav">
       <div class="menu">
         <button id="menuBtn" class="btn ghost" aria-haspopup="true" aria-expanded="false">Menu ≡</button>
         <div id="menuList" class="menu-list" role="menu" aria-label="Primary">
-          <button class="menu-item active" data-route="create" role="menuitem">Create</button>
-          <button class="menu-item" data-route="build" role="menuitem">Quiz Builder</button>
-          <button class="menu-item" data-route="quizzes" role="menuitem">Quizzes</button>
-          <button class="menu-item" data-route="practice" role="menuitem">Practice</button>
-          <button class="menu-item" data-route="quiz" role="menuitem">Quiz</button>
-          <button class="menu-item" data-route="reports" role="menuitem">Reports</button>
-          <button class="menu-item" data-route="grades" role="menuitem">Grades</button>
-          <button class="menu-item" data-route="settings" role="menuitem">Settings</button>
+          <span class="menu-label">Workspace</span>
+          <button class="menu-item active" data-route="dashboard" role="menuitem">⌂ Dashboard</button>
+          <button class="menu-item" data-route="create" role="menuitem">▤ Content library</button>
+          <button class="menu-item" data-route="build" role="menuitem">✦ Build a quiz</button>
+          <button class="menu-item" data-route="quizzes" role="menuitem">↗ Publish &amp; share</button>
+          <button class="menu-item" data-route="reports" role="menuitem">▥ Results &amp; insights</button>
+          <span class="menu-label">Preview</span>
+          <button class="menu-item" data-route="practice" role="menuitem">Practice preview</button>
+          <button class="menu-item" data-route="quiz" role="menuitem">Quiz preview</button>
+          <button class="menu-item" data-route="settings" role="menuitem">⚙ Settings &amp; backup</button>
         </div>
       </div>
     </div>
@@ -49,8 +56,39 @@
   <main class="container" role="main">
     <div id="liveRegion" class="sr-only" aria-live="polite"></div>
 
+    <!-- ======================= DASHBOARD ======================== -->
+    <section id="view-dashboard" class="view active" aria-labelledby="dashboard-title">
+      <div class="hero-card">
+        <div><span class="eyebrow">CREATOR WORKSPACE</span><h2 id="dashboard-title">Welcome back</h2>
+          <p>Build training content, publish a quiz, and understand your team's progress—all in one place.</p></div>
+        <button class="btn primary hero-action" data-go="build">Build a quiz →</button>
+      </div>
+      <div class="dashboard-kpis" aria-label="Workspace summary">
+        <button class="metric-card" data-go="create"><span>Decks</span><strong id="dashDecks">0</strong><small>Manage content →</small></button>
+        <button class="metric-card" data-go="quizzes"><span>Quizzes</span><strong id="dashTests">0</strong><small>Publish &amp; share →</small></button>
+        <button class="metric-card" data-go="reports"><span>Attempts</span><strong id="dashResults">0</strong><small>View insights →</small></button>
+        <button class="metric-card" data-go="reports"><span>Average</span><strong id="dashAverage">—</strong><small>Compare results →</small></button>
+      </div>
+      <div class="grid g2 dashboard-grid">
+        <div class="card journey-card"><div class="card-head"><strong>Your publishing pathway</strong><span class="badge">4 steps</span></div>
+          <ol class="journey-list">
+            <li><button data-go="create"><b>1</b><span><strong>Create content</strong><small>Add decks, topics and answer choices.</small></span></button></li>
+            <li><button data-go="build"><b>2</b><span><strong>Build &amp; preview</strong><small>Choose content and validate the student experience.</small></span></button></li>
+            <li><button data-go="quizzes"><b>3</b><span><strong>Publish &amp; share</strong><small>Copy the protected student link.</small></span></button></li>
+            <li><button data-go="reports"><b>4</b><span><strong>Review results</strong><small>Compare quizzes, locations and missed questions.</small></span></button></li>
+          </ol>
+        </div>
+        <div class="card activity-card"><div class="card-head"><strong>Workspace health</strong></div>
+          <div class="health-row"><span>Cloud connection</span><strong id="dashCloud">Checking…</strong></div>
+          <div class="health-row"><span>Pending submissions</span><strong id="dashPending">0</strong></div>
+          <div class="health-row"><span>Last local save</span><strong>Automatic</strong></div>
+          <p class="callout">Student links open a focused experience. Creator tools require your access key and results are no longer publicly readable.</p>
+        </div>
+      </div>
+    </section>
+
     <!-- ========================= CREATE ========================= -->
-    <section id="view-create" class="view active" aria-labelledby="create-title">
+    <section id="view-create" class="view" aria-labelledby="create-title">
       <h2 id="create-title">Content Library</h2>
 
       <div class="card primary-card">
@@ -217,7 +255,7 @@
 
         <h3 class="step-title mt"><span class="step-num">3</span>Save &amp; push to Cloud</h3>
         <div class="mt-sm">
-          <button id="buildPushBtn" class="btn success">Push Test to Cloud</button>
+          <button id="buildPushBtn" class="btn success">Publish Quiz</button>
           <p class="hint mt-sm">This saves your test and syncs it to Google Sheets so baristas can access it on their devices.</p>
         </div>
 
@@ -567,10 +605,25 @@
   </main>
 
   <footer class="footer" role="contentinfo">
-    <span class="hint">Admin data stays in this browser (localStorage). Share the student link to restrict access.</span>
+    <span class="hint">Drafts are cached on this device. Published content and submissions are stored in your connected Google Sheet.</span>
   </footer>
 
   <!-- Toast / Snackbar -->
+  <div id="toastRegion" class="toast-region" role="status" aria-live="polite"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div id="creatorGate" class="auth-gate hidden" role="dialog" aria-modal="true" aria-labelledby="creatorGateTitle">
+    <form id="creatorLoginForm" class="auth-card">
+      <div class="auth-mark" aria-hidden="true">☕</div>
+      <span class="eyebrow">CREATOR ACCESS</span>
+      <h2 id="creatorGateTitle">Unlock your workspace</h2>
+      <p>Enter the creator access key stored in the Apps Script <code>API_KEY</code> property. It stays in this browser tab and is never included in student links.</p>
+      <label class="label" for="creatorKeyInput">Creator access key</label>
+      <input id="creatorKeyInput" class="input" type="password" autocomplete="current-password" required>
+      <p id="creatorLoginError" class="form-error hidden" role="alert"></p>
+      <button id="creatorLoginBtn" class="btn primary wide" type="submit">Open creator workspace</button>
+      <p class="micro">Students should use the quiz link supplied by their trainer.</p>
+    </form>
+  </div>
 </body>
 </html>
