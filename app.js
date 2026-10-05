@@ -6,9 +6,10 @@
 
 /* ========= Cloud API Config (EDIT AFTER REDEPLOY) ========= */
 const CLOUD = {
-  BASE: "https://script.google.com/macros/s/AKfycbyd2qWD-0n_FXIXzRmOdb1L17Vy0CiCYKHtiyz5_BsqBRsYCmiOfuxiATErvD3c-wjvtg/exec",
-  API_KEY: "longrandomstringwhatwhat" // must match Script Property 'API_KEY'
+  BASE: "https://script.google.com/macros/s/AKfycbyd2qWD-0n_FXIXzRmOdb1L17Vy0CiCYKHtiyz5_BsqBRsYCmiOfuxiATErvD3c-wjvtg/exec"
 };
+const CREATOR_KEY = 'bq_creator_session_v1';
+const getCreatorKey = () => sessionStorage.getItem(CREATOR_KEY) || '';
 /* ========================================================= */
 
 //////////////////// tiny DOM/storage helpers ////////////////////
@@ -407,7 +408,7 @@ const KEYS = {
   outboxLock: 'bq_outbox_lock_v1'
 };
 const SCHEMA_VERSION = 1;
-const ADMIN_VIEWS = new Set(['create','build','quizzes','reports','settings']);
+const ADMIN_VIEWS = new Set(['dashboard','create','build','quizzes','reports','settings']);
 
 //////////////////////////// utils ///////////////////////////////
 const uid      = (p='id') => p+'_'+Math.random().toString(36).slice(2,10);
@@ -493,7 +494,7 @@ async function cloudGET(params={}){
   if(!CLOUD.BASE) throw new Error('CLOUD.BASE missing');
   const makeUrl = () => {
     const url = new URL(CLOUD.BASE);
-    if (CLOUD.API_KEY) url.searchParams.set('key', CLOUD.API_KEY);
+    if (getCreatorKey()) url.searchParams.set('key', getCreatorKey());
     Object.entries(params).forEach(([k,v])=> url.searchParams.set(k, String(v)));
     url.searchParams.set('_', String(Date.now())); // cache-buster
     return url.toString();
@@ -503,6 +504,7 @@ async function cloudGET(params={}){
     const r = await fetchWithTimeout(makeUrl(), { method:'GET', cache:'no-store' }, 7000);
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
     const json = await r.json();
+    if(json && typeof json === 'object' && json.error) throw new Error(json.error);
     if(json && typeof json === 'object' && 'ok' in json){
       if(json.ok) return json.data;
       throw new Error(json.error || 'Server error');
@@ -524,7 +526,7 @@ async function cloudPOST(action, payload={}){
   const makeParams = () => {
     const params = new URLSearchParams();
     params.set('action', action);
-    if (CLOUD.API_KEY) params.set('key', CLOUD.API_KEY);
+    if (action !== 'submitresult' && getCreatorKey()) params.set('key', getCreatorKey());
     for (const [k,v] of Object.entries(payload)){
       params.set(k, (v && typeof v === 'object') ? JSON.stringify(v) : String(v));
     }
@@ -535,6 +537,7 @@ async function cloudPOST(action, payload={}){
     const r = await fetchWithTimeout(CLOUD.BASE, { method: 'POST', body: makeParams() }, 8000);
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
     const json = await r.json();
+    if(json && typeof json === 'object' && json.error) throw new Error(json.error);
     if(json && typeof json === 'object' && 'ok' in json){
       if(json.ok) return json.data;
       throw new Error(json.error || 'Server error');
@@ -552,7 +555,10 @@ async function cloudPOST(action, payload={}){
 
 // GET list() → {decks, cards, tests}
 async function getAllFromCloud(){
-  const data = await cloudGET({action:'list'});
+  const student = isStudent();
+  const data = student
+    ? await cloudGET({action:'studentlist', test:qs().get('test') || ''})
+    : await cloudPOST('list');
   if(!data || !Array.isArray(data.decks) || !Array.isArray(data.cards) || !Array.isArray(data.tests)){
     throw new Error('Malformed list() response');
   }
@@ -645,13 +651,14 @@ async function cloudPullHandler(){
 }
 
 async function cloudPushHandler(){
-  const modeMerge = confirm('Push to Cloud?\n\nOK = MERGE into Sheets\nCancel = REPLACE (overwrite Sheets with local)');
+  const mode = await chooseCloudMode();
+  if(!mode) return;
   try{
     $('#cloudPushBtn')?.setAttribute('disabled','true');
     const backup = makeBackupObject();
-    const resp = await cloudPOST('bulkupsert', { ...backup, mode: modeMerge ? 'merge' : 'replace' });
+    const resp = await cloudPOST('bulkupsert', { ...backup, mode });
     if(resp && (resp.status === 'ok')){
-      toast(modeMerge ? 'Merged to Cloud' : 'Replaced in Cloud');
+      notify({title:'Cloud backup complete',message:mode==='merge'?'Local changes were merged safely.':'The cloud copy now matches this device.',type:mode==='replace'?'warning':'success'});
     } else {
       throw new Error(JSON.stringify(resp||{}));
     }
@@ -660,9 +667,21 @@ async function cloudPushHandler(){
   }finally{ $('#cloudPushBtn')?.removeAttribute('disabled'); }
 }
 
+function chooseCloudMode(){
+  return new Promise(resolve=>{
+    const wrap=document.createElement('div');wrap.className='modal';
+    wrap.innerHTML=`<div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="syncChoiceTitle"><div class="modal-head"><div><span class="eyebrow">CLOUD BACKUP</span><div class="modal-title" id="syncChoiceTitle">How should this device sync?</div></div></div><div class="modal-body"><p><strong>Merge</strong> adds and updates content without removing cloud-only records. It is the safest everyday choice.</p><p><strong>Replace</strong> makes the cloud exactly match this device, including deletions. Export a backup first.</p><div class="actions-row"><button class="btn primary" data-mode="merge">Merge safely</button><button class="btn danger" data-mode="replace">Replace cloud</button><button class="btn ghost" data-mode="">Cancel</button></div></div></div>`;
+    const finish=mode=>{wrap.remove();resolve(mode||null);};
+    wrap.addEventListener('click',e=>{const btn=e.target.closest('[data-mode]');if(btn)finish(btn.dataset.mode);else if(e.target===wrap)finish(null);});
+    document.body.appendChild(wrap);wrap.querySelector('[data-mode="merge"]')?.focus();
+  });
+}
+
 async function resultsRefreshFromCloud(){
   try{
-    const rows = await cloudGET({action:'results',limit:500});
+    const rows = isStudent()
+      ? await cloudGET({action:'leaderboard',limit:500})
+      : await cloudPOST('results',{limit:500});
     if(!Array.isArray(rows)) throw new Error('Bad results response');
 
     state.results = rows.map(r=>({
@@ -865,10 +884,61 @@ async function flushOutbox(forceToast=false){
 
 //////////////////////////// toasts //////////////////////////////
 function toast(msg, ms=1800){
-  const t = $('#toast'); if(!t){ alert(msg); return; }
-  t.textContent = msg; t.classList.add('show');
-  clearTimeout(window.__toastTimer);
-  window.__toastTimer = setTimeout(()=>t.classList.remove('show'), ms);
+  notify({message:msg, duration:ms});
+}
+
+function notify({title='', message='', type='success', duration=3200}={}){
+  const region=$('#toastRegion');
+  if(!region){ const t=$('#toast'); if(t){t.textContent=message;t.classList.add('show');} return; }
+  const item=document.createElement('div');
+  item.className=`notice ${type}`;
+  item.innerHTML=`<div><strong>${esc(title || (type==='error'?'Something went wrong':type==='warning'?'Please note':'Done'))}</strong><span>${esc(message)}</span></div><button type="button" aria-label="Dismiss">×</button>`;
+  const close=()=>item.remove();
+  item.querySelector('button').addEventListener('click',close);
+  region.appendChild(item);
+  if(duration) setTimeout(close,duration);
+}
+
+function renderDashboard(){
+  const decks=Object.keys(state.decks||{}).length, tests=Object.keys(state.tests||{}).length;
+  const rows=state.results||[], avg=rows.length?Math.round(rows.reduce((n,r)=>n+Number(r.score||0),0)/rows.length):null;
+  if($('#dashDecks')) $('#dashDecks').textContent=decks;
+  if($('#dashTests')) $('#dashTests').textContent=tests;
+  if($('#dashResults')) $('#dashResults').textContent=rows.length;
+  if($('#dashAverage')) $('#dashAverage').textContent=avg==null?'—':`${avg}%`;
+  if($('#dashPending')) $('#dashPending').textContent=(state.outbox||[]).length;
+}
+
+function setCloudStatus(text, tone='ready'){
+  const el=$('#cloudStatus'); if(el){el.textContent=`● ${text}`;el.dataset.tone=tone;}
+  if($('#dashCloud')) $('#dashCloud').textContent=text;
+}
+
+function bindWorkspaceActions(){
+  document.addEventListener('click',e=>{
+    const go=e.target.closest('[data-go]');
+    if(go){ const view=go.dataset.go;setParams({view});activate(view); }
+  });
+  on($('#creatorLogoutBtn'),'click',()=>{sessionStorage.removeItem(CREATOR_KEY);location.href=location.pathname;});
+}
+
+async function requireCreatorAccess(){
+  if(isStudent()) return true;
+  const gate=$('#creatorGate'), form=$('#creatorLoginForm'), input=$('#creatorKeyInput'), error=$('#creatorLoginError');
+  const verify=async()=>{ await cloudPOST('adminping'); setCloudStatus('Connected'); return true; };
+  if(getCreatorKey()){
+    try{return await verify();}catch(_){sessionStorage.removeItem(CREATOR_KEY);}
+  }
+  gate?.classList.remove('hidden'); input?.focus();
+  return new Promise(resolve=>{
+    form.onsubmit=async e=>{
+      e.preventDefault(); const key=input.value.trim(); if(!key)return;
+      sessionStorage.setItem(CREATOR_KEY,key); $('#creatorLoginBtn').disabled=true; error?.classList.add('hidden');
+      try{await verify();gate.classList.add('hidden');notify({title:'Workspace unlocked',message:'Creator tools and private results are ready.'});resolve(true);}
+      catch(_){sessionStorage.removeItem(CREATOR_KEY);if(error){error.textContent='That key was not accepted. Check the API_KEY Script Property.';error.classList.remove('hidden');}input.select();}
+      finally{$('#creatorLoginBtn').disabled=false;}
+    };
+  });
 }
 
 /////////////////////////// routing //////////////////////////////
@@ -889,6 +959,7 @@ function activate(view){
   $$('.menu-item').forEach(i => i.classList.toggle('active', i.dataset.route===view));
   $$('.student-nav-btn').forEach(i => i.classList.toggle('active', i.dataset.route===view));
 
+  if(view==='dashboard') renderDashboard();
   if(view==='create')   renderCreate();
   if(view==='build')    renderBuild();
   if(view==='practice') renderPracticeScreen();
@@ -903,7 +974,7 @@ function activate(view){
 
   closeMenu();
 }
-window.addEventListener('popstate', ()=>activate(qs().get('view')||'create'));
+window.addEventListener('popstate', ()=>activate(qs().get('view')||(isStudent()?'practice':'dashboard')));
 
 /////////////////////// mobile menu (robust) /////////////////////
 function menuEls(){ return { btn: $('#menuBtn'), list: $('#menuList') }; }
@@ -950,7 +1021,7 @@ function applyStudentMode(){
       if(entry){ state.quiz.locked=true; state.quiz.testId=entry[0]; }
     }
     const next = p.get('view') && !ADMIN_VIEWS.has(p.get('view')) ? p.get('view') : 'practice';
-    setParams({view:next});
+    if(p.get('view')!==next) setParams({view:next});
   }
 }
 
@@ -1478,16 +1549,16 @@ function renderQuizzes(){
 
 function renderLeaderboards(){
   bindOnce($('#leaderboardRefreshBtn'),'click',refreshLeaderboards);
-  updateLeaderboardsFromResults(state.results || []);
+  updateLeaderboardsFromResults(state.leaderboard || state.results || []);
 }
 
 async function refreshLeaderboards(){
   const btn = $('#leaderboardRefreshBtn');
   if(btn) btn.disabled = true;
   try{
-    const rows = await cloudGET({action:'results',limit:500});
+    const rows = await cloudGET({action:'leaderboard',limit:500});
     if(!Array.isArray(rows)) throw new Error('Bad results response');
-    state.results = rows.map(r=>({
+    state.leaderboard = rows.map(r=>({
       id      : r.resId || r.id || uid('res'),
       name    : r.name || '',
       location: r.location || '',
@@ -1500,8 +1571,7 @@ async function refreshLeaderboards(){
       of      : Number(r.of || 0),
       answers : getResultAnswers(r)
     }));
-    saveResults();
-    updateLeaderboardsFromResults(state.results);
+    updateLeaderboardsFromResults(state.leaderboard);
     toast('Leaderboards refreshed');
   }catch(err){
     alert('Failed to refresh leaderboards: '+(err.message||err));
@@ -2190,97 +2260,6 @@ function startPractice(){
   const filtered = subFilter ? pool.filter(c => (c.sub || '') === subFilter) : pool;
   if(!filtered.length) return alert('No cards to practice.');
   state.practice.cards=shuffle(filtered); state.practice.idx=0; if($('#practiceArea')) $('#practiceArea').hidden=false; showPractice();
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
-}
-
-function updatePracticeTitle(){
-  const tid=$('#practiceTestSelect')?.value;
-  const t=state.tests?.[tid];
-  if($('#practiceQuizTitle')) $('#practiceQuizTitle').textContent = t ? `Practice for the ${testDisplayName(t)}` : 'Practice for this quiz';
-  if($('#practiceDeckHint')) $('#practiceDeckHint').textContent = t ? `Pick which decks from ${testDisplayName(t)} you want to study` : 'Pick which decks you want to study';
 }
 
 function updatePracticeTitle(){
@@ -3028,6 +3007,11 @@ async function boot(){
     document.body.prepend(b);
   }
 
+  bindWorkspaceActions();
+  // Apply the restricted shell before any network wait so creator content never
+  // flashes on screen while a student link is loading.
+  applyStudentMode();
+  await requireCreatorAccess();
   const forcePull = (new URLSearchParams(location.search).get('mode') === 'student');
   await maybeHydrateFromCloud(forcePull);
 
@@ -3049,7 +3033,7 @@ async function boot(){
 
   if($('#studentDate') && !$('#studentDate').value) $('#studentDate').value=todayISO();
 
-  activate(qs().get('view') || (isStudent() ? 'practice' : 'create'));
+  activate(qs().get('view') || (isStudent() ? 'practice' : 'dashboard'));
 }
 /* --------------------------------------------------------------- */
 window.boot = boot;

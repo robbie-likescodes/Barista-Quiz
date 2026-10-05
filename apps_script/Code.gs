@@ -37,14 +37,13 @@ function doGet(e) {
   const act = String(p.action || 'getAll').toLowerCase(); // default to getAll
 
   try {
-    // Read-only (no auth needed) — app.js may still send ?key=… which is ignored here
+    // Public routes expose only health, a selected student quiz, and sanitized scores.
     if (act === 'ping')                            return ok({ pong:true, schema:getMeta('schema') || 'bq_backup_v1' });
-    if (act === 'getall' || act === 'list')       return ok(listAll());                 // cached decks+cards+tests
-    if (act === 'getresults' || act === 'results')return ok(readResults(p));            // ?limit & ?since supported
-    if (act === 'decks')                          return ok(readSheet(SHEETS.DECKS));
-    if (act === 'cards')                          return ok(readSheet(SHEETS.CARDS));
-    if (act === 'tests')                          return ok(readSheet(SHEETS.TESTS));
+    if (act === 'studentlist')                     return ok(readStudentQuiz(p.test));
+    if (act === 'leaderboard')                     return ok(readLeaderboard(p));
 
+    // Creator reads intentionally use POST so the access key is never placed in
+    // a URL, browser history, proxy log, or referrer.
     return err('Unknown GET action: ' + act, 400);
   } catch (ex) {
     return err(ex.message || 'Server error', 500);
@@ -57,18 +56,28 @@ function doPost(e) {
   const act = String((body.action || p.action || '')).toLowerCase();
 
   // Write routes require API key (accept body.apiKey or ?key=…)
-  const needsAuth = ['submitresult','backup','bulkupsert','archivemove','deleteforever'];
+  const needsAuth = ['adminping','list','getall','results','getresults','backup','bulkupsert','archivemove','deleteforever'];
   if (needsAuth.indexOf(act) !== -1) {
     const supplied = String(body.apiKey || p.key || '');
     if (!isAuthorized(supplied)) return err('Unauthorized', 401);
   }
 
   try {
+    if (act === 'adminping') return ok({ authorized:true, schema:getMeta('schema') || 'bq_backup_v1' });
+    if (act === 'list' || act === 'getall') return ok(listAll());
+    if (act === 'results' || act === 'getresults') return ok(readResults(body));
+
     if (act === 'submitresult') {
       const row = sanitizeResultRow(body.row || body);
-      const dup = isDuplicateResult(row.resId, row.idempotencyKey);
-      if (dup) return ok({ status:'ok', saved:false, duplicate:true, id:row.resId });
-      appendRow(SHEETS.RESULTS, row, HEADERS.Results);
+      validateAndGradeResult(row);
+      const lock = LockService.getScriptLock();
+      lock.waitLock(10000);
+      try {
+        const dup = isDuplicateResult(row.resId, row.idempotencyKey);
+        if (dup) return ok({ status:'ok', saved:false, duplicate:true, id:row.resId });
+        enforceSubmissionRateLimit(row.clientId);
+        appendRow(SHEETS.RESULTS, row, HEADERS.Results);
+      } finally { lock.releaseLock(); }
       clearListCache();
       return ok({ status:'ok', saved:true, id:row.resId });
     }
@@ -77,7 +86,7 @@ function doPost(e) {
     if (act === 'backup' || act === 'bulkupsert') {
       const mode = String(body.mode || p.mode || 'merge').toLowerCase(); // 'merge' | 'replace'
       const norm = normaliseIncoming(body);
-      bulkUpsertFromNormalised(norm, mode);
+      withScriptLock(() => bulkUpsertFromNormalised(norm, mode));
       clearListCache();
       return ok({
         status:'ok',
@@ -93,13 +102,13 @@ function doPost(e) {
     }
 
     if (act === 'archivemove') {
-      const moved = archiveMove(String(body.id || ''), body.to === 'archived');
+      const moved = withScriptLock(() => archiveMove(String(body.id || ''), body.to === 'archived'));
       clearListCache();
       return ok({ status:'ok', moved });
     }
 
     if (act === 'deleteforever') {
-      const cnt = deleteForever(String(body.id || ''), String(body.from || ''));
+      const cnt = withScriptLock(() => deleteForever(String(body.id || ''), String(body.from || '')));
       clearListCache();
       return ok({ status:'ok', deleted: cnt });
     }
@@ -134,6 +143,44 @@ function listAll() {
 
 function clearListCache(){ CacheService.getScriptCache().remove('bq_list_all_v1'); }
 
+/** Return only the content needed by one student link. Creator-only datasets and
+ * result rows never leave this endpoint. The legacy test name remains supported
+ * so existing shared links continue to work. */
+function readStudentQuiz(testRef) {
+  const needle = normalizeLookup(testRef);
+  if (!needle) throw new Error('Missing quiz reference');
+  const tests = readSheet(SHEETS.TESTS);
+  const test = tests.find(t => normalizeLookup(t.testId) === needle || normalizeLookup(t.name) === needle);
+  if (!test) throw new Error('Quiz not found');
+  const selections = tryParseJSON(test.selectionsJSON) || [];
+  const selected = {};
+  selections.forEach(s => { if (s && s.deckId) selected[String(s.deckId)] = s; });
+  const deckIds = Object.keys(selected);
+  const decks = readSheet(SHEETS.DECKS).filter(d => deckIds.indexOf(String(d.deckId)) !== -1);
+  const cards = readSheet(SHEETS.CARDS).filter(c => {
+    const selection = selected[String(c.deckId)];
+    if (!selection) return false;
+    return !!selection.whole || (Array.isArray(selection.subs) && selection.subs.map(String).indexOf(String(c.sub || '')) !== -1);
+  });
+  return { decks, cards, tests:[test], version:getMeta('schema') || 'bq_backup_v1' };
+}
+
+/** Privacy-safe public scores: initials replace names and answer details, IDs,
+ * dates, and client identifiers are never returned. */
+function readLeaderboard(p) {
+  let rows = readSheet(SHEETS.RESULTS);
+  const lim = Math.min(500, Math.max(1, Number(p.limit || 100)));
+  return rows.slice(-lim).map(r => ({
+    name: initials(r.name),
+    location: safeText(r.location, 80),
+    testId: String(r.testId || ''),
+    testName: safeText(r.testName, 120),
+    score: clampNumber(r.score, 0, 100),
+    correct: clampNumber(r.correct, 0, 1000),
+    of: clampNumber(r.of, 0, 1000)
+  }));
+}
+
 function readResults(p) {
   let rows = readSheet(SHEETS.RESULTS);
   const since = p.since ? Number(p.since) : null;     // ?since=1700000000000
@@ -147,21 +194,96 @@ function readResults(p) {
 
 function sanitizeResultRow(r){
   const now = Date.now();
+  const parsedAnswers = Array.isArray(r.answers) ? r.answers : (tryParseJSON(r.answersJSON) || []);
+  const answers = Array.isArray(parsedAnswers) ? parsedAnswers.slice(0, 200) : [];
+  const correct = answers.filter(a => String(a.picked || '') === String(a.correct || '')).length;
+  const total = answers.length;
   return {
-    resId          : String(r.resId || r.id || uid('res')),
-    clientId       : String(r.clientId || ''),
-    idempotencyKey : String(r.idempotencyKey || ''),
-    name           : String(r.name || ''),
-    location       : String(r.location || ''),
-    date           : String(r.date || ''),
-    timeEpoch      : Number(r.time || now),
-    testId         : String(r.testId || ''),
-    testName       : String(r.testName || ''),
-    score          : Number(r.score || 0),
-    correct        : Number(r.correct || 0),
-    of             : Number(r.of || 0),
-    answersJSON    : JSON.stringify(r.answers || r.answer || [])
+    resId          : safeText(r.resId || r.id || uid('res'), 100),
+    clientId       : safeText(r.clientId, 100),
+    idempotencyKey : safeText(r.idempotencyKey, 160),
+    name           : safeText(r.name, 120),
+    location       : safeText(r.location, 80),
+    date           : safeText(r.date, 20),
+    timeEpoch      : clampNumber(r.time || now, 0, now + 86400000),
+    testId         : safeText(r.testId, 100),
+    testName       : safeText(r.testName, 120),
+    score          : total ? Math.round(100 * correct / total) : 0,
+    correct        : correct,
+    of             : total,
+    answersJSON    : JSON.stringify(answers.map(a => ({i:clampNumber(a.i,0,1000),q:safeText(a.q,1000),correct:safeText(a.correct,500),picked:safeText(a.picked,500)})))
   };
+}
+
+function validateAndGradeResult(row) {
+  if (!row.resId || !row.clientId || !row.idempotencyKey) throw new Error('Missing submission identity');
+  if (!row.name || !row.location || !row.date || !row.testId) throw new Error('Missing required submission fields');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date)) throw new Error('Invalid date');
+  if (row.of < 1 || row.of > 200) throw new Error('Invalid answer count');
+
+  const test = readSheet(SHEETS.TESTS).find(t => String(t.testId) === String(row.testId));
+  if (!test) throw new Error('Unknown quiz');
+
+  const configuredCount = Math.max(1, Number(test.n || 30));
+  if (row.of > configuredCount) throw new Error('Answer count exceeds quiz configuration');
+
+  const selections = tryParseJSON(test.selectionsJSON) || [];
+  const selected = {};
+  selections.forEach(s => { if (s && s.deckId) selected[String(s.deckId)] = s; });
+
+  const answerKey = {};
+  readSheet(SHEETS.CARDS).forEach(card => {
+    const selection = selected[String(card.deckId)];
+    if (!selection) return;
+    const allowed = !!selection.whole ||
+      (Array.isArray(selection.subs) && selection.subs.map(String).indexOf(String(card.sub || '')) !== -1);
+    if (!allowed) return;
+    const key = normalizeLookup(card.q);
+    if (!key) return;
+    if (!answerKey[key]) answerKey[key] = [];
+    answerKey[key].push(String(card.a || ''));
+  });
+
+  const submitted = tryParseJSON(row.answersJSON) || [];
+  if (!Array.isArray(submitted) || submitted.length !== row.of) throw new Error('Malformed answers');
+
+  const seen = {};
+  let correct = 0;
+  const canonicalAnswers = submitted.map((answer, index) => {
+    const question = safeText(answer && answer.q, 1000);
+    const picked = safeText(answer && answer.picked, 500);
+    const key = normalizeLookup(question);
+    if (!key || !picked) throw new Error('Every question must have an answer');
+    if (seen[key]) throw new Error('Duplicate question in submission');
+    seen[key] = true;
+
+    const possibleAnswers = uniqueStrings(answerKey[key] || []);
+    if (!possibleAnswers.length) throw new Error('Submission contains a question outside this quiz');
+    if (possibleAnswers.length > 1) throw new Error('Quiz contains an ambiguous duplicate question');
+
+    const canonical = possibleAnswers[0];
+    if (String(picked) === String(canonical)) correct++;
+    return {
+      i: clampNumber(answer && answer.i != null ? answer.i : index, 0, 1000),
+      q: question,
+      correct: safeText(canonical, 500),
+      picked: picked
+    };
+  });
+
+  row.testName = safeText(test.name || test.title || row.testName, 120);
+  row.correct = correct;
+  row.of = canonicalAnswers.length;
+  row.score = Math.round(100 * correct / row.of);
+  row.answersJSON = JSON.stringify(canonicalAnswers);
+}
+
+function enforceSubmissionRateLimit(clientId) {
+  const cache = CacheService.getScriptCache();
+  const key = 'submit_' + Utilities.base64EncodeWebSafe(String(clientId || '')).slice(0, 80);
+  const count = Number(cache.get(key) || 0);
+  if (count >= 10) throw new Error('Too many submissions. Please wait a few minutes.');
+  cache.put(key, String(count + 1), 300);
 }
 
 function isDuplicateResult(resId, idempotencyKey){
@@ -572,6 +694,44 @@ function isAuthorized(supplied){
   const req  = String(supplied || '');
   const conf = PropertiesService.getScriptProperties().getProperty('API_KEY') || '';
   return conf && req && req === conf;
+}
+
+function withScriptLock(fn){
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return fn(); } finally { lock.releaseLock(); }
+}
+
+function safeText(value, max){
+  let text = String(value == null ? '' : value).trim().slice(0, max || 500);
+  // Prevent spreadsheet formula injection when user-provided values are written.
+  if (/^[=+\-@]/.test(text)) text = "'" + text;
+  return text;
+}
+
+function clampNumber(value, min, max){
+  const n = Number(value);
+  if (!isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizeLookup(value){
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function uniqueStrings(values){
+  const seen = {};
+  return (values || []).filter(value => {
+    const key = String(value);
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+function initials(value){
+  const parts = String(value || 'Student').trim().split(/\s+/).filter(Boolean);
+  return parts.slice(0, 2).map(p => p.charAt(0).toUpperCase() + '.').join(' ') || 'Student';
 }
 
 function indexBy(arr, key){
