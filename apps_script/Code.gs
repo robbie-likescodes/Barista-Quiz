@@ -42,15 +42,8 @@ function doGet(e) {
     if (act === 'studentlist')                     return ok(readStudentQuiz(p.test));
     if (act === 'leaderboard')                     return ok(readLeaderboard(p));
 
-    // Everything below contains creator data and requires the creator key.
-    if (!isAuthorized(String(p.key || '')))        return err('Unauthorized', 401);
-    if (act === 'adminping')                       return ok({ authorized:true, schema:getMeta('schema') || 'bq_backup_v1' });
-    if (act === 'getall' || act === 'list')        return ok(listAll());
-    if (act === 'getresults' || act === 'results')return ok(readResults(p));
-    if (act === 'decks')                          return ok(readSheet(SHEETS.DECKS));
-    if (act === 'cards')                          return ok(readSheet(SHEETS.CARDS));
-    if (act === 'tests')                          return ok(readSheet(SHEETS.TESTS));
-
+    // Creator reads intentionally use POST so the access key is never placed in
+    // a URL, browser history, proxy log, or referrer.
     return err('Unknown GET action: ' + act, 400);
   } catch (ex) {
     return err(ex.message || 'Server error', 500);
@@ -76,7 +69,7 @@ function doPost(e) {
 
     if (act === 'submitresult') {
       const row = sanitizeResultRow(body.row || body);
-      validateResult(row);
+      validateAndGradeResult(row);
       const lock = LockService.getScriptLock();
       lock.waitLock(10000);
       try {
@@ -222,13 +215,67 @@ function sanitizeResultRow(r){
   };
 }
 
-function validateResult(row) {
+function validateAndGradeResult(row) {
   if (!row.resId || !row.clientId || !row.idempotencyKey) throw new Error('Missing submission identity');
   if (!row.name || !row.location || !row.date || !row.testId) throw new Error('Missing required submission fields');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date)) throw new Error('Invalid date');
   if (row.of < 1 || row.of > 200) throw new Error('Invalid answer count');
-  const testExists = readSheet(SHEETS.TESTS).some(t => String(t.testId) === String(row.testId));
-  if (!testExists) throw new Error('Unknown quiz');
+
+  const test = readSheet(SHEETS.TESTS).find(t => String(t.testId) === String(row.testId));
+  if (!test) throw new Error('Unknown quiz');
+
+  const configuredCount = Math.max(1, Number(test.n || 30));
+  if (row.of > configuredCount) throw new Error('Answer count exceeds quiz configuration');
+
+  const selections = tryParseJSON(test.selectionsJSON) || [];
+  const selected = {};
+  selections.forEach(s => { if (s && s.deckId) selected[String(s.deckId)] = s; });
+
+  const answerKey = {};
+  readSheet(SHEETS.CARDS).forEach(card => {
+    const selection = selected[String(card.deckId)];
+    if (!selection) return;
+    const allowed = !!selection.whole ||
+      (Array.isArray(selection.subs) && selection.subs.map(String).indexOf(String(card.sub || '')) !== -1);
+    if (!allowed) return;
+    const key = normalizeLookup(card.q);
+    if (!key) return;
+    if (!answerKey[key]) answerKey[key] = [];
+    answerKey[key].push(String(card.a || ''));
+  });
+
+  const submitted = tryParseJSON(row.answersJSON) || [];
+  if (!Array.isArray(submitted) || submitted.length !== row.of) throw new Error('Malformed answers');
+
+  const seen = {};
+  let correct = 0;
+  const canonicalAnswers = submitted.map((answer, index) => {
+    const question = safeText(answer && answer.q, 1000);
+    const picked = safeText(answer && answer.picked, 500);
+    const key = normalizeLookup(question);
+    if (!key || !picked) throw new Error('Every question must have an answer');
+    if (seen[key]) throw new Error('Duplicate question in submission');
+    seen[key] = true;
+
+    const possibleAnswers = uniqueStrings(answerKey[key] || []);
+    if (!possibleAnswers.length) throw new Error('Submission contains a question outside this quiz');
+    if (possibleAnswers.length > 1) throw new Error('Quiz contains an ambiguous duplicate question');
+
+    const canonical = possibleAnswers[0];
+    if (String(picked) === String(canonical)) correct++;
+    return {
+      i: clampNumber(answer && answer.i != null ? answer.i : index, 0, 1000),
+      q: question,
+      correct: safeText(canonical, 500),
+      picked: picked
+    };
+  });
+
+  row.testName = safeText(test.name || test.title || row.testName, 120);
+  row.correct = correct;
+  row.of = canonicalAnswers.length;
+  row.score = Math.round(100 * correct / row.of);
+  row.answersJSON = JSON.stringify(canonicalAnswers);
 }
 
 function enforceSubmissionRateLimit(clientId) {
@@ -670,6 +717,16 @@ function clampNumber(value, min, max){
 
 function normalizeLookup(value){
   return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function uniqueStrings(values){
+  const seen = {};
+  return (values || []).filter(value => {
+    const key = String(value);
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
 }
 
 function initials(value){

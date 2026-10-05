@@ -26,7 +26,7 @@ The creator key is entered at runtime and retained only in `sessionStorage`; it 
 - Full content lists, identifiable results, backups, and destructive operations require the creator key.
 - Student content requests are limited to the quiz named by the shared link.
 - Public leaderboards return initials and aggregate score fields—not answer details, client identifiers, result IDs, or dates.
-- Result submissions are validated, rate-limited, recalculated from submitted answer details, protected with a script lock, and deduplicated.
+- Result submissions are validated against the selected quiz and the canonical card answers in Sheets, rate-limited, graded server-side, protected with a script lock, and deduplicated.
 - Creator authorization is enforced by Apps Script. Hiding navigation is not treated as an authorization boundary.
 
 For a high-stakes examination system, move grading to a transactional backend that never sends correct answers to the browser. This app is designed for workplace training and self-study, not proctored certification.
