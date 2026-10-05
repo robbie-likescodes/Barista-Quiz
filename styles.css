@@ -160,11 +160,39 @@ body.student .student-nav{display:flex}
     text-align:center;
   }
   .container{padding:0 12px 80px}
+  .page-intro h2{font-size:26px}.section-summary{align-items:flex-start}.summary-cue{margin-top:1px}
+  .action-popover{position:fixed;left:12px;right:12px;top:auto;bottom:18px;width:auto;z-index:2000;padding:12px}
+  .quiet-control{float:none;margin-bottom:16px}
 }
 
 /* ============================ Views ========================== */
 .view{display:none}
 .view.active{display:block}
+
+/* ================= Progressive page workflow ================ */
+.page-intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin:6px 0 20px}
+.page-intro h2{font-size:30px;letter-spacing:-.03em;margin:5px 0 4px}
+.page-intro p{margin:0;color:var(--muted);line-height:1.5}
+.page-intro .eyebrow{color:var(--brand)}
+.workspace-section>summary{list-style:none}
+.workspace-section>summary::-webkit-details-marker,.action-menu>summary::-webkit-details-marker{display:none}
+.section-summary{display:flex;align-items:center;justify-content:space-between;gap:18px;cursor:pointer;border-radius:10px}
+.section-summary>span:first-child:not(.step-summary){display:grid;gap:3px}
+.section-summary small{display:block;color:var(--muted);font-weight:400;font-size:12px;margin-top:3px}
+.summary-cue{flex:0 0 auto;color:var(--brand);background:#e8f5ef;border-radius:999px;padding:6px 10px;font-size:11px;font-weight:800}
+.workspace-section[open]>.section-summary .summary-cue{background:var(--panel2);color:var(--muted)}
+.workspace-section[open]>.section-summary .summary-cue::before{content:"✓ ";color:var(--brand)}
+.action-menu{position:relative;display:inline-block;z-index:7}
+.action-menu>summary{list-style:none;cursor:pointer}
+.action-popover{position:absolute;right:0;top:calc(100% + 8px);z-index:30;display:grid;gap:6px;width:180px;padding:8px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 45px rgba(15,23,42,.16)}
+.action-popover .btn{width:100%;text-align:left}
+.inline-menu{vertical-align:middle;margin-left:4px}
+.step-summary{display:flex;align-items:center;gap:10px}
+.step-summary .step-num{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--brand);color:#fff;font-size:13px}
+.publish-panel{padding:18px;border:1px solid rgba(22,123,90,.18);border-radius:12px;background:#f3f8f5}
+.publish-panel .step-title{margin-bottom:12px}
+.share-section{padding:14px;border:1px solid var(--line);border-radius:12px}
+.quiet-control{float:right;color:var(--muted);font-size:13px}
 
 /* ================= Dashboard & guided workflow ============== */
 .hero-card{background:linear-gradient(125deg,#143d30,#167b5a 68%,#25966f);border-radius:22px;color:#fff;padding:34px;display:flex;justify-content:space-between;align-items:flex-end;gap:24px;box-shadow:0 22px 50px rgba(20,61,48,.22)}
@@ -186,7 +214,7 @@ body.student .student-nav{display:flex}
 .card.primary-card{border-color:color-mix(in oklab,var(--brand) 45%,var(--line) 55%);box-shadow:0 14px 40px rgba(15,23,42,.12)}
 .card.bulk-card{background:linear-gradient(180deg,#ffffff,#f2f7f2)}
 .card.danger-card{background:linear-gradient(180deg,#fff5f5,#ffecec);border-color:rgba(239,68,68,.2)}
-.card.filters-card{position:sticky;top:76px;z-index:5}
+.card.filters-card{position:relative;z-index:5}
 .folder-card{background:linear-gradient(180deg,#ffffff,#fff7ea)}
 .folder-card .card-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .folder-tree{display:grid;gap:14px;margin-top:12px;max-height:420px;overflow:auto;padding-right:4px}
